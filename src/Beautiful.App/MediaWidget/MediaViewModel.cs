@@ -64,7 +64,8 @@ public sealed class MediaViewModel : INotifyPropertyChanged, IDisposable
     private readonly Dispatcher _dispatcher;
     private readonly DispatcherTimer _tickTimer;
     private int _lyricLoadSeq;   // 歌词加载代际号：曲目快速切换时丢弃过期加载结果
-    private bool _seeking;       // 面板 Slider 按下期间：暂停定时器/时间线对 PositionSeconds 的回写
+    private bool _seeking;       // 面板 Slider 交互期间：暂停定时器/时间线对 PositionSeconds 的回写（防抖结算后复位）
+    private int _seekGen;        // seek 代际号：BeginSeek/换曲递增；结算时比对，飞行期间又有新交互/换曲则本结果作废
     private bool _seekFailed;    // 首次 SeekAsync 失败 → 本任务内隐藏进度条（换会话时重置）
     private bool _hasSession;
     private string _trackTitle = "";
@@ -129,7 +130,11 @@ public sealed class MediaViewModel : INotifyPropertyChanged, IDisposable
     // ---------- 面板 / 胶囊交互入口 ----------
 
     /// <summary>面板 Slider 交互开始（点击跳转/拖动）：暂停定时器与时间线事件对 PositionSeconds 的回写，避免拖动被覆盖。</summary>
-    public void BeginSeek() => _seeking = true;
+    public void BeginSeek()
+    {
+        _seekGen++;   // 在途的上一轮结算作废（其完成前又开始了新交互）
+        _seeking = true;
+    }
 
     /// <summary>面板关闭时放弃进行中的 Slider 交互，恢复进度回写。</summary>
     public void CancelSeek() => _seeking = false;
@@ -139,12 +144,15 @@ public sealed class MediaViewModel : INotifyPropertyChanged, IDisposable
         if (pos < TimeSpan.Zero) pos = TimeSpan.Zero;
         if (_durationSeconds > 0 && pos.TotalSeconds > _durationSeconds)
             pos = TimeSpan.FromSeconds(_durationSeconds);
+        var gen = _seekGen;
         var ok = await _smtc.SeekAsync(pos);
         Trace.WriteLine($"[Media] SeekToAsync: {pos} ok={ok}");
+        if (gen != _seekGen) return; // 过期结算：期间又有新交互/换曲，保持其挂起状态
+        _seeking = false;            // 防抖结算完成：复位挂起（不复位则回写永久冻结），恢复定时器/时间线回写
         if (ok)
         {
             _clock.Seek(pos); // 乐观回拨本地时钟；SMTC 的 TimelinePropertiesChanged 随后纠偏
-            if (!_seeking) SetPosition(pos);
+            SetPosition(pos);
         }
         else if (!_seekFailed)
         {
@@ -279,6 +287,8 @@ public sealed class MediaViewModel : INotifyPropertyChanged, IDisposable
         SetPosition(TimeSpan.Zero);
         _clock.Sync(TimeSpan.Zero, false);
         IsPlaying = false;
+        _seekGen++;          // 在途 seek 结算作废（其结果不得回写已清零的时钟/进度）
+        _seeking = false;    // 换曲/换会话必解除 Slider 交互挂起（面板实例复用，Closed 未必触发）
         _seekFailed = false;
         IsSeekable = true;
         ResetLyricRows(LyricsState.Idle);
