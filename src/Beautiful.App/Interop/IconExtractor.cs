@@ -26,10 +26,16 @@ internal static class IconExtractor
         try
         {
             var nSize = (uint)size | (16u << 16);
-            var hr = NativeMethods.SHDefExtractIcon(path, 0, 0, out var hLarge, out _, nSize);
+            // nSize 高 16 位显式请求 16px 小图标：shell 会同时写出一个 HICON，
+            // 不能用 out _ 丢弃（out 参数 marshaling 仍产生真实指针），必须在成功路径一并销毁。
+            var hr = NativeMethods.SHDefExtractIcon(path, 0, 0, out var hLarge, out var hSmall, nSize);
             if (hr != 0 || hLarge == IntPtr.Zero) return null;
             try { return FromHIcon(hLarge); }
-            finally { NativeMethods.DestroyIcon(hLarge); }
+            finally
+            {
+                NativeMethods.DestroyIcon(hLarge);
+                if (hSmall != IntPtr.Zero) NativeMethods.DestroyIcon(hSmall);
+            }
         }
         catch { return null; }
     }

@@ -34,6 +34,7 @@
             </ItemsControl.ItemsPanel>
             <ItemsControl.ItemTemplate>
                 <DataTemplate>
+                    <!-- ItemRoot Margin 基准 3,0：ApplyScale 每帧整值覆写为 3 + 6·(scale-1)，两处须保持一致 -->
                     <Grid x:Name="ItemRoot" Margin="3,0" Background="Transparent"
                           ToolTip="{Binding Label}" ToolTipService.Placement="Top"
                           ToolTipService.InitialShowDelay="300">

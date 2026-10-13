@@ -18,8 +18,9 @@ namespace Beautiful.App.Dock;
 
 /// <summary>
 /// 底部居中悬浮 Dock：AppBar 注册（ABM_NEW → ABM_QUERYPOS → ABM_SETPOS，ABE_BOTTOM 全宽条带）
-/// + macOS 式高斯放大动画（CompositionTarget.Rendering 每帧 lerp，RenderTransform 自底部中心缩放
-/// + Margin 补偿，brief 认可的首版简化）。
+/// + macOS 式高斯放大动画（15ms DispatcherTimer 驱动逐帧 lerp——brief 原定的
+/// CompositionTarget.Rendering 在窗口非激活/渲染管线空闲时停止回调会冻结中间态，
+/// 改用等效 60fps 定时器已经 controller 认可；RenderTransform 自底部中心缩放 + Margin 补偿）。
 /// 临时主题值（亚克力 #B4202020、MaxScale 1.8、σ 2.0、放大开启）以私有字段内联，Task 13 ThemeDefinition 接管。
 /// </summary>
 public partial class DockWindow : AcrylicWindow
@@ -27,6 +28,7 @@ public partial class DockWindow : AcrylicWindow
     private const double DockHeightDip = 76;
     private const double Sigma = 2.0;         // 临时主题：高斯 σ
     private const double LerpFactor = 0.35;   // 每帧插值系数
+    private const double BaseMargin = 3;      // 容器水平 Margin 基准（与 XAML ItemRoot Margin 一致，ApplyScale 每帧覆写）
     private const double MarginPerSide = 6;   // Margin 补偿：6·(scale-1)
 
     private readonly WindowTracker _tracker = new();
@@ -38,6 +40,7 @@ public partial class DockWindow : AcrylicWindow
     private NativeMethods.APPBARDATA _abd;
     private NativeMethods.RECT _screenRect; // AppBar 定位后的窗口物理矩形（物理光标校验用）
     private bool _appbarRegistered;
+    private bool _closing; // OnClosing 起置位：阻止关闭前挂起的 BeginInvoke 重注册在 ABM_REMOVE 后复活 AppBar
     private HwndSource? _source;
 
     // 临时主题字段（Task 13 接管为真实主题）
@@ -86,6 +89,7 @@ public partial class DockWindow : AcrylicWindow
 
     protected override void OnClosing(CancelEventArgs e)
     {
+        _closing = true;                             // 先于 ABM_REMOVE：作废队列中尚未执行的 BeginInvoke 重注册
         _animTimer?.Stop();                           // 停止动画驱动
         UnregisterAppBar();                           // ABM_REMOVE 必须在 hwnd 销毁前
         _source?.RemoveHook(WndProc);
@@ -101,6 +105,7 @@ public partial class DockWindow : AcrylicWindow
 
     private void RegisterAndPositionAppBar()
     {
+        if (_closing) return;                         // 关闭竞态：TaskbarCreated/WM_DISPLAYCHANGE 挂起的重注册不再执行
         if (_appbarRegistered) UnregisterAppBar();    // 重注册路径：先 ABM_REMOVE
         _abd = new NativeMethods.APPBARDATA
         {
@@ -227,7 +232,8 @@ public partial class DockWindow : AcrylicWindow
             container.RenderTransform = st;
         }
         if (st.ScaleX != scale) st.ScaleX = st.ScaleY = scale;
-        var m = MarginPerSide * (scale - 1);
+        // Margin 每帧整值覆写：基准 3px 必须并入公式（scale=1 时恰为 3，与 XAML 初始值一致）
+        var m = BaseMargin + MarginPerSide * (scale - 1);
         container.Margin = new Thickness(m, 0, m, 0);
     }
 

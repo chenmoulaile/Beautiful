@@ -27,10 +27,12 @@ public sealed class DockViewModel
         foreach (var pinned in CreateDefaultPinnedItems()) Items.Add(pinned);
         _pinnedCount = Items.Count;
 
-        foreach (var w in tracker.Windows) InsertWindowItem(Items.Count - SuffixCount, w);
-
+        // 先放回收站/媒体占位，再插入窗口：保证下方 Items.Count - SuffixCount 在构造期
+        // 也恒指向固定块之后的窗口区起点（构造期窗口集合即可能非空，索引不能落入固定块）。
         Items.Add(CreateRecycleBinItem());
         Items.Add(CreateMediaItem());
+
+        foreach (var w in tracker.Windows) InsertWindowItem(Items.Count - SuffixCount, w);
 
         tracker.Windows.CollectionChanged += OnWindowsChanged;
         // 初始窗口的 PropertyChanged 已在上方 InsertWindowItem 内逐个挂接，勿再 HookWindowItems 重复订阅
