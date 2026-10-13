@@ -32,14 +32,19 @@ public sealed record AppSettings
 
     /// <summary>
     /// 加载侧规范化：偏移钳制到 -2000..2000；未知主题/策略标识（含大小写差异）收敛为默认，
-    /// 避免手改配置把 App 侧映射打到兜底分支之外的未定义行为。
+    /// 避免手改配置把 App 侧映射打到兜底分支之外的未定义行为。手改 JSON 可能把字符串字段写成
+    /// null（System.Text.Json 会把 null 填进非可空 string 属性），同样兜默认，避免 NRE 漏出
+    /// Load 的自愈网。
     /// </summary>
-    public AppSettings Normalized() => this with
+    public AppSettings Normalized()
     {
-        LyricsOffsetMs = Math.Clamp(LyricsOffsetMs, -2000, 2000),
-        Theme = KnownThemes.Contains(Theme.ToLowerInvariant()) ? Theme.ToLowerInvariant() : "harmonyos",
-        TaskbarPolicy = KnownTaskbarPolicies.Contains(TaskbarPolicy.ToLowerInvariant())
-            ? TaskbarPolicy.ToLowerInvariant()
-            : "hide"
-    };
+        var theme = (Theme ?? "harmonyos").ToLowerInvariant();
+        var policy = (TaskbarPolicy ?? "hide").ToLowerInvariant();
+        return this with
+        {
+            LyricsOffsetMs = Math.Clamp(LyricsOffsetMs, -2000, 2000),
+            Theme = KnownThemes.Contains(theme) ? theme : "harmonyos",
+            TaskbarPolicy = KnownTaskbarPolicies.Contains(policy) ? policy : "hide"
+        };
+    }
 }

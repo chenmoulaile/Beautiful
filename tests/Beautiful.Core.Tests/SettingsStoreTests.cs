@@ -106,6 +106,20 @@ public class AppSettingsStoreTests : IDisposable
     }
 
     [Fact]
+    public void 字符串字段null的JSON_Load兜默认且不删文件()
+    {
+        // 手改 JSON 可写 {"Theme":null}：STJ 会把 null 填进非可空 string 属性，
+        // 规范化须兜默认而不是 NRE 漏出（Load 的 catch 不含 NRE，漏出即启动崩溃循环）；
+        // 字符串 null 不是结构损坏 → 保留文件（自愈不删数据）。
+        Directory.CreateDirectory(_dir);
+        File.WriteAllText(Path.Combine(_dir, "settings.json"),
+            """{"Theme":null,"TaskbarPolicy":null}""");
+        var s = _store.Load();
+        Assert.Equal(new AppSettings(), s);
+        Assert.True(File.Exists(Path.Combine(_dir, "settings.json")));
+    }
+
+    [Fact]
     public void 部分字段JSON_缺省字段取代码默认()
     {
         Directory.CreateDirectory(_dir);

@@ -41,8 +41,16 @@ public sealed class PinnedAppsStore
 
     public void Save(IReadOnlyList<string> paths)
     {
-        Directory.CreateDirectory(Path.GetDirectoryName(_filePath)!);
-        File.WriteAllText(_filePath, JsonSerializer.Serialize(paths, WriteOptions));
+        try
+        {
+            Directory.CreateDirectory(Path.GetDirectoryName(_filePath)!);
+            File.WriteAllText(_filePath, JsonSerializer.Serialize(paths, WriteOptions));
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            // 尽力而为保存：瞬时文件锁/权限失败不拖垮 UI（下次 Save 可重试；T17 接 Logger）
+            Trace.WriteLine($"dock.json 保存失败: {ex.Message}");
+        }
     }
 
     /// <summary>代码默认固定项（dock.json 缺失时的兜底；不落盘，首次固定操作才写）。</summary>

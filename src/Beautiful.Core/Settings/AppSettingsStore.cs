@@ -37,8 +37,16 @@ public sealed class AppSettingsStore
 
     public void Save(AppSettings settings)
     {
-        Directory.CreateDirectory(_directory);
-        File.WriteAllText(FilePath, JsonSerializer.Serialize(settings, WriteOptions));
+        try
+        {
+            Directory.CreateDirectory(_directory);
+            File.WriteAllText(FilePath, JsonSerializer.Serialize(settings, WriteOptions));
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            // 尽力而为保存：瞬时文件锁/权限失败不拖垮 UI（下次 Save 可重试；T17 接 Logger）
+            System.Diagnostics.Trace.WriteLine($"settings.json 保存失败: {ex.Message}");
+        }
     }
 
     /// <summary>损坏恢复：尽力删除坏文件后返回默认（删除失败不影响返回默认）。</summary>
