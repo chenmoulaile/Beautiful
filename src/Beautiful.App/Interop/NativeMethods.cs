@@ -110,6 +110,7 @@ internal static partial class NativeMethods
     }
 
     [DllImport("user32.dll")] public static extern bool IsWindowVisible(IntPtr hWnd);
+    [DllImport("user32.dll")] public static extern bool IsWindow(IntPtr hWnd);
     [DllImport("user32.dll")] public static extern bool IsIconic(IntPtr hWnd);
     [DllImport("user32.dll")] public static extern bool IsZoomed(IntPtr hWnd);
     [DllImport("user32.dll")] public static extern bool ShowWindow(IntPtr hWnd, int nCmdShow); // SW_RESTORE=9 SW_MINIMIZE=6
