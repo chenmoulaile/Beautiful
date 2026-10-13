@@ -65,6 +65,11 @@ internal static partial class NativeMethods
     [StructLayout(LayoutKind.Sequential)]
     public struct RECT { public int Left, Top, Right, Bottom; }
 
+    [StructLayout(LayoutKind.Sequential)]
+    public struct POINT { public int X, Y; }
+
+    [DllImport("user32.dll")] public static extern bool GetCursorPos(out POINT pt);
+
     [DllImport("shell32.dll")]
     public static extern IntPtr SHAppBarMessage(uint dwMessage, ref APPBARDATA pData);
 
@@ -174,28 +179,31 @@ internal static partial class NativeMethods
     [DllImport("user32.dll")] public static extern int GetDpiForWindow(IntPtr hwnd);
 
     // ---------- Shell 图标 ----------
-    public const uint SiigbfBiggersizeok = 1, SiigbfIcononly = 4;
+    public const uint ShgfiIcon = 0x100, ShgfiPidl = 0x8;
 
-    [ComImport, Guid("bcc18b79-ba16-442f-80c4-8a59c30c463b"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
-    public interface IShellItemImageFactory
+    [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
+    public struct SHFILEINFOW
     {
-        [PreserveSig] int GetImage(uint cx, uint cy, uint flags, out IntPtr phbm);
+        public IntPtr hIcon;
+        public int iIcon;
+        public uint dwAttributes;
+        [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 260)] public string szDisplayName;
     }
+
+    // 文件路径精确尺寸取图（SHDefExtractIconW，nIconSize 低字=大图/高字=小图）
+    [DllImport("shell32.dll", CharSet = CharSet.Unicode)]
+    public static extern int SHDefExtractIcon(string file, int index, uint flags,
+        out IntPtr hIconLarge, out IntPtr hIconSmall, uint nIconSize);
 
     [DllImport("shell32.dll", CharSet = CharSet.Unicode, PreserveSig = false)]
-    private static extern void SHCreateItemFromParsingName(string path, IntPtr pbc, ref Guid riid,
-        [MarshalAs(UnmanagedType.Interface)] out IShellItemImageFactory factory);
+    public static extern void SHParseDisplayName(string name, IntPtr pbc, out IntPtr ppidl,
+        uint sfgaoIn, out uint sfgaoOut);
 
-    public static IShellItemImageFactory? CreateItemFactory(string path)
-    {
-        try
-        {
-            var iid = new Guid("bcc18b79-ba16-442f-80c4-8a59c30c463b");
-            SHCreateItemFromParsingName(path, IntPtr.Zero, ref iid, out var factory);
-            return factory;
-        }
-        catch { return null; }
-    }
+    [DllImport("shell32.dll", CharSet = CharSet.Unicode)]
+    public static extern IntPtr SHGetFileInfo(IntPtr pidl, uint attr, ref SHFILEINFOW psfi, uint cb, uint flags);
+
+    [DllImport("ole32.dll")] public static extern void CoTaskMemFree(IntPtr pv);
+    [DllImport("user32.dll")] public static extern bool DestroyIcon(IntPtr hIcon);
 
     [DllImport("gdi32.dll")] public static extern bool DeleteObject(IntPtr hObject);
 }

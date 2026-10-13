@@ -9,4 +9,4 @@ cache/
 config/dock.json
 *.user
 .vs/
-shot.png
+shot*.png

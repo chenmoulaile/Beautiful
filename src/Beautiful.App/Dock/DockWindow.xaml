@@ -1,0 +1,135 @@
+<services:AcrylicWindow
+        x:Class="Beautiful.App.Dock.DockWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:services="clr-namespace:Beautiful.App.Services"
+        Title="Beautiful Dock"
+        WindowStyle="None"
+        AllowsTransparency="True"
+        Background="{x:Null}"
+        ShowInTaskbar="False"
+        ShowActivated="False"
+        Topmost="True"
+        SizeToContent="Manual"
+        ResizeMode="NoResize"
+        Height="76">
+
+    <!-- 窗口 Background={x:Null}：未绘制区域不参与命中测试，两侧点击穿透；
+         可见面板 Border 自带背景。触发器可见性默认值放在元素 Style 中
+         （模板触发器可覆盖 Style Setter，但不能覆盖本地值）。 -->
+    <Border x:Name="DockPanelRoot"
+            HorizontalAlignment="Center" VerticalAlignment="Stretch"
+            CornerRadius="18" Padding="10,6"
+            Background="#AA2B2B2B" BorderBrush="#33FFFFFF" BorderThickness="1">
+        <ItemsControl x:Name="ItemsHost"
+                      ItemsSource="{Binding Items}"
+                      VerticalAlignment="Center"
+                      MouseMove="ItemsHost_MouseMove"
+                      MouseLeave="ItemsHost_MouseLeave"
+                      MouseLeftButtonUp="ItemsHost_MouseLeftButtonUp">
+            <ItemsControl.ItemsPanel>
+                <ItemsPanelTemplate>
+                    <StackPanel Orientation="Horizontal"/>
+                </ItemsPanelTemplate>
+            </ItemsControl.ItemsPanel>
+            <ItemsControl.ItemTemplate>
+                <DataTemplate>
+                    <Grid x:Name="ItemRoot" Margin="3,0" Background="Transparent"
+                          ToolTip="{Binding Label}" ToolTipService.Placement="Top"
+                          ToolTipService.InitialShowDelay="300">
+                        <Grid.Style>
+                            <Style TargetType="Grid">
+                                <Setter Property="Width" Value="52"/>
+                                <Style.Triggers>
+                                    <DataTrigger Binding="{Binding Kind}" Value="Media">
+                                        <Setter Property="Width" Value="124"/>
+                                    </DataTrigger>
+                                </Style.Triggers>
+                            </Style>
+                        </Grid.Style>
+                        <Image x:Name="IconImage" Source="{Binding Icon}" Width="44" Height="44"
+                               RenderOptions.BitmapScalingMode="HighQuality">
+                            <Image.Style>
+                                <Style TargetType="Image">
+                                    <Style.Triggers>
+                                        <DataTrigger Binding="{Binding Kind}" Value="Media">
+                                            <Setter Property="Visibility" Value="Collapsed"/>
+                                        </DataTrigger>
+                                    </Style.Triggers>
+                                </Style>
+                            </Image.Style>
+                        </Image>
+                        <!-- 图标缺失回退字形：回收站 ♻，其余 ▣ -->
+                        <TextBlock x:Name="FallbackGlyph" FontSize="30" FontWeight="SemiBold"
+                                   Foreground="#CCFFFFFF" HorizontalAlignment="Center" VerticalAlignment="Center">
+                            <TextBlock.Style>
+                                <Style TargetType="TextBlock">
+                                    <Setter Property="Visibility" Value="Collapsed"/>
+                                    <Setter Property="Text" Value="▣"/>
+                                    <Style.Triggers>
+                                        <DataTrigger Binding="{Binding Kind}" Value="RecycleBin">
+                                            <Setter Property="Text" Value="♻"/>
+                                        </DataTrigger>
+                                    </Style.Triggers>
+                                </Style>
+                            </TextBlock.Style>
+                        </TextBlock>
+                        <!-- 媒体胶囊占位（Task 15 实装）：♪ 媒体 + 禁用态播放钮 -->
+                        <Border x:Name="MediaPill" CornerRadius="21"
+                                Background="#26FFFFFF" BorderBrush="#22FFFFFF" BorderThickness="1"
+                                Padding="14,7" HorizontalAlignment="Center" VerticalAlignment="Center">
+                            <Border.Style>
+                                <Style TargetType="Border">
+                                    <Setter Property="Visibility" Value="Collapsed"/>
+                                    <Style.Triggers>
+                                        <DataTrigger Binding="{Binding Kind}" Value="Media">
+                                            <Setter Property="Visibility" Value="Visible"/>
+                                        </DataTrigger>
+                                    </Style.Triggers>
+                                </Style>
+                            </Border.Style>
+                            <StackPanel Orientation="Horizontal">
+                                <TextBlock Text="♪" FontSize="18" Foreground="#DDFFFFFF" VerticalAlignment="Center"/>
+                                <TextBlock Text="媒体" FontSize="13" Foreground="#CCFFFFFF" Margin="7,0,0,0" VerticalAlignment="Center"/>
+                                <TextBlock Text="▶" FontSize="13" Foreground="#59FFFFFF" Margin="12,0,0,0" VerticalAlignment="Center"/>
+                            </StackPanel>
+                        </Border>
+                        <!-- 运行窗口指示点 -->
+                        <Ellipse x:Name="Indicator" Width="4" Height="4" Fill="#FF4CC2FF"
+                                 VerticalAlignment="Bottom" Margin="0,0,0,3">
+                            <Ellipse.Style>
+                                <Style TargetType="Ellipse">
+                                    <Setter Property="Visibility" Value="Collapsed"/>
+                                    <Style.Triggers>
+                                        <DataTrigger Binding="{Binding Kind}" Value="Window">
+                                            <Setter Property="Visibility" Value="Visible"/>
+                                        </DataTrigger>
+                                    </Style.Triggers>
+                                </Style>
+                            </Ellipse.Style>
+                        </Ellipse>
+                        <Border x:Name="Hover" CornerRadius="12" Background="#22FFFFFF">
+                            <Border.Style>
+                                <Style TargetType="Border">
+                                    <Setter Property="Visibility" Value="Collapsed"/>
+                                </Style>
+                            </Border.Style>
+                        </Border>
+                    </Grid>
+                    <DataTemplate.Triggers>
+                        <Trigger SourceName="ItemRoot" Property="IsMouseOver" Value="True">
+                            <Setter TargetName="Hover" Property="Visibility" Value="Visible"/>
+                        </Trigger>
+                        <DataTrigger Binding="{Binding Icon}" Value="{x:Null}">
+                            <Setter TargetName="FallbackGlyph" Property="Visibility" Value="Visible"/>
+                        </DataTrigger>
+                        <!-- 媒体胶囊自身带外观，且其 Icon 恒为 null：须在 Icon 触发器之后声明以覆盖 -->
+                        <DataTrigger Binding="{Binding Kind}" Value="Media">
+                            <Setter TargetName="FallbackGlyph" Property="Visibility" Value="Collapsed"/>
+                        </DataTrigger>
+                    </DataTemplate.Triggers>
+                </DataTemplate>
+            </ItemsControl.ItemTemplate>
+        </ItemsControl>
+    </Border>
+</services:AcrylicWindow>
