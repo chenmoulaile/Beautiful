@@ -12,7 +12,7 @@ Beautiful 以 MIT 许可证发布（见 [LICENSE](LICENSE)）。本项目为独�
 
 | 项目 | 许可证 | 参考内容 | 对应代码位置 |
 | --- | --- | --- | --- |
-| [TheAgencyMGE/aero-dock](https://github.com/TheAgencyMGE/aero-dock) | MIT | DWM 缩略图/窗口预览思路 | Dock 预览相关设计 |
+| [TheAgencyMGE/aero-dock](https://github.com/TheAgencyMGE/aero-dock) | MIT | 悬浮 Dock 实现模式参考（未复制代码） | Dock 悬浮布局设计 |
 | [ModernFlyouts-Community/ModernFlyouts](https://github.com/ModernFlyouts-Community/ModernFlyouts) | MIT | GSMTC（SMTC）媒体会话管理模式；`SetWindowCompositionAttribute` 亚克力/毛玻璃用法 | `src/Beautiful.App/Services/SmtcService.cs`、`src/Beautiful.App/Services/AcrylicWindow.cs`、`src/Beautiful.App/Interop/NativeMethods.cs` |
 | [wwh1004/NeteaseCloudMusicApi](https://github.com/wwh1004/NeteaseCloudMusicApi) | MIT | 网易云歌词接口（含翻译 `tlyric`）端点用法文档 | `src/Beautiful.Core/Lyrics/NetEaseProvider.cs` |
 | [tranxuanthang/lrclib](https://github.com/tranxuanthang/lrclib) | MIT | LRCLIB 开放歌词 API 协议 | `src/Beautiful.Core/Lyrics/LrcLibProvider.cs` |

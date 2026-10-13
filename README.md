@@ -14,7 +14,7 @@ Beautiful 在屏幕底部提供一个 macOS 风格的悬浮 Dock，替代/接管
   - 右键固定/取消固定应用，固定清单持久化于 `config/dock.json`
 - **三套主题**（默认鸿蒙）
   - **鸿蒙**：深色毛玻璃胶囊、squircle（超椭圆）图标、#0A59F7 强调色
-  - **macOS**：悬停放大 + 倒影
+  - **macOS**：悬停高斯放大（macOS 风格）
   - **Linux GNOME**：实底左条布局
 - **原生任务栏接管**（三档策略，默认隐藏）
   - `隐藏`：把原生任务栏移出屏幕（Win11 会把程序性移动回摆，应用在 AppBar 注册后 0.8s/3s 重申隐藏，必要时整窗隐藏兜底）；退出或切换策略时完整还原
@@ -27,7 +27,7 @@ Beautiful 在屏幕底部提供一个 macOS 风格的悬浮 Dock，替代/接管
   - 展开面板：大封面、可拖动进度条、上一首/播放暂停/下一首
   - **双语歌词**：网易云 `tlyric` 为主源，LRCLIB 兜底，两者皆无时降级为"暂无歌词"；支持 ±2000ms 对齐偏移；歌词按曲目 JSON 缓存（`cache/`）
 - **设置窗口**：主题、任务栏策略、开机自启（HKCU Run）、歌词偏移、媒体胶囊开关、面板失焦自动收起、固定应用管理
-- **壳层**：单实例（第二实例自动退出）、托盘菜单（设置/主题/重载 Dock/退出，双击图标 = 设置）、日志（`logs/`）、全局异常兜底
+- **壳层**：单实例（第二实例提示已在运行后退出）、托盘菜单（设置/主题/重载 Dock/退出，双击图标 = 设置）、日志（`logs/`）、全局异常兜底
 
 ## 系统要求
 
@@ -47,7 +47,7 @@ cd Beautiful
 Beautiful.sln
 ├── src/Beautiful.Core/      # 无 UI 核心库：歌词解析/双语对齐/时间轴/主题定义/设置模型（net8.0，可单测）
 ├── src/Beautiful.App/       # WPF 壳层：Dock/AppBar、主题、媒体小组件、设置、托盘（net8.0-windows）
-├── tests/Beautiful.Core.Tests/  # Core 单元测试（68 项）
+├── tests/Beautiful.Core.Tests/  # Core 单元测试（69 项）
 ├── scripts/                 # env.sh / publish.cmd / shot.ps1
 ├── docs/                    # 设计文档
 ├── publish/                 # 发布产物（gitignore，由 publish.cmd 生成）
@@ -104,7 +104,7 @@ dotnet publish src/Beautiful.App -c Release -r win-x64 --self-contained true -p:
 
 | 项目 | 许可证 | 借鉴内容 |
 | --- | --- | --- |
-| [TheAgencyMGE/aero-dock](https://github.com/TheAgencyMGE/aero-dock) | MIT | DWM 缩略图/窗口预览思路 |
+| [TheAgencyMGE/aero-dock](https://github.com/TheAgencyMGE/aero-dock) | MIT | 悬浮 Dock 实现模式参考（未复制代码） |
 | [ModernFlyouts-Community/ModernFlyouts](https://github.com/ModernFlyouts-Community/ModernFlyouts) | MIT | GSMTC 媒体会话管理模式、`SetWindowCompositionAttribute` 亚克力用法 |
 | [wwh1004/NeteaseCloudMusicApi](https://github.com/wwh1004/NeteaseCloudMusicApi) | MIT | 网易云歌词接口端点用法 |
 | [tranxuanthang/lrclib](https://github.com/tranxuanthang/lrclib) | MIT | LRCLIB 开放 API 协议 |
