@@ -13,7 +13,6 @@
     <FontFamily x:Key="ThemeFontFamily">Segoe UI</FontFamily>
     <CornerRadius x:Key="ThemePanelCornerRadius">12</CornerRadius>
     <sys:Double x:Key="ThemeIconSize">44</sys:Double>
-    <sys:Double x:Key="ThemeItemSlotWidth">52</sys:Double>
 
     <!-- 本主题无底部圆点 -->
     <Style x:Key="ThemeIndicatorDot" TargetType="Ellipse">

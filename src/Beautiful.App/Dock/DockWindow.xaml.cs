@@ -31,7 +31,7 @@ namespace Beautiful.App.Dock;
 /// </summary>
 public partial class DockWindow : AcrylicWindow
 {
-    private const double DockHeightDip = 76;  // 三套内置主题 DockHeight 均为 76（设置化时随 theme.DockHeight 重定位，Task 16/17）
+    private const double DockHeightDip = 76;  // 三套内置主题 Dock 高度均为 76（设置化时随主题重定位，Task 16/17）
     private const double Sigma = 2.0;         // 高斯 σ（控制器裁定：不随主题变化）
     private const double LerpFactor = 0.35;   // 每帧插值系数
     private const double MarginPerSide = 6;   // Margin 补偿：6·(scale-1)

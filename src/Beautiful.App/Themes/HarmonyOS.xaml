@@ -21,7 +21,6 @@
     <!-- 面板圆角 24-34 取 28 -->
     <CornerRadius x:Key="ThemePanelCornerRadius">28</CornerRadius>
     <sys:Double x:Key="ThemeIconSize">44</sys:Double>
-    <sys:Double x:Key="ThemeItemSlotWidth">52</sys:Double>
 
     <!-- 指示样式实作（dot）：底部圆点，仅 Window 条目显示 -->
     <Style x:Key="ThemeIndicatorDot" TargetType="Ellipse">

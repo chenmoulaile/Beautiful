@@ -17,10 +17,8 @@ public sealed record ThemeDefinition(
     double ItemSpacing,
     double MaxScale,              // 1=无放大
     string IndicatorStyle,        // "dot" | "bar" | "none"
-    bool ShowReflection,
     string AccentHex,             // 鸿蒙 #0A59F7
-    string FontFamily,            // "HarmonyOS Sans" / "Segoe UI Variable" / "Segoe UI"
-    double DockHeight)
+    string FontFamily)            // "HarmonyOS Sans" / "Segoe UI Variable" / "Segoe UI"
 {
     /// <summary>控制器裁定：MaxScale&gt;1 才启用高斯放大（鸿蒙/Linux 无放大）。</summary>
     public bool ShowMagnification => MaxScale > 1.0;
@@ -40,12 +38,10 @@ public sealed record ThemeDefinition(
         ItemSpacing: 6,
         MaxScale: 1.0,
         IndicatorStyle: "dot",
-        ShowReflection: false,
         AccentHex: "#0A59F7",
-        FontFamily: "HarmonyOS Sans",
-        DockHeight: 76);
+        FontFamily: "HarmonyOS Sans");
 
-    /// <summary>macOS：暗色亚克力 #B4202020（tint 同底色）、系统蓝 #0A84FF、抛物线放大 MaxScale=1.8、底部圆点、倒影开启、图标原样。</summary>
+    /// <summary>macOS：暗色亚克力 #B4202020（tint 同底色）、系统蓝 #0A84FF、抛物线放大 MaxScale=1.8、底部圆点、图标原样。</summary>
     public static ThemeDefinition MacOs() => new(
         Id: "MacOS", DisplayName: "macOS",
         DockBackground: Argb("#B4202020"),
@@ -57,10 +53,8 @@ public sealed record ThemeDefinition(
         ItemSpacing: 6,
         MaxScale: 1.8,
         IndicatorStyle: "dot",
-        ShowReflection: true,
         AccentHex: "#0A84FF",
-        FontFamily: "Segoe UI Variable",
-        DockHeight: 76);
+        FontFamily: "Segoe UI Variable");
 
     /// <summary>Linux(GNOME)：#E61C1C1C 实底（BlurEnabled=false 禁用亚克力）、accent #3584E4、无放大、左侧短条、圆角方形图标（半径 8）。</summary>
     public static ThemeDefinition Linux() => new(
@@ -74,10 +68,8 @@ public sealed record ThemeDefinition(
         ItemSpacing: 6,
         MaxScale: 1.0,
         IndicatorStyle: "bar",
-        ShowReflection: false,
         AccentHex: "#3584E4",
-        FontFamily: "Segoe UI",
-        DockHeight: 76);
+        FontFamily: "Segoe UI");
 
     /// <summary>#RRGGBB / #AARRGGBB → Color（内置解析：System.Drawing.Common 的 ColorTranslator 不在 net8.0 基础包内）。</summary>
     private static Color Argb(string hex)

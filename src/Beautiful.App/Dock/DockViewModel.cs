@@ -86,9 +86,35 @@ public sealed class DockViewModel
     private static DockItem MakePinned(string path)
         => new(Id: path,
                Label: Path.GetFileNameWithoutExtension(path),
-               Icon: IconExtractor.GetIcon(path),
+               Icon: IconExtractor.GetIcon(IconSourceFor(path)),
                Kind: DockItemKind.Pinned,
-               LaunchPath: path);
+               LaunchPath: path); // .lnk 原样作为启动目标（UseShellExecute 可直接启动快捷方式）
+
+    /// <summary>
+    /// 固定项图标源：.lnk 经 ShellLink 解析取 IconLocation（剥去尾随 ",index"），无自定义图标
+    /// 或该文件不存在时回退 TargetPath；两者皆不可用时保留 .lnk 原路径（视图回退占位字形）。
+    /// 非 .lnk 原样返回。
+    /// </summary>
+    private static string IconSourceFor(string path)
+    {
+        if (!path.EndsWith(".lnk", StringComparison.OrdinalIgnoreCase)) return path;
+        try
+        {
+            var resolved = ShellLink.Resolve(path);
+            var candidates = new[] { StripIconIndex(resolved.IconLocation), resolved.TargetPath };
+            return candidates.FirstOrDefault(File.Exists) ?? path;
+        }
+        catch
+        {
+            return path; // 解析失败不阻断固定项创建
+        }
+
+        static string StripIconIndex(string loc)
+        {
+            var comma = loc.LastIndexOf(',');
+            return comma > 0 ? loc[..comma] : loc;
+        }
+    }
 
     private static DockItem CreateRecycleBinItem()
         => new(Id: "shell:RecycleBinFolder",

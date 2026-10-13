@@ -45,10 +45,8 @@ public class ThemeDefinitionTests
         Assert.Equal("HarmonyOS", t.Id);
         Assert.Equal(28, t.PanelCornerRadius, 6);   // 圆角 24-34 取 28
         Assert.Equal(0.25, t.IconCornerRadiusRatio, 6); // squircle 连续圆角
-        Assert.Equal(76, t.DockHeight, 6);
         Assert.True(t.BlurEnabled);                  // 毛玻璃
         Assert.Equal("dot", t.IndicatorStyle);       // 底部圆点
-        Assert.False(t.ShowReflection);              // 无倒影
         Assert.Equal("HarmonyOS Sans", t.FontFamily);
         // 深色玻璃 #61000000（38% 黑；浅色变体 #59FFFFFF 留给 Task 17 系统主题跟随）
         Assert.Equal(0x61, t.DockBackground.A);
@@ -64,7 +62,6 @@ public class ThemeDefinitionTests
         Assert.Equal("MacOS", t.Id);
         Assert.Equal("#0A84FF", t.AccentHex);        // 系统蓝
         Assert.Equal("dot", t.IndicatorStyle);
-        Assert.True(t.ShowReflection);               // 原样+倒影
         Assert.True(t.BlurEnabled);                  // 暗/亮亚克力
         Assert.Equal(18, t.PanelCornerRadius, 6);
         Assert.Equal(0, t.IconCornerRadiusRatio, 6); // 图标原样不遮罩
@@ -83,7 +80,6 @@ public class ThemeDefinitionTests
         Assert.Equal("#3584E4", t.AccentHex);
         Assert.Equal("bar", t.IndicatorStyle);       // 左侧短条
         Assert.False(t.BlurEnabled);                 // 实底：亚克力禁用
-        Assert.False(t.ShowReflection);
         Assert.Equal(12, t.PanelCornerRadius, 6);
         Assert.Equal(1.0, t.MaxScale, 6);            // 无放大
         // 实底 #E61C1C1C

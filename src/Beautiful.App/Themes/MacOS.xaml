@@ -14,7 +14,6 @@
     <FontFamily x:Key="ThemeFontFamily">Segoe UI Variable, Segoe UI</FontFamily>
     <CornerRadius x:Key="ThemePanelCornerRadius">18</CornerRadius>
     <sys:Double x:Key="ThemeIconSize">44</sys:Double>
-    <sys:Double x:Key="ThemeItemSlotWidth">52</sys:Double>
 
     <Style x:Key="ThemeIndicatorDot" TargetType="Ellipse">
         <Setter Property="Fill" Value="{DynamicResource ThemeAccent}"/>
