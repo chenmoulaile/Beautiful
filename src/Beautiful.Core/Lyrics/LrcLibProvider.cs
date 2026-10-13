@@ -17,8 +17,9 @@ public sealed class LrcLibProvider(HttpClient http) : ILyricsProvider
         string? synced = null;
         if (resp.IsSuccessStatusCode)
         {
-            var json = JsonDocument.Parse(await resp.Content.ReadAsStringAsync(ct)).RootElement;
-            synced = json.TryGetProperty("syncedLyrics", out var s) ? s.GetString() : null;
+            using var json = JsonDocument.Parse(await resp.Content.ReadAsStringAsync(ct));
+            var root = json.RootElement;
+            synced = root.TryGetProperty("syncedLyrics", out var s) ? s.GetString() : null;
         }
         if (string.IsNullOrWhiteSpace(synced))
         {
@@ -27,7 +28,8 @@ public sealed class LrcLibProvider(HttpClient http) : ILyricsProvider
                        $"&artist_name={Uri.EscapeDataString(meta.Artist)}";
             using var sResp = await http.GetAsync(sUrl, ct);
             if (!sResp.IsSuccessStatusCode) return null;
-            var arr = JsonDocument.Parse(await sResp.Content.ReadAsStringAsync(ct)).RootElement;
+            using var sDoc = JsonDocument.Parse(await sResp.Content.ReadAsStringAsync(ct));
+            var arr = sDoc.RootElement;
             if (arr.ValueKind != JsonValueKind.Array || arr.GetArrayLength() == 0) return null;
             string? best = null; long bestDiff = long.MaxValue;
             foreach (var item in arr.EnumerateArray())

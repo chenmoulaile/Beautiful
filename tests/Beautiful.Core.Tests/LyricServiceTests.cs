@@ -24,6 +24,29 @@ public class LyricServiceTests
 
     private static HttpClient Http(FakeHandler h) => new(h) { BaseAddress = new Uri("https://unit.test/") };
 
+    /// <summary>首次调用抛传输异常，重试后成功返回歌词（验证传输失败重试路径）。</summary>
+    private sealed class TransportThenSuccessProvider : ILyricsProvider
+    {
+        public string Name => "FakeTransport";
+        public int Calls;
+        public Task<LyricFetch?> FetchAsync(TrackMeta meta, CancellationToken ct)
+            => ++Calls == 1
+                ? throw new HttpRequestException("boom")
+                : Task.FromResult<LyricFetch?>(new LyricFetch(LrcParser.Parse("[00:01.00]Hi"), null, Name));
+    }
+
+    /// <summary>恒返回 null 的干净未命中源（验证不重试）。</summary>
+    private sealed class CleanNullProvider : ILyricsProvider
+    {
+        public string Name => "FakeNull";
+        public int Calls;
+        public Task<LyricFetch?> FetchAsync(TrackMeta meta, CancellationToken ct)
+        {
+            Calls++;
+            return Task.FromResult<LyricFetch?>(null);
+        }
+    }
+
     [Fact]
     public async Task NetEase_命中_返回双语()
     {
@@ -95,6 +118,28 @@ public class LyricServiceTests
         // 注：new[] 无法在两个仅共享接口的类间推断最佳公共类型，需显式数组类型（CS0826）
         var svc = new LyricService(new ILyricsProvider[] { new NetEaseProvider(Http(new FakeHandler())), new LrcLibProvider(Http(new FakeHandler())) }, cache);
         Assert.Null(await svc.GetLyricsAsync(Meta()));
+    }
+
+    [Fact]
+    public async Task 编排_传输失败重试一次后成功_返回歌词()
+    {
+        var cache = new LyricCacheService(Path.Combine(Path.GetTempPath(), "beautiful-test-" + Guid.NewGuid().ToString("N")));
+        var provider = new TransportThenSuccessProvider();
+        var svc = new LyricService(new[] { provider }, cache);
+        var doc = await svc.GetLyricsAsync(Meta());
+        Assert.NotNull(doc);
+        Assert.Equal("Hi", doc!.Lines[0].Original);
+        Assert.Equal(2, provider.Calls); // 首次失败 + 重试成功，共 2 次
+    }
+
+    [Fact]
+    public async Task 编排_干净未命中_不重试()
+    {
+        var cache = new LyricCacheService(Path.Combine(Path.GetTempPath(), "beautiful-test-" + Guid.NewGuid().ToString("N")));
+        var provider = new CleanNullProvider();
+        var svc = new LyricService(new[] { provider }, cache);
+        Assert.Null(await svc.GetLyricsAsync(Meta()));
+        Assert.Equal(1, provider.Calls); // 返回 null（404/无结果）不触发重试
     }
 
     [Fact]

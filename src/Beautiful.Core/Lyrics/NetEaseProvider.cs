@@ -1,4 +1,3 @@
-using System.Net.Http.Headers;
 using System.Text.Json;
 
 namespace Beautiful.Core.Lyrics;
@@ -32,7 +31,8 @@ public sealed class NetEaseProvider : ILyricsProvider
         long? bestId = null; long bestDiff = long.MaxValue;
         foreach (var song in songs.EnumerateArray())
         {
-            var id = song.GetProperty("id").GetInt64();
+            // 单条畸形搜索结果（缺 id）跳过整条，不让整个源失败
+            if (!song.TryGetProperty("id", out var idEl) || !idEl.TryGetInt64(out var id)) continue;
             var dur = song.TryGetProperty("duration", out var d) && d.TryGetInt64(out var dv) ? dv : 0;
             var diff = Math.Abs(dur - (long)meta.Duration.TotalMilliseconds);
             if (diff < bestDiff) { bestDiff = diff; bestId = id; }
