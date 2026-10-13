@@ -19,6 +19,7 @@ public sealed class TaskbarManager
     private readonly Dictionary<IntPtr, RECT> _saved = new(); // 还原基准：首次隐藏时的屏幕内矩形
     private readonly HashSet<IntPtr> _swHidden = new();       // 经 SW_HIDE 隐藏的窗口（还原需 SW_SHOWNA）
     private TaskbarPolicy _policy = TaskbarPolicy.Keep;
+    private bool _autohideApplied; // 本进程设置过系统自动隐藏（Restore 仅在此时清除，避免覆盖用户原生 autohide 偏好）
 
     public event Action? PolicyApplied;
     public TaskbarPolicy Current => _policy;
@@ -30,7 +31,7 @@ public sealed class TaskbarManager
         _policy = policy;
         switch (policy)
         {
-            case TaskbarPolicy.AutoHide: SetAutoHide(true); break;
+            case TaskbarPolicy.AutoHide: SetAutoHide(true); _autohideApplied = true; break;
             case TaskbarPolicy.Hide: HideAll(); break;
         }
         PolicyApplied?.Invoke();
@@ -48,7 +49,7 @@ public sealed class TaskbarManager
         if (_policy == TaskbarPolicy.Hide) HideAll();
     }
 
-    /// <summary>退出/策略切换前调用：SW_SHOWNA（恢复可见且不抢焦点）恢复被整窗隐藏的任务栏 + 复位矩形 + 关自动隐藏。</summary>
+    /// <summary>退出/策略切换前调用：SW_SHOWNA（恢复可见且不抢焦点）恢复被整窗隐藏的任务栏 + 复位矩形 + 关自动隐藏（仅本进程设置过时）。</summary>
     public void Restore()
     {
         RestoreInternal();
@@ -58,7 +59,7 @@ public sealed class TaskbarManager
 
     private void RestoreInternal()
     {
-        SetAutoHide(false);
+        if (_autohideApplied) { SetAutoHide(false); _autohideApplied = false; } // 只清自己设的 autohide；Keep 策略不触碰系统开关
         foreach (var (hwnd, rect) in _saved)
         {
             if (_swHidden.Remove(hwnd))

@@ -16,6 +16,7 @@ namespace Beautiful.App;
 /// 启动：Logger → 全局异常兜底 → 单实例 Mutex（第二实例弹窗即退）→ SettingsService.Load →
 /// 任务栏策略/自启落地 → DockWindow（构造期按设置应用主题；SMTC 经 MediaViewModel 构造期
 /// fire-and-forget 初始化，失败仅记日志降级为无胶囊）→ --settings 打开设置窗口 → 托盘。
+/// 策略落地至托盘就位整体 try/catch：失败还原任务栏/托盘后优雅退出，防僵尸进程。
 /// ShutdownMode=OnExplicitShutdown：Dock 被 Alt+F4 等关闭后壳层仍驻留（托盘可重载/退出），
 /// 退出只走托盘"退出"或显式 <see cref="Application.Shutdown"/>。
 /// 退出链路（ExitApp）：关设置窗 → 关 Dock（OnClosing 内 ABM_REMOVE）→ TaskbarManager.Restore
@@ -61,30 +62,47 @@ public partial class App : Application
         // 4. 设置加载：先于任何 VM 构造（DockWindow/MediaViewModel 构造期读设置）
         SettingsService.Load();
 
-        // 5. 任务栏策略与开机自启按设置落地（先于 Dock 注册 AppBar：Dock 不参与任务栏让位竞争）
+        // 5-8. 任务栏策略/自启落地 → Dock 显示 → --settings → 托盘，整体 try/catch 自愈：
+        // 该序列任何一步失败若被全局兜底吞掉（Handled=true）会留下"无 Dock 无托盘 + 任务栏被隐藏"
+        // 的僵尸进程，故此处就地回滚（还原任务栏 + 释放托盘）后优雅关停。
         _taskbar = new TaskbarManager();
-        _taskbar.Apply(SettingsService.PolicyOf(SettingsService.Current));
-        SettingsService.SetAutostart(SettingsService.Current.Autostart);
+        try
+        {
+            _taskbar.Apply(SettingsService.PolicyOf(SettingsService.Current));
+            SettingsService.SetAutostart(SettingsService.Current.Autostart);
 
-        // 6. Dock 即主 UI：--minimized 仅标识自启来源（自启语义），Dock 照常显示，超出仅记录
-        _dock = new DockWindow(_taskbar);
-        _dock.Show();
-        if (e.Args.Contains("--minimized", StringComparer.OrdinalIgnoreCase))
-            Logger.Info("--minimized（开机自启）：Dock 即主 UI，照常显示");
-        Logger.Info("Dock 已显示");
+            // 6. Dock 即主 UI：--minimized 仅标识自启来源（自启语义），Dock 照常显示，超出仅记录
+            _dock = new DockWindow(_taskbar);
+            _dock.Show();
+            if (e.Args.Contains("--minimized", StringComparer.OrdinalIgnoreCase))
+                Logger.Info("--minimized（开机自启）：Dock 即主 UI，照常显示");
+            Logger.Info("Dock 已显示");
 
-        // 7. --settings：设置窗口命令行入口（与托盘"设置"等效；窗口为单例）
-        if (e.Args.Contains("--settings", StringComparer.OrdinalIgnoreCase))
-            OpenSettings();
+            // 7. --settings：设置窗口命令行入口（与托盘"设置"等效；窗口为单例）
+            if (e.Args.Contains("--settings", StringComparer.OrdinalIgnoreCase))
+                OpenSettings();
 
-        // 8. 托盘最后就位（SMTC 已随 Dock 构造期异步初始化，失败仅记日志）
-        _tray = new TrayIconManager(
-            openSettings: OpenSettings,
-            reloadDock: ReloadDock,
-            exit: ExitApp,
-            applyTheme: ApplyThemeFromTray,
-            currentTheme: () => SettingsService.Current.Theme);
-        Logger.Info("托盘就绪，启动完成");
+            // 8. 托盘最后就位（SMTC 已随 Dock 构造期异步初始化，失败仅记日志）
+            _tray = new TrayIconManager(
+                openSettings: OpenSettings,
+                reloadDock: ReloadDock,
+                exit: ExitApp,
+                applyTheme: ApplyThemeFromTray,
+                currentTheme: () => SettingsService.Current.Theme);
+            Logger.Info("托盘就绪，启动完成");
+        }
+        catch (Exception ex)
+        {
+            Logger.Error("启动失败：回滚任务栏策略并退出（防僵尸进程）", ex);
+            if (_tray is not null)
+            {
+                _tray.Dispose();
+                _tray = null;
+            }
+            _taskbar?.Restore(); // 隐藏策略已落地时必须还原（OnExit 兜底重复调用，幂等）
+            Shutdown();          // Dock 已创建时随关停走 OnClosing/OnClosed 清理链路
+            return;
+        }
     }
 
     protected override void OnExit(ExitEventArgs e)
