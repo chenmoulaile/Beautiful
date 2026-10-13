@@ -17,7 +17,7 @@ Beautiful 在屏幕底部提供一个 macOS 风格的悬浮 Dock，替代/接管
   - **macOS**：悬停放大 + 倒影
   - **Linux GNOME**：实底左条布局
 - **原生任务栏接管**（三档策略，默认隐藏）
-  - `隐藏`：把原生任务栏移出屏幕
+  - `隐藏`：把原生任务栏移出屏幕（Win11 会把程序性移动回摆，应用在 AppBar 注册后 0.8s/3s 重申隐藏，必要时整窗隐藏兜底）；退出或切换策略时完整还原
   - `自动隐藏`：调用系统级自动隐藏（SHAppBarMessage）
   - `保留`：不动原生任务栏
   - explorer 重启自愈：监听 `TaskbarCreated` 广播后自动重新应用当前策略
@@ -37,8 +37,21 @@ Beautiful 在屏幕底部提供一个 macOS 风格的悬浮 Dock，替代/接管
 ## 构建
 
 ```bash
-git clone <repository-url>
+git clone <repository-url>   # GitHub 仓库地址待发布后回填（见下"仓库结构"）
 cd Beautiful
+```
+
+仓库结构（发布前与发布后一致）：
+
+```
+Beautiful.sln
+├── src/Beautiful.Core/      # 无 UI 核心库：歌词解析/双语对齐/时间轴/主题定义/设置模型（net8.0，可单测）
+├── src/Beautiful.App/       # WPF 壳层：Dock/AppBar、主题、媒体小组件、设置、托盘（net8.0-windows）
+├── tests/Beautiful.Core.Tests/  # Core 单元测试（68 项）
+├── scripts/                 # env.sh / publish.cmd / shot.ps1
+├── docs/                    # 设计文档
+├── publish/                 # 发布产物（gitignore，由 publish.cmd 生成）
+└── THIRD-PARTY-NOTICES.md
 ```
 
 **方式一：发布脚本（本机环境）**
@@ -79,7 +92,7 @@ dotnet publish src/Beautiful.App -c Release -r win-x64 --self-contained true -p:
 2. **网易云音乐 Win32 客户端需 SMTC 桥接插件**（如 [inflink-rs](https://github.com/apoint123/inflink-rs)）才会注册会话；注册后即可即插即用。
 3. **网易云接口为非官方接口**，仅供个人使用，不保证可用性；请勿用于商业用途。
 4. **悬停放大动画与部分主题视觉在受限环境下未逐一实机验证**（多显示器缩放、不同 DPI 等），效果可能因机器而异。
-5. **任务栏"隐藏"策略下强杀 Beautiful 进程会把原生任务栏滞留在屏幕外**。恢复方法：重启 `explorer.exe`，或在设置里把任务栏策略切回"保留"后正常退出本应用。
+5. **任务栏"隐藏"策略的两个已知代价**：(a) Win11 shell 不释放任务栏自身的 AppBar 条带注册，因此 Dock 悬浮于屏幕底边上方约 48px（视觉上与浮动 Dock 一致）；(b) 若本进程被任务管理器**强杀**且任务栏当时处于"整窗隐藏"兜底态，任务栏会保持隐藏——重启 `explorer.exe`（任务管理器 → 运行新任务 → explorer）即恢复；"移出屏幕"路径下 explorer 会在 AppBar 注销时自动复位（实测自愈）。正常退出或切换策略不受影响，原生任务栏始终完整还原。
 
 ## 许可证
 
