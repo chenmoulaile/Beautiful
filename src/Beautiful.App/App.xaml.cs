@@ -170,19 +170,27 @@ public partial class App : Application
         Logger.Info("重载 Dock：完成");
     }
 
-    /// <summary>托盘"退出"：完整清理链路后显式关停（退出路径幂等，_exiting 防重入）。</summary>
+    /// <summary>托盘"退出"：完整清理链路后显式关停（退出路径幂等，_exiting 防重入）。
+    /// 清理全程 try/finally：任何一步抛异常都必须走到 Shutdown（T19 QA）——否则 _exiting 卡死、
+    /// 后续退出尝试全部被吞；finally 兜底后 OnExit 仍会幂等重放剩余清理。</summary>
     private void ExitApp()
     {
         if (_exiting) return;
         _exiting = true;
         Logger.Info("退出：开始清理");
-        _settingsWindow?.Close();
-        _dock?.Close();          // DockWindow.OnClosing：AppBar ABM_REMOVE（hwnd 销毁前）
-        _taskbar?.Restore();     // Hide/AutoHide 还原系统任务栏
-        _tray?.Dispose();        // 移除托盘图标（防幽灵图标）
-        _tray = null;
-        SettingsService.Save();  // 兜底落盘（防抖尾写/未走设置窗口的变更一并刷盘）
-        Shutdown();
+        try
+        {
+            _settingsWindow?.Close();
+            _dock?.Close();          // DockWindow.OnClosing：AppBar ABM_REMOVE（hwnd 销毁前）
+            _taskbar?.Restore();     // Hide/AutoHide 还原系统任务栏
+            _tray?.Dispose();        // 移除托盘图标（防幽灵图标）
+            _tray = null;
+            SettingsService.Save();  // 兜底落盘（防抖尾写/未走设置窗口的变更一并刷盘）
+        }
+        finally
+        {
+            Shutdown();
+        }
     }
 
     // ---------- 全局异常兜底 ----------
