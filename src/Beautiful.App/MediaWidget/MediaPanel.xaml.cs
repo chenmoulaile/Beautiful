@@ -10,7 +10,7 @@ namespace Beautiful.App.MediaWidget;
 
 /// <summary>
 /// 歌词展开面板：跟随胶囊上方居中的独立亚克力窗（位置由 DockWindow 在 Show 前计算）。
-/// 失焦自动 Hide（Deactivated → Hide，本任务硬编码；开关归 Task 16 设置）；
+/// 失焦自动 Hide（Deactivated → Hide，开关 = 设置项 HidePanelOnDeactivate，经 VM 标志消费）；
 /// 进度条交互用 ValueChanged 差值检测 + 防抖（见构造函数注释），SeekAsync 首次失败 →
 /// IsSeekable=false 隐藏进度条；歌词 CurrentLyricIndex 变化 → ScrollIntoView（VM 事件驱动）。
 /// </summary>
@@ -57,7 +57,10 @@ public partial class MediaPanel
         _ = _vm.SeekToAsync(TimeSpan.FromSeconds(Progress.Value));
     }
 
-    private void OnDeactivatedHide(object? sender, EventArgs e) => Hide();
+    private void OnDeactivatedHide(object? sender, EventArgs e)
+    {
+        if (_vm.PanelAutoHideOnDeactivate) Hide(); // 设置项（Task 16）：失焦收起可关
+    }
 
     private void OnLyricIndexChanged(int index)
     {

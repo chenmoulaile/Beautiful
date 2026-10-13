@@ -2,6 +2,7 @@ using System.Diagnostics;
 using System.ComponentModel;
 using System.Runtime.InteropServices;
 using System.Windows;
+using System.Windows.Controls;
 using System.Windows.Input;
 using System.Windows.Interop;
 using System.Windows.Media;
@@ -42,7 +43,10 @@ public partial class DockWindow : AcrylicWindow
     // App.OnStartup / DockViewModel 保持不动（媒体条目由 DockViewModel 的 suffix 占位提供）。
     private readonly SmtcService _smtc;
     private readonly MediaViewModel _mediaVm;
+    private readonly TaskbarManager? _taskbar; // App 注入：TaskbarCreated（explorer 重建）后重放策略
     private MediaPanel? _mediaPanel;
+    private ContextMenu? _itemContextMenu;     // 条目右键菜单（Resources 取用；代码后置手动开关）
+    private DockItem? _contextItem;            // 右键菜单打开时的目标条目（固定/取消固定用）
     private DateTime? _panelAutoHiddenAtUtc; // 面板最近一次"失焦自动收起"时刻（胶囊点击的 toggle 语义用）
 
     private IntPtr _hwnd;
@@ -60,18 +64,23 @@ public partial class DockWindow : AcrylicWindow
     private double[]? _targetScales;
     private DispatcherTimer? _animTimer;
 
-    public DockWindow()
+    public DockWindow(TaskbarManager? taskbar = null)
     {
+        _taskbar = taskbar;
         _smtc = new SmtcService();
         _mediaVm = new MediaViewModel(_smtc, Dispatcher); // 先于 InitializeComponent：XAML 模板可能经 RelativeSource 绑定 MediaVm
         InitializeComponent();
         _vm = new DockViewModel(_tracker);
         DataContext = _vm;
+        _itemContextMenu = (ContextMenu)Resources["ItemContextMenu"];
         ThemeManager.ThemeChanged += OnThemeChanged;
-        // 初始主题：鸿蒙（Task 16/17 移交设置项）。Apply 会加载字典并触发 OnThemeChanged。
-        ThemeManager.Apply(ThemeDefinition.HarmonyOs(), Application.Current);
+        // 初始主题：设置项驱动（settings.json 的 Theme，缺省鸿蒙；设置窗口切换即持久化）
+        ThemeManager.Apply(SettingsService.ThemeDefinitionOf(SettingsService.Current), Application.Current);
         Loaded += OnWindowLoaded;
     }
+
+    /// <summary>Dock 数据源（设置窗口编辑固定应用后经此重载固定块）。</summary>
+    public DockViewModel Vm => _vm;
 
     /// <summary>媒体 VM（XAML 媒体条目模板经 RelativeSource 绑定到本属性）。</summary>
     public MediaViewModel MediaVm => _mediaVm;
@@ -201,7 +210,8 @@ public partial class DockWindow : AcrylicWindow
         }
         if (_taskbarCreatedMsg != 0 && msg == _taskbarCreatedMsg)
         {
-            handled = true; // explorer 重建任务栏 → ABM_REMOVE + 重注册
+            handled = true; // explorer 重建任务栏 → ABM_REMOVE + 重注册；任务栏策略（隐藏/自动隐藏）一并重放
+            _taskbar?.HandleTaskbarCreated();
             Dispatcher.BeginInvoke(RegisterAndPositionAppBar);
             return IntPtr.Zero;
         }
@@ -366,6 +376,46 @@ public partial class DockWindow : AcrylicWindow
         }
     }
 
+    // ---------- 右键菜单：固定 / 取消固定 ----------
+
+    /// <summary>
+    /// 右键条目弹出固定菜单（媒体/回收站无固定语义不弹）。手动开关而非容器 ContextMenu：
+    /// 实测 ItemContainerStyle 挂 ContextMenu 时 ContextMenuService 在本窗口把事件路由到
+    /// ItemsControl 层（Source=ItemsControl），容器菜单永远不打开——绕开服务，复用
+    /// 放大器的基准中心命中测试直接定位条目。
+    /// </summary>
+    private void ItemsHost_PreviewMouseRightButtonUp(object sender, MouseButtonEventArgs e)
+    {
+        if (_itemContextMenu is null) return;
+        var idx = HitTestIndex(e.GetPosition(ItemsHost));
+        if (idx is not int i || i >= _vm.Items.Count) return;
+        var item = _vm.Items[i];
+        if (item.Kind is DockItemKind.Media or DockItemKind.RecycleBin) return;
+        _contextItem = item;
+        if (_itemContextMenu.Items[0] is MenuItem pin)
+            pin.Visibility = item is { Kind: DockItemKind.Window, LaunchPath.Length: > 0 }
+                ? Visibility.Visible
+                : Visibility.Collapsed;
+        if (_itemContextMenu.Items[1] is MenuItem unpin)
+            unpin.Visibility = item.Kind == DockItemKind.Pinned ? Visibility.Visible : Visibility.Collapsed;
+        _itemContextMenu.PlacementTarget = ItemsHost;
+        _itemContextMenu.Placement = System.Windows.Controls.Primitives.PlacementMode.MousePoint;
+        _itemContextMenu.IsOpen = true;
+        e.Handled = true;
+    }
+
+    private void PinItem_Click(object sender, RoutedEventArgs e)
+    {
+        if (_contextItem is { Kind: DockItemKind.Window, LaunchPath.Length: > 0 } item)
+            _vm.PinExecutable(item.LaunchPath); // 固定当前窗口的 exe 路径（去重，写回 dock.json）
+    }
+
+    private void UnpinItem_Click(object sender, RoutedEventArgs e)
+    {
+        if (_contextItem is { Kind: DockItemKind.Pinned } item)
+            _vm.Unpin(item.LaunchPath);
+    }
+
     // ---------- 媒体面板（实况窗展开） ----------
 
     private void ToggleMediaPanel()
@@ -394,7 +444,12 @@ public partial class DockWindow : AcrylicWindow
             if (_mediaPanel is null)
             {
                 _mediaPanel = new MediaPanel(_mediaVm) { Owner = this };
-                _mediaPanel.Deactivated += (_, _) => _panelAutoHiddenAtUtc = DateTime.UtcNow;
+                // 仅在"失焦自动收起"开启时记录时间戳：关闭开关后面板不因失焦隐藏，
+                // 若仍记录会把 <600ms 的 toggle 抑制窗口错误应用到点击展开
+                _mediaPanel.Deactivated += (_, _) =>
+                {
+                    if (_mediaVm.PanelAutoHideOnDeactivate) _panelAutoHiddenAtUtc = DateTime.UtcNow;
+                };
                 _mediaPanel.Closed += (_, _) => { _mediaPanel = null; _panelAutoHiddenAtUtc = null; };
             }
             PositionMediaPanel();

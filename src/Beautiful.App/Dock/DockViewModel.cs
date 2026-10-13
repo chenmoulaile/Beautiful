@@ -8,23 +8,25 @@ using Beautiful.App.Services;
 namespace Beautiful.App.Dock;
 
 /// <summary>
-/// Dock 数据源：合并 固定应用（本任务硬编码默认项，Task 16 由 config/dock.json 接管）
-/// + WindowTracker 运行窗口（实时增删）+ 回收站 + 媒体胶囊占位（Task 15 实装）。
+/// Dock 数据源：合并 固定应用（PinnedAppsStore → config/dock.json，缺失时代码默认）
+/// + WindowTracker 运行窗口（实时增删）+ 回收站 + 媒体胶囊占位。
 /// 布局顺序固定为：Pinned… | Window… | 回收站 | 媒体；窗口块始终连续，映射下标 = 固定项数 + 跟踪集合下标。
 /// 所有事件均在 UI 线程到达（WindowTracker 保证），无需加锁。
 /// </summary>
 public sealed class DockViewModel
 {
     private readonly WindowTracker _tracker;
-    private readonly int _pinnedCount;
+    private readonly PinnedAppsStore _pinnedStore;
+    private int _pinnedCount; // 可变：ReloadPinned 重建固定块后更新（窗口块映射下标随之平移）
 
     public ObservableCollection<DockItem> Items { get; } = new();
 
-    public DockViewModel(WindowTracker tracker)
+    public DockViewModel(WindowTracker tracker, PinnedAppsStore? pinnedStore = null)
     {
         _tracker = tracker;
+        _pinnedStore = pinnedStore ?? new PinnedAppsStore();
 
-        foreach (var pinned in CreateDefaultPinnedItems()) Items.Add(pinned);
+        foreach (var path in _pinnedStore.Load()) Items.Add(MakePinned(path));
         _pinnedCount = Items.Count;
 
         // 先放回收站/媒体占位，再插入窗口：保证下方 Items.Count - SuffixCount 在构造期
@@ -47,13 +49,38 @@ public sealed class DockViewModel
 
     // ---------- 固定项 / 占位项 ----------
 
-    private static IEnumerable<DockItem> CreateDefaultPinnedItems()
+    /// <summary>
+    /// 按 dock.json 现值重建固定块（设置窗口编辑 / 右键固定变更后调用）：
+    /// 移除旧固定块后按下标 0..n 插入新块，窗口块整体后移保持连续。
+    /// </summary>
+    public void ReloadPinned()
     {
-        // 本任务的硬编码默认固定项；Label 暂用 exe 名（Task 16 接管为配置）
-        yield return MakePinned(@"C:\Windows\explorer.exe");
-        yield return MakePinned(@"C:\Windows\System32\notepad.exe");
-        var edge = MakePinned(@"C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe");
-        if (File.Exists(edge.LaunchPath)) yield return edge;
+        var paths = _pinnedStore.Load();
+        for (var i = _pinnedCount - 1; i >= 0; i--) Items.RemoveAt(i);
+        for (var i = 0; i < paths.Count; i++) Items.Insert(i, MakePinned(paths[i]));
+        _pinnedCount = paths.Count;
+    }
+
+    /// <summary>将 exe 路径加入固定列表（已固定则无操作），写回 dock.json 并重载固定块。</summary>
+    public void PinExecutable(string path)
+    {
+        if (string.IsNullOrWhiteSpace(path)) return;
+        var paths = _pinnedStore.Load();
+        if (paths.Contains(path, StringComparer.OrdinalIgnoreCase)) return;
+        paths.Add(path);
+        _pinnedStore.Save(paths);
+        ReloadPinned();
+    }
+
+    /// <summary>取消固定（按路径移除），写回 dock.json 并重载固定块；路径不在列表时无操作。</summary>
+    public void Unpin(string path)
+    {
+        if (string.IsNullOrWhiteSpace(path)) return;
+        var paths = _pinnedStore.Load();
+        var next = paths.Where(p => !string.Equals(p, path, StringComparison.OrdinalIgnoreCase)).ToList();
+        if (next.Count == paths.Count) return;
+        _pinnedStore.Save(next);
+        ReloadPinned();
     }
 
     private static DockItem MakePinned(string path)

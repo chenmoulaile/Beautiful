@@ -1,0 +1,75 @@
+<Window x:Class="Beautiful.App.Settings.SettingsWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="Beautiful 设置" Width="560" SizeToContent="Height"
+        WindowStartupLocation="CenterScreen" ResizeMode="NoResize"
+        ShowInTaskbar="True" UseLayoutRounding="True">
+    <!-- 简洁功能窗（系统 chrome）：设置变更即时生效并持久化，见代码后置类注释。 -->
+    <StackPanel Margin="20,16,20,16">
+
+        <TextBlock Text="主题" FontSize="14" FontWeight="SemiBold"/>
+        <StackPanel Orientation="Horizontal" Margin="0,8,0,0">
+            <RadioButton x:Name="ThemeHarmonyOs" GroupName="Theme" Margin="0,0,24,0" Checked="Theme_Checked">
+                <StackPanel Orientation="Horizontal">
+                    <Ellipse x:Name="ThemeHarmonyOsDot" Width="12" Height="12" VerticalAlignment="Center"/>
+                    <TextBlock Text="鸿蒙" Margin="6,0,0,0"/>
+                </StackPanel>
+            </RadioButton>
+            <RadioButton x:Name="ThemeMacOs" GroupName="Theme" Margin="0,0,24,0" Checked="Theme_Checked">
+                <StackPanel Orientation="Horizontal">
+                    <Ellipse x:Name="ThemeMacOsDot" Width="12" Height="12" VerticalAlignment="Center"/>
+                    <TextBlock Text="macOS" Margin="6,0,0,0"/>
+                </StackPanel>
+            </RadioButton>
+            <RadioButton x:Name="ThemeLinux" GroupName="Theme" Checked="Theme_Checked">
+                <StackPanel Orientation="Horizontal">
+                    <Ellipse x:Name="ThemeLinuxDot" Width="12" Height="12" VerticalAlignment="Center"/>
+                    <TextBlock Text="Linux" Margin="6,0,0,0"/>
+                </StackPanel>
+            </RadioButton>
+        </StackPanel>
+
+        <TextBlock Text="任务栏" FontSize="14" FontWeight="SemiBold" Margin="0,20,0,0"/>
+        <StackPanel Orientation="Horizontal" Margin="0,8,0,0">
+            <RadioButton x:Name="TaskbarHide" GroupName="Taskbar" Content="隐藏"
+                         Margin="0,0,24,0" Checked="Taskbar_Checked"/>
+            <RadioButton x:Name="TaskbarAutoHide" GroupName="Taskbar" Content="自动隐藏"
+                         Margin="0,0,24,0" Checked="Taskbar_Checked"/>
+            <RadioButton x:Name="TaskbarKeep" GroupName="Taskbar" Content="保留"
+                         Checked="Taskbar_Checked"/>
+        </StackPanel>
+
+        <CheckBox x:Name="AutostartCheck" Content="开机自启"
+                  Margin="0,20,0,0" Checked="Autostart_Changed" Unchecked="Autostart_Changed"/>
+
+        <TextBlock Text="歌词偏移" FontSize="14" FontWeight="SemiBold" Margin="0,20,0,0"/>
+        <StackPanel Orientation="Horizontal" Margin="0,8,0,0">
+            <Slider x:Name="OffsetSlider" Width="330" Minimum="-2000" Maximum="2000"
+                    SmallChange="50" LargeChange="200" TickFrequency="50"
+                    IsSnapToTickEnabled="True" IsMoveToPointEnabled="False"
+                    AutoToolTipPlacement="BottomRight" AutoToolTipPrecision="0"
+                    ValueChanged="OffsetSlider_ValueChanged" VerticalAlignment="Center"/>
+            <TextBlock x:Name="OffsetLabel" Text="0 ms" Width="76" Margin="14,0,0,0"
+                       VerticalAlignment="Center" TextAlignment="Right"/>
+        </StackPanel>
+
+        <CheckBox x:Name="CapsuleCheck" Content="显示媒体胶囊"
+                  Margin="0,20,0,0" Checked="Capsule_Changed" Unchecked="Capsule_Changed"/>
+        <CheckBox x:Name="HidePanelCheck" Content="媒体面板失焦自动收起"
+                  Margin="0,8,0,0" Checked="HidePanel_Changed" Unchecked="HidePanel_Changed"/>
+
+        <TextBlock Text="固定应用" FontSize="14" FontWeight="SemiBold" Margin="0,20,0,0"/>
+        <ListBox x:Name="PinnedList" Height="116" Margin="0,8,0,0"
+                 ItemsSource="{Binding PinnedApps}"
+                 ScrollViewer.HorizontalScrollBarVisibility="Auto"/>
+        <StackPanel Orientation="Horizontal" Margin="0,8,0,0">
+            <Button Content="添加" Width="64" Margin="0,0,8,0" Click="AddPinned_Click"/>
+            <Button Content="移除" Width="64" Margin="0,0,8,0" Click="RemovePinned_Click"/>
+            <Button Content="上移" Width="64" Margin="0,0,8,0" Click="MoveUpPinned_Click"/>
+            <Button Content="下移" Width="64" Click="MoveDownPinned_Click"/>
+        </StackPanel>
+
+        <Button Content="关闭" Width="88" Height="26" IsCancel="True"
+                HorizontalAlignment="Right" Margin="0,20,0,0" Click="Close_Click"/>
+    </StackPanel>
+</Window>

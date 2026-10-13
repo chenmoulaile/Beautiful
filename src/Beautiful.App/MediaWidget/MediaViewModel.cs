@@ -78,6 +78,10 @@ public sealed class MediaViewModel : INotifyPropertyChanged, IDisposable
     private bool _isSeekable = true;
     private LyricsState _state = LyricsState.Idle;
     private int _currentLyricIndex = -1;
+    private int _offsetMs;                    // 歌词对齐偏移（设置项；设置窗口经 ApplyLyricsOffset 热更新）
+    private LyricDocument? _lastRawDoc;       // 当前曲目原始歌词（未对齐）：偏移变更时就地重对齐，免网络
+    private bool _capsuleVisible;             // Dock 媒体胶囊显示开关（设置项）
+    private bool _panelAutoHideOnDeactivate;  // 媒体面板失焦自动收起（设置项；MediaPanel 消费）
 
     public event PropertyChangedEventHandler? PropertyChanged;
     /// <summary>当前歌词行下标变化（-1 = 无高亮行）：面板 code-behind 订阅以 ScrollIntoView。</summary>
@@ -93,6 +97,11 @@ public sealed class MediaViewModel : INotifyPropertyChanged, IDisposable
     {
         _smtc = smtc;
         _dispatcher = dispatcher;
+        // 设置项初值（SettingsService.Load 先于本构造发生；App.OnStartup 顺序保证）
+        var settings = SettingsService.Current;
+        _offsetMs = settings.LyricsOffsetMs;
+        _capsuleVisible = settings.ShowMediaCapsule;
+        _panelAutoHideOnDeactivate = settings.HidePanelOnDeactivate;
         // 每个 provider 一个共享 HttpClient，随 VM 生命周期复用（严禁按曲目新建）
         _lyrics = new LyricService(
             new ILyricsProvider[]
@@ -219,12 +228,28 @@ public sealed class MediaViewModel : INotifyPropertyChanged, IDisposable
                 ResetLyricRows(LyricsState.NoLyrics);
                 return;
             }
-            // 双语对齐偏移：本任务固定 0，Task 16 接 SettingsService.Current.LyricsOffsetMs
-            var aligned = BilingualAligner.WithOffset(doc, 0);
+            // 双语对齐偏移：读设置项（设置窗口热更经 ApplyLyricsOffset）
+            _lastRawDoc = doc;
+            var aligned = BilingualAligner.WithOffset(doc, _offsetMs);
             foreach (var line in aligned.Lines)
                 Lyrics.Add(new LyricRow(line.Time, line.Original, line.Translation));
             State = LyricsState.Loaded;
         });
+    }
+
+    /// <summary>
+    /// 设置窗口调整歌词偏移后调用：按新偏移就地重建当前歌词行（用缓存的原始文档，免网络）。
+    /// 无已加载歌词（加载中/无歌词/空闲）时不动作——在途加载与下次加载都会按新偏移对齐。
+    /// </summary>
+    public void ApplyLyricsOffset(int offsetMs)
+    {
+        _offsetMs = offsetMs;
+        if (_lastRawDoc is not { Lines.Count: > 0 } || State != LyricsState.Loaded) return;
+        Lyrics.Clear();
+        _currentLyricIndex = -1;
+        RaisePropertyChanged(nameof(CurrentLyricIndex));
+        foreach (var line in BilingualAligner.WithOffset(_lastRawDoc, offsetMs).Lines)
+            Lyrics.Add(new LyricRow(line.Time, line.Original, line.Translation));
     }
 
     private void ApplyPlaying(bool playing)
@@ -279,6 +304,7 @@ public sealed class MediaViewModel : INotifyPropertyChanged, IDisposable
     private void ClearTrack()
     {
         _lyricLoadSeq++;                 // 在途歌词加载作废
+        _lastRawDoc = null;              // 原始文档随曲目一并失效
         TrackTitle = "";
         Artist = "";
         CapsuleText = "";
@@ -447,6 +473,30 @@ public sealed class MediaViewModel : INotifyPropertyChanged, IDisposable
         {
             if (_state == value) return;
             _state = value;
+            RaisePropertyChanged();
+        }
+    }
+
+    /// <summary>Dock 是否显示媒体胶囊条目（设置项；MediaItemTemplate 宽度触发器消费）。</summary>
+    public bool CapsuleVisible
+    {
+        get => _capsuleVisible;
+        set
+        {
+            if (_capsuleVisible == value) return;
+            _capsuleVisible = value;
+            RaisePropertyChanged();
+        }
+    }
+
+    /// <summary>媒体面板失焦是否自动收起（设置项；MediaPanel.Deactivated 消费）。</summary>
+    public bool PanelAutoHideOnDeactivate
+    {
+        get => _panelAutoHideOnDeactivate;
+        set
+        {
+            if (_panelAutoHideOnDeactivate == value) return;
+            _panelAutoHideOnDeactivate = value;
             RaisePropertyChanged();
         }
     }
