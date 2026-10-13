@@ -77,7 +77,7 @@ public sealed class SmtcService : IDisposable
         if (_disposed || ReferenceEquals(session, _session)) return;
         UnhookSession(_session);
         _session = session;
-        if (session is null) Current = null; // 解绑即清空：避免"HasSession=true 但显示上一首"的脏状态
+        Current = null; // 换绑/解绑均清空：避免新会话刷新失败时仍显示上一会话曲目的脏状态
         HookSession(_session);
         SessionChanged?.Invoke();
         _ = RefreshTrackAsync(); // fire-and-forget：封面加载是异步的，完成后经 TrackChanged 发布
@@ -214,6 +214,7 @@ public sealed class SmtcService : IDisposable
                 var chunk = new byte[reader.UnconsumedBufferLength];
                 reader.ReadBytes(chunk);
                 ms.Write(chunk, 0, chunk.Length);
+                if (ms.Length > MaxCoverBytes) return null; // Size==0（长度未知）时兜底：流谎报长度/永不结束也强制 32MB 上限
             }
             return ms.Length > 0 ? ms.ToArray() : null;
         }
