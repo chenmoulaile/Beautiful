@@ -17,7 +17,7 @@ public enum TaskbarPolicy { Keep, AutoHide, Hide }
 public sealed class TaskbarManager
 {
     private readonly Dictionary<IntPtr, RECT> _saved = new(); // 还原基准：首次隐藏时的屏幕内矩形
-    private readonly HashSet<IntPtr> _swHidden = new();       // 经 SW_HIDE 隐藏的窗口（还原需 SW_SHOW）
+    private readonly HashSet<IntPtr> _swHidden = new();       // 经 SW_HIDE 隐藏的窗口（还原需 SW_SHOWNA）
     private TaskbarPolicy _policy = TaskbarPolicy.Keep;
 
     public event Action? PolicyApplied;
@@ -48,7 +48,7 @@ public sealed class TaskbarManager
         if (_policy == TaskbarPolicy.Hide) HideAll();
     }
 
-    /// <summary>退出/策略切换前调用：SW_SHOW 恢复被整窗隐藏的任务栏 + 复位矩形 + 关自动隐藏。</summary>
+    /// <summary>退出/策略切换前调用：SW_SHOWNA（恢复可见且不抢焦点）恢复被整窗隐藏的任务栏 + 复位矩形 + 关自动隐藏。</summary>
     public void Restore()
     {
         RestoreInternal();
@@ -62,14 +62,14 @@ public sealed class TaskbarManager
         foreach (var (hwnd, rect) in _saved)
         {
             if (_swHidden.Remove(hwnd))
-                NativeMethods.ShowWindow(hwnd, NativeMethods.SwShow); // 先恢复可见再复位矩形
+                NativeMethods.ShowWindow(hwnd, NativeMethods.SwShowna); // SW_SHOWNA 先恢复可见（不抢焦点）再复位矩形
             Logger.Info($"Restore: hwnd=0x{hwnd.ToInt64():X} → ({rect.Left},{rect.Top})-({rect.Right},{rect.Bottom})");
             NativeMethods.SetWindowPos(hwnd, IntPtr.Zero, rect.Left, rect.Top,
                 rect.Right - rect.Left, rect.Bottom - rect.Top,
                 NativeMethods.SwpNozorder | NativeMethods.SwpNoactivate);
         }
+        _swHidden.IntersectWith(_saved.Keys); // 残留的死亡句柄（explorer 重启）清理，须在 _saved.Clear() 前：保持 _swHidden ⊆ _saved
         _saved.Clear();
-        _swHidden.IntersectWith(_saved.Keys); // 残留的死亡句柄（explorer 重启）清理
     }
 
     private static void SetAutoHide(bool on)
@@ -103,7 +103,7 @@ public sealed class TaskbarManager
                 continue;
             }
             Logger.Info($"HideAll: hwnd=0x{hwnd.ToInt64():X} 移动被 shell 还原 (ok={ok} after=({after.Left},{after.Top})-({after.Right},{after.Bottom}))，降级 SW_HIDE");
-            // 尝试 2：整窗隐藏（Win11 XAML 任务栏对移动有回夹，对可见性没有）——还原时 SW_SHOW
+            // 尝试 2：整窗隐藏（Win11 XAML 任务栏对移动有回夹，对可见性没有）——还原时 SW_SHOWNA
             NativeMethods.ShowWindow(hwnd, NativeMethods.SwHide);
             _swHidden.Add(hwnd);
             Logger.Info($"HideAll: hwnd=0x{hwnd.ToInt64():X} SW_HIDE 完成");
