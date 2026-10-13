@@ -124,7 +124,8 @@ internal static partial class NativeMethods
     [DllImport("user32.dll")] public static extern bool GetWindowRect(IntPtr hWnd, out RECT rect);
     [DllImport("user32.dll")] public static extern bool MoveWindow(IntPtr hWnd, int x, int y, int w, int h, bool repaint);
 
-    public const uint SwpNozorder = 0x0004, SwpNoactivate = 0x0010, SwpShowWindow = 0x0040;
+    public const uint SwpNozorder = 0x0004, SwpNoactivate = 0x0010, SwpShowWindow = 0x0040, SwpNoSendChanging = 0x0400;
+    public const int SwHide = 0, SwShow = 5;
     [DllImport("user32.dll")]
     public static extern bool SetWindowPos(IntPtr hWnd, IntPtr after, int x, int y, int cx, int cy, uint flags);
 

@@ -74,6 +74,9 @@ public partial class DockWindow : AcrylicWindow
         DataContext = _vm;
         _itemContextMenu = (ContextMenu)Resources["ItemContextMenu"];
         ThemeManager.ThemeChanged += OnThemeChanged;
+        // 任务栏策略切换/explorer 重启重放（TaskbarManager.Apply/Restore → PolicyApplied）后，
+        // AppBar 条带需重新协商：任务栏真被移出屏幕 → Dock 贴底；还原/保留 → 让位于任务栏上方。
+        if (_taskbar is not null) _taskbar.PolicyApplied += OnTaskbarPolicyApplied;
         // 初始主题：设置项驱动（settings.json 的 Theme，缺省鸿蒙；设置窗口切换即持久化）
         ThemeManager.Apply(SettingsService.ThemeDefinitionOf(SettingsService.Current), Application.Current);
         Loaded += OnWindowLoaded;
@@ -144,6 +147,7 @@ public partial class DockWindow : AcrylicWindow
     protected override void OnClosed(EventArgs e)
     {
         ThemeManager.ThemeChanged -= OnThemeChanged; // 解除主题订阅，防止闭包引用已关闭窗口
+        if (_taskbar is not null) _taskbar.PolicyApplied -= OnTaskbarPolicyApplied;
         _vm.Detach();
         _tracker.Dispose();
         _mediaVm.Dispose();                          // 停定时器 + 解除 SmtcService 事件订阅
@@ -163,7 +167,43 @@ public partial class DockWindow : AcrylicWindow
         };
         NativeMethods.SHAppBarMessage(NativeMethods.AbmNew, ref _abd);
         _appbarRegistered = true;
+        Logger.Info($"AppBar ABM_NEW 完成 hwnd=0x{_hwnd.ToInt64():X}");
         PositionAsAppBar();
+        ScheduleHideSettle();
+    }
+
+    /// <summary>
+    /// Hide 策略下 AppBar 注册/重注册会引发 shell 重布局，Win11 可能把任务栏摆回屏幕内：
+    /// T+0.8s / T+3s 各重申一次隐藏并重新协商条带（任务栏真正移出后 Dock 才能贴底）。
+    /// 非 Hide 策略 Reassert 为 no-op，不调度。
+    /// </summary>
+    private void ScheduleHideSettle()
+    {
+        if (_taskbar is not { Current: Services.TaskbarPolicy.Hide }) return;
+        foreach (var delayMs in new[] { 800, 3000 })
+        {
+            var timer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(delayMs) };
+            timer.Tick += (_, _) =>
+            {
+                timer.Stop();
+                if (_closing) return;
+                _taskbar.Reassert();
+                PositionAsAppBar();
+            };
+            timer.Start();
+        }
+    }
+
+    /// <summary>任务栏策略变更落地（Apply/Restore）后重申策略并重新协商 AppBar 条带。</summary>
+    private void OnTaskbarPolicyApplied()
+    {
+        if (_closing || !_appbarRegistered) return;
+        Dispatcher.BeginInvoke(() =>
+        {
+            if (_closing || !_appbarRegistered) return;
+            _taskbar?.Reassert();
+            PositionAsAppBar();
+        }, DispatcherPriority.ApplicationIdle);
     }
 
     private void UnregisterAppBar()
@@ -188,6 +228,7 @@ public partial class DockWindow : AcrylicWindow
         NativeMethods.SHAppBarMessage(NativeMethods.AbmQueryPos, ref _abd);
         _abd.rc.Top = _abd.rc.Bottom - stripH;            // 修正：底边让位既有 AppBar/任务栏，高度以期望为准
         NativeMethods.SHAppBarMessage(NativeMethods.AbmSetPos, ref _abd);
+        Logger.Info($"AppBar SETPOS rc=({_abd.rc.Left},{_abd.rc.Top})-({_abd.rc.Right},{_abd.rc.Bottom})");
         NativeMethods.SetWindowPos(_hwnd, IntPtr.Zero,
             _abd.rc.Left, _abd.rc.Top,
             _abd.rc.Right - _abd.rc.Left, _abd.rc.Bottom - _abd.rc.Top,
@@ -215,7 +256,10 @@ public partial class DockWindow : AcrylicWindow
             Dispatcher.BeginInvoke(RegisterAndPositionAppBar);
             return IntPtr.Zero;
         }
-        if (msg is NativeMethods.WmDisplayChange or NativeMethods.WmSettingChange)
+        // WM_DISPLAYCHANGE：分辨率/显示器拓扑变化 → 重新协商条带。
+        // 注意 WM_SETTINGCHANGE 不可在此重注册：ABM_SETPOS 改变工作区会再触发 WM_SETTINGCHANGE
+        // 广播，形成"注册 → 广播 → 再注册"的无限循环（QA 实测 6 秒 63 次重注册）。
+        if (msg == NativeMethods.WmDisplayChange)
         {
             Dispatcher.BeginInvoke(RegisterAndPositionAppBar);
         }
