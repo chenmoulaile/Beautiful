@@ -17,7 +17,7 @@ using OpenFileDialog = Microsoft.Win32.OpenFileDialog;
 namespace Beautiful.App.Settings;
 
 /// <summary>
-/// 设置窗口（--settings 临时入口；T17 托盘菜单接管正式入口）。全部改动即时生效：
+/// 设置窗口（入口：托盘"设置"/托盘双击/--settings 命令行；App 侧单例管理）。全部改动即时生效：
 /// 主题 → ThemeManager.Apply；任务栏 → TaskbarManager.Apply；自启 → 注册表；
 /// 偏移 → MediaViewModel 就地重对齐；胶囊/失焦收起 → MediaViewModel 标志；
 /// 固定应用 → dock.json + DockViewModel.ReloadPinned。

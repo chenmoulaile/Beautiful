@@ -23,7 +23,8 @@ namespace Beautiful.App.Services;
 /// </para>
 /// <para>
 /// <b>错误策略：</b>会话可能在任何异步间隙被销毁（播放器退出 / 媒体切换），所有 WinRT 调用均 try/catch
-/// 包裹并静默降级（暂不接 Logger，Task 17 再补）。
+/// 包裹并静默降级。会话失效是常态竞态而非故障，逐次记日志会刷屏；关键路径失败（初始化）由
+/// MediaViewModel 记入 Logger（Task 17）。
 /// </para>
 /// <para>
 /// <b>投影适配（net8.0-windows10.0.19041.0 的 Microsoft.Windows.SDK.NET.Ref 10.0.19041.56）：</b>

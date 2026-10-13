@@ -1,4 +1,3 @@
-using System.Diagnostics;
 using Microsoft.Win32;
 using Beautiful.Core.Settings;
 using Beautiful.Core.Themes;
@@ -34,7 +33,8 @@ public static class SettingsService
 
     /// <summary>
     /// 开机自启：HKCU\...\Run 值 "Beautiful" = "\"exe路径\" --minimized"
-    /// （带引号防路径空格；--minimized 供 T17 托盘启动参数识别）。关闭即删除值。
+    /// （带引号防路径空格；--minimized 标识自启来源，壳层启动时仅记录——Dock 即主 UI 照常显示）。
+    /// 关闭即删除值。
     /// </summary>
     public static void SetAutostart(bool enabled)
     {
@@ -43,7 +43,7 @@ public static class SettingsService
             var exe = Environment.ProcessPath;
             if (enabled && string.IsNullOrEmpty(exe))
             {
-                Trace.WriteLine("SetAutostart: 无法确定可执行文件路径，跳过");
+                Logger.Warn("SetAutostart: 无法确定可执行文件路径，跳过");
                 return;
             }
             using var key = Registry.CurrentUser.CreateSubKey(RunKeyPath, writable: true);
@@ -52,8 +52,8 @@ public static class SettingsService
         }
         catch (Exception ex)
         {
-            // 注册表操作失败不拖垮启动/设置流程（下次保存可重试；T17 接 Logger）
-            Trace.WriteLine($"设置开机自启失败: {ex.Message}");
+            // 注册表操作失败不拖垮启动/设置流程（下次保存可重试）
+            Logger.Warn($"设置开机自启失败: {ex.Message}");
         }
     }
 

@@ -1,4 +1,3 @@
-using System.Diagnostics;
 using System.IO;
 using System.Text.Json;
 
@@ -34,7 +33,7 @@ public sealed class PinnedAppsStore
         }
         catch (Exception ex) when (ex is JsonException or IOException or UnauthorizedAccessException)
         {
-            Trace.WriteLine($"dock.json 读取失败，回退默认固定项: {ex.Message}");
+            Logger.Warn($"dock.json 读取失败，回退默认固定项: {ex.Message}");
             return Defaults();
         }
     }
@@ -48,8 +47,8 @@ public sealed class PinnedAppsStore
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
-            // 尽力而为保存：瞬时文件锁/权限失败不拖垮 UI（下次 Save 可重试；T17 接 Logger）
-            Trace.WriteLine($"dock.json 保存失败: {ex.Message}");
+            // 尽力而为保存：瞬时文件锁/权限失败不拖垮 UI（下次 Save 可重试）
+            Logger.Warn($"dock.json 保存失败: {ex.Message}");
         }
     }
 

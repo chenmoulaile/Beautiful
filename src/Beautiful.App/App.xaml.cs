@@ -1,46 +1,211 @@
-// UseWPF + UseWindowsForms 同时启用时，ImplicitUsings 会引入 System.Windows.Forms，
-// 导致 Application 二义性（CS0104），此处用别名显式指向 WPF 的 Application。
-using System.Diagnostics;
+using System.Threading;
+using System.Threading.Tasks;
 using System.Windows;
+using System.Windows.Threading;
+using Beautiful.App.Dock;
 using Beautiful.App.Services;
+using Beautiful.App.Shell;
+using Beautiful.App.Themes;
 using Application = System.Windows.Application;
+using MessageBox = System.Windows.MessageBox;
 
 namespace Beautiful.App;
 
 /// <summary>
-/// WPF 应用入口。启动流程（Task 16）：加载设置 → DockWindow（构造期按设置应用主题）→
-/// 应用任务栏策略 / 开机自启注册表 →（--settings 临时入口）打开设置窗口。
-/// ShutdownMode=OnMainWindowClose：Dock 即主窗，关闭即退出（设置窗口随壳层一并结束）。
+/// WPF 应用壳层（Task 17）：完整启动流程与退出编排。
+/// 启动：Logger → 全局异常兜底 → 单实例 Mutex（第二实例弹窗即退）→ SettingsService.Load →
+/// 任务栏策略/自启落地 → DockWindow（构造期按设置应用主题；SMTC 经 MediaViewModel 构造期
+/// fire-and-forget 初始化，失败仅记日志降级为无胶囊）→ --settings 打开设置窗口 → 托盘。
+/// ShutdownMode=OnExplicitShutdown：Dock 被 Alt+F4 等关闭后壳层仍驻留（托盘可重载/退出），
+/// 退出只走托盘"退出"或显式 <see cref="Application.Shutdown"/>。
+/// 退出链路（ExitApp）：关设置窗 → 关 Dock（OnClosing 内 ABM_REMOVE）→ TaskbarManager.Restore
+/// → 托盘 Dispose → 设置兜底落盘 → Shutdown；OnExit 兜底重复清理（全部幂等）。
 /// </summary>
 public partial class App : Application
 {
+    private const string MutexName = "Beautiful.SingleInstance";
+    private const int MaxExceptionDialogs = 5; // 界面异常弹窗上限：防异常循环导致弹窗风暴（超限仍记日志）
+
+    private Mutex? _mutex;
+    private bool _ownsMutex;
+    private int _exceptionDialogs;
     private TaskbarManager? _taskbar;
+    private DockWindow? _dock;
+    private Settings.SettingsWindow? _settingsWindow;
+    private TrayIconManager? _tray;
+    private bool _exiting;
 
     protected override void OnStartup(StartupEventArgs e)
     {
         base.OnStartup(e);
-        // TEMP(T15 验证)：Trace → stderr，live 冒烟时可在后台输出里看到媒体管线诊断；T17 接正式 Logger 后移除
-        Trace.Listeners.Add(new TextWriterTraceListener(Console.Error));
-        Trace.AutoFlush = true;
 
-        SettingsService.Load();       // 先于任何 VM 构造（MediaViewModel/DockWindow 构造期读设置）
+        // 1. 日志最先初始化：后续每一步的成败都应有据可查
+        Logger.Init();
+        Logger.Info($"启动 args=[{string.Join(' ', e.Args)}]");
+
+        // 2. 全局异常兜底先于任何业务代码
+        DispatcherUnhandledException += OnDispatcherUnhandledException;
+        AppDomain.CurrentDomain.UnhandledException += OnAppDomainUnhandledException;
+        TaskScheduler.UnobservedTaskException += OnUnobservedTaskException;
+
+        // 3. 单实例：互斥体已被持有 → 弹窗提示后退出
+        if (!AcquireSingleInstanceMutex())
+        {
+            Logger.Warn("Beautiful 已在运行，第二实例退出");
+            MessageBox.Show("Beautiful 已在运行", "Beautiful",
+                MessageBoxButton.OK, MessageBoxImage.Information);
+            Shutdown();
+            return;
+        }
+
+        // 4. 设置加载：先于任何 VM 构造（DockWindow/MediaViewModel 构造期读设置）
+        SettingsService.Load();
+
+        // 5. 任务栏策略与开机自启按设置落地（先于 Dock 注册 AppBar：Dock 不参与任务栏让位竞争）
         _taskbar = new TaskbarManager();
-
-        var dock = new Dock.DockWindow(_taskbar);
-        dock.Show();
-
-        // 任务栏策略与开机自启按设置落地（与 settings.json 对齐，注册表由 SetAutostart 维护）
         _taskbar.Apply(SettingsService.PolicyOf(SettingsService.Current));
         SettingsService.SetAutostart(SettingsService.Current.Autostart);
 
-        // TEMP(T16)：--settings 命令行打开设置窗口；T17 托盘菜单接管正式入口
+        // 6. Dock 即主 UI：--minimized 仅标识自启来源（自启语义），Dock 照常显示，超出仅记录
+        _dock = new DockWindow(_taskbar);
+        _dock.Show();
+        if (e.Args.Contains("--minimized", StringComparer.OrdinalIgnoreCase))
+            Logger.Info("--minimized（开机自启）：Dock 即主 UI，照常显示");
+        Logger.Info("Dock 已显示");
+
+        // 7. --settings：设置窗口命令行入口（与托盘"设置"等效；窗口为单例）
         if (e.Args.Contains("--settings", StringComparer.OrdinalIgnoreCase))
-            new Settings.SettingsWindow(_taskbar, dock.Vm, dock.MediaVm).Show();
+            OpenSettings();
+
+        // 8. 托盘最后就位（SMTC 已随 Dock 构造期异步初始化，失败仅记日志）
+        _tray = new TrayIconManager(
+            openSettings: OpenSettings,
+            reloadDock: ReloadDock,
+            exit: ExitApp,
+            applyTheme: ApplyThemeFromTray,
+            currentTheme: () => SettingsService.Current.Theme);
+        Logger.Info("托盘就绪，启动完成");
     }
 
     protected override void OnExit(ExitEventArgs e)
     {
-        _taskbar?.Restore(); // Hide/AutoHide 策略下退出必须还原系统任务栏
+        // 兜底路径（系统会话结束、显式 Shutdown 等）也要清理；与 ExitApp 重复调用均幂等
+        _tray?.Dispose();
+        _tray = null;
+        _taskbar?.Restore(); // Hide/AutoHide 策略下退出必须还原系统任务栏（T16 起保留）
+        ReleaseMutex();
+        Logger.Info($"退出完成 (ExitCode={e.ApplicationExitCode})");
         base.OnExit(e);
+    }
+
+    // ---------- 单实例 ----------
+
+    /// <summary>WaitOne(0) 探测互斥体：false=已有实例；AbandonedMutexException=前实例崩溃遗留，视为可获得。</summary>
+    private bool AcquireSingleInstanceMutex()
+    {
+        _mutex = new Mutex(initiallyOwned: false, MutexName);
+        try
+        {
+            _ownsMutex = _mutex.WaitOne(TimeSpan.Zero);
+            return _ownsMutex;
+        }
+        catch (AbandonedMutexException)
+        {
+            _ownsMutex = true; // 抛出该异常即代表所有权已转移给本线程
+            return true;
+        }
+    }
+
+    private void ReleaseMutex()
+    {
+        try
+        {
+            if (_ownsMutex) _mutex?.ReleaseMutex();
+        }
+        catch { /* 所有权竞态等：进程即将终止，忽略 */ }
+        _mutex?.Dispose();
+        _mutex = null;
+        _ownsMutex = false;
+    }
+
+    // ---------- 托盘动作 ----------
+
+    /// <summary>打开设置窗口（单例：已打开则激活前置）。</summary>
+    private void OpenSettings()
+    {
+        if (_dock is null || _taskbar is null) return;
+        if (_settingsWindow is { IsLoaded: true })
+        {
+            _settingsWindow.Activate();
+            return;
+        }
+        var win = new Settings.SettingsWindow(_taskbar, _dock.Vm, _dock.MediaVm);
+        win.Closed += (_, _) => _settingsWindow = null;
+        _settingsWindow = win;
+        win.Show();
+        Logger.Info("设置窗口已打开");
+    }
+
+    /// <summary>托盘主题子菜单：与设置窗口同一落地路径（UpdateAndSave → ThemeManager.Apply）。</summary>
+    private void ApplyThemeFromTray(string theme)
+    {
+        Logger.Info($"主题切换（托盘）: {theme}");
+        SettingsService.UpdateAndSave(SettingsService.Current with { Theme = theme });
+        ThemeManager.Apply(SettingsService.ThemeDefinitionOf(SettingsService.Current), Application.Current);
+    }
+
+    /// <summary>重载 Dock：旧实例完整释放（ABM_REMOVE + WindowTracker/SmtcService 于 OnClosed Dispose）后
+    /// 新建。先关后开：AppBar 底边条带先归还再申请，避免双 AppBar 同边竞争导致新 Dock 被顶高。
+    /// 设置窗口持有旧 Dock 的 VM 引用，一并关闭（下次打开自动基于新 Dock 重建）。</summary>
+    private void ReloadDock()
+    {
+        if (_dock is null || _exiting) return;
+        Logger.Info("重载 Dock：开始");
+        _settingsWindow?.Close();
+        var old = _dock;
+        _dock = null;
+        old.Close(); // 同步走完 OnClosing（ABM_REMOVE）/ OnClosed（tracker/smtc 释放）
+        _dock = new DockWindow(_taskbar);
+        _dock.Show();
+        Logger.Info("重载 Dock：完成");
+    }
+
+    /// <summary>托盘"退出"：完整清理链路后显式关停（退出路径幂等，_exiting 防重入）。</summary>
+    private void ExitApp()
+    {
+        if (_exiting) return;
+        _exiting = true;
+        Logger.Info("退出：开始清理");
+        _settingsWindow?.Close();
+        _dock?.Close();          // DockWindow.OnClosing：AppBar ABM_REMOVE（hwnd 销毁前）
+        _taskbar?.Restore();     // Hide/AutoHide 还原系统任务栏
+        _tray?.Dispose();        // 移除托盘图标（防幽灵图标）
+        _tray = null;
+        SettingsService.Save();  // 兜底落盘（防抖尾写/未走设置窗口的变更一并刷盘）
+        Shutdown();
+    }
+
+    // ---------- 全局异常兜底 ----------
+
+    private void OnDispatcherUnhandledException(object sender, DispatcherUnhandledExceptionEventArgs e)
+    {
+        Logger.Error("UI 线程未处理异常", e.Exception);
+        e.Handled = true; // 尽力存活（真正致命的场景仍可经托盘"退出"干净收尾）
+        if (++_exceptionDialogs <= MaxExceptionDialogs)
+            MessageBox.Show(
+                $"发生界面异常，Beautiful 将继续运行。\n详情见 logs 目录日志。\n\n{e.Exception.Message}",
+                "Beautiful", MessageBoxButton.OK, MessageBoxImage.Error);
+    }
+
+    private void OnAppDomainUnhandledException(object? sender, UnhandledExceptionEventArgs e)
+    {
+        var detail = e.ExceptionObject as Exception ?? new Exception(e.ExceptionObject?.ToString() ?? "null");
+        Logger.Error($"非 UI 线程未处理异常 (IsTerminating={e.IsTerminating})", detail);
+    }
+
+    private void OnUnobservedTaskException(object? sender, UnobservedTaskExceptionEventArgs e)
+    {
+        Logger.Error("未观察的任务异常（已吞掉，不影响运行）", e.Exception);
+        e.SetObserved();
     }
 }

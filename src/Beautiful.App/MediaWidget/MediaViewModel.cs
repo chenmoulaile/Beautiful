@@ -1,6 +1,5 @@
 using System.Collections.ObjectModel;
 using System.ComponentModel;
-using System.Diagnostics;
 using System.IO;
 using System.Net.Http; // UseWindowsForms 启用时桌面 SDK 会把 System.Net.Http 移出隐式 using
 using System.Windows.Input;
@@ -133,7 +132,7 @@ public sealed class MediaViewModel : INotifyPropertyChanged, IDisposable
     public async Task InitializeAsync()
     {
         try { await _smtc.InitializeAsync(); }
-        catch (Exception ex) { Trace.WriteLine($"SMTC 初始化失败: {ex.Message}"); }
+        catch (Exception ex) { Logger.Warn($"SMTC 初始化失败: {ex.Message}"); }
     }
 
     // ---------- 面板 / 胶囊交互入口 ----------
@@ -155,7 +154,6 @@ public sealed class MediaViewModel : INotifyPropertyChanged, IDisposable
             pos = TimeSpan.FromSeconds(_durationSeconds);
         var gen = _seekGen;
         var ok = await _smtc.SeekAsync(pos);
-        Trace.WriteLine($"[Media] SeekToAsync: {pos} ok={ok}");
         if (gen != _seekGen) return; // 过期结算：期间又有新交互/换曲，保持其挂起状态
         _seeking = false;            // 防抖结算完成：复位挂起（不复位则回写永久冻结），恢复定时器/时间线回写
         if (ok)
@@ -202,7 +200,6 @@ public sealed class MediaViewModel : INotifyPropertyChanged, IDisposable
     {
         // 播放器过渡期（如 bilibili 视频切换/广告位）会发布空元数据：忽略，保持上一曲目的显示
         if (string.IsNullOrWhiteSpace(meta.Title)) return;
-        Trace.WriteLine($"[Media] TrackChanged: title='{meta.Title}' artist='{meta.Artist}' cover={meta.CoverBytes?.Length ?? 0}B dur={meta.Duration}");
         TrackTitle = meta.Title;
         Artist = meta.Artist;
         CapsuleText = string.IsNullOrWhiteSpace(meta.Artist) ? meta.Title : $"{meta.Artist} - {meta.Title}";
@@ -217,8 +214,7 @@ public sealed class MediaViewModel : INotifyPropertyChanged, IDisposable
     {
         LyricDocument? doc = null;
         try { doc = await _lyrics.GetLyricsAsync(meta); }
-        catch (Exception ex) { Trace.WriteLine($"歌词加载失败: {ex.Message}"); }
-        Trace.WriteLine($"[Media] Lyrics loaded: seq={seq} lines={doc?.Lines.Count ?? -1} src={doc?.Source ?? "null"}");
+        catch (Exception ex) { Logger.Warn($"歌词加载失败: {ex.Message}"); }
 
         await _dispatcher.InvokeAsync(() =>
         {
@@ -354,7 +350,7 @@ public sealed class MediaViewModel : INotifyPropertyChanged, IDisposable
         }
         catch (Exception ex)
         {
-            Trace.WriteLine($"封面解码失败: {ex.Message}");
+            Logger.Warn($"封面解码失败: {ex.Message}");
             return null;
         }
     }

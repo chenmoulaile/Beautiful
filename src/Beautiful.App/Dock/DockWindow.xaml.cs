@@ -358,7 +358,7 @@ public partial class DockWindow : AcrylicWindow
                 {
                     Process.Start(new ProcessStartInfo("explorer.exe", "shell:RecycleBinFolder") { UseShellExecute = true });
                 }
-                catch (Exception ex) { Trace.WriteLine($"打开回收站失败: {ex.Message}"); }
+                catch (Exception ex) { Logger.Warn($"打开回收站失败: {ex.Message}"); }
                 break;
 
             case DockItemKind.Pinned:
@@ -367,7 +367,7 @@ public partial class DockWindow : AcrylicWindow
                 {
                     Process.Start(new ProcessStartInfo(item.LaunchPath) { UseShellExecute = true });
                 }
-                catch (Exception ex) { Trace.WriteLine($"启动 {item.LaunchPath} 失败: {ex.Message}"); }
+                catch (Exception ex) { Logger.Warn($"启动 {item.LaunchPath} 失败: {ex.Message}"); }
                 break;
 
             case DockItemKind.Media:
@@ -459,10 +459,10 @@ public partial class DockWindow : AcrylicWindow
         }
         catch (Exception ex)
         {
-            // 防御：媒体面板是附属功能，任何异常不得拖垮 Dock 本体（T17 接 Logger）
+            // 防御：媒体面板是附属功能，任何异常不得拖垮 Dock 本体
             _mediaPanel?.Close();
             _mediaPanel = null;
-            Trace.WriteLine($"打开媒体面板失败: {ex}");
+            Logger.Warn($"打开媒体面板失败: {ex}");
         }
     }
 

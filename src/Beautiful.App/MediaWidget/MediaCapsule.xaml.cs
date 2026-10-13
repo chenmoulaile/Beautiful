@@ -1,4 +1,3 @@
-using System.Diagnostics;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
@@ -36,7 +35,6 @@ public partial class MediaCapsule : UserControl
     {
         if (!IsLoaded) return;
         var overflow = MarqueeText.ActualWidth - MarqueeHost.ActualWidth;
-        Trace.WriteLine($"[Capsule] marquee: textW={MarqueeText.ActualWidth:F1} hostW={MarqueeHost.ActualWidth:F1} overflow={overflow:F1} text='{MarqueeText.Text}'");
         MarqueeTf.BeginAnimation(TranslateTransform.XProperty, null);
         if (overflow <= 2) return; // 未溢出 → 静态
         var duration = TimeSpan.FromSeconds(Math.Max(4.0, overflow / 24.0));
