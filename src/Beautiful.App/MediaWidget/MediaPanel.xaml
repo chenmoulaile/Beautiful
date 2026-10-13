@@ -1,0 +1,194 @@
+<services:AcrylicWindow x:Class="Beautiful.App.MediaWidget.MediaPanel"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:services="clr-namespace:Beautiful.App.Services"
+        Title="NowPlaying"
+        Width="420" Height="520"
+        Topmost="True"
+        ShowActivated="True"
+        Background="{x:Null}"
+        WindowStartupLocation="Manual">
+
+    <!-- 歌词展开面板（实况窗大窗）：独立亚克力窗，胶囊上方居中（定位由 DockWindow 计算）。
+         失焦自动 Hide（Deactivated → code-behind，本任务硬编码；开关归 Task 16 设置）。 -->
+    <services:AcrylicWindow.Resources>
+        <Style x:Key="TransportButtonStyle" TargetType="Button">
+            <Setter Property="Width" Value="64"/>
+            <Setter Property="Height" Value="38"/>
+            <Setter Property="FontFamily" Value="Segoe Fluent Icons,Segoe MDL2 Assets"/>
+            <Setter Property="FontSize" Value="18"/>
+            <Setter Property="Foreground" Value="{DynamicResource ThemeTextPrimary}"/>
+            <Setter Property="Focusable" Value="False"/>
+            <Setter Property="Cursor" Value="Hand"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Button">
+                        <Border x:Name="Bg" CornerRadius="8" Background="Transparent">
+                            <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="Bg" Property="Background" Value="#22FFFFFF"/>
+                            </Trigger>
+                            <Trigger Property="IsPressed" Value="True">
+                                <Setter TargetName="Bg" Property="Background" Value="#33FFFFFF"/>
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+        <!-- 播放/暂停：字形随 IsPlaying 切换（\uE768 播放 / \uE769 暂停） -->
+        <Style x:Key="PlayPauseButtonStyle" TargetType="Button" BasedOn="{StaticResource TransportButtonStyle}">
+            <Setter Property="Content" Value="&#xE768;"/>
+            <Style.Triggers>
+                <DataTrigger Binding="{Binding IsPlaying}" Value="True">
+                    <Setter Property="Content" Value="&#xE769;"/>
+                </DataTrigger>
+            </Style.Triggers>
+        </Style>
+    </services:AcrylicWindow.Resources>
+
+    <Border CornerRadius="20" Background="#C81C1C1E" BorderBrush="#33FFFFFF" BorderThickness="1"
+            Padding="20,18" TextElement.FontFamily="{DynamicResource ThemeFontFamily}">
+        <Grid>
+            <Grid.RowDefinitions>
+                <RowDefinition Height="Auto"/>
+                <RowDefinition Height="Auto"/>
+                <RowDefinition Height="Auto"/>
+                <RowDefinition Height="*"/>
+            </Grid.RowDefinitions>
+
+            <!-- 封面 + 标题/歌手 -->
+            <Grid Grid.Row="0">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="Auto"/>
+                    <ColumnDefinition Width="*"/>
+                </Grid.ColumnDefinitions>
+                <Grid Width="64" Height="64">
+                    <Border CornerRadius="8" Background="#1FFFFFFF"/>
+                    <Image Source="{Binding CoverImage}" Stretch="UniformToFill" Width="64" Height="64"/>
+                    <!-- 封面缺失回退音符 -->
+                    <TextBlock Text="&#x266A;" FontSize="28" Opacity="0.5"
+                               Foreground="{DynamicResource ThemeTextPrimary}"
+                               HorizontalAlignment="Center" VerticalAlignment="Center">
+                        <TextBlock.Style>
+                            <Style TargetType="TextBlock">
+                                <Setter Property="Visibility" Value="Collapsed"/>
+                                <Style.Triggers>
+                                    <DataTrigger Binding="{Binding CoverImage}" Value="{x:Null}">
+                                        <Setter Property="Visibility" Value="Visible"/>
+                                    </DataTrigger>
+                                </Style.Triggers>
+                            </Style>
+                        </TextBlock.Style>
+                    </TextBlock>
+                </Grid>
+                <StackPanel Grid.Column="1" Margin="14,0,0,0" VerticalAlignment="Center">
+                    <TextBlock Text="{Binding TrackTitle}" FontSize="16" FontWeight="SemiBold"
+                               TextTrimming="CharacterEllipsis" Foreground="{DynamicResource ThemeTextPrimary}"/>
+                    <TextBlock Text="{Binding Artist}" FontSize="13" Opacity="0.7" Margin="0,3,0,0"
+                               TextTrimming="CharacterEllipsis" Foreground="{DynamicResource ThemeTextPrimary}"/>
+                </StackPanel>
+            </Grid>
+
+            <!-- 进度条：不支持位置控制（SeekAsync 首次失败 → IsSeekable=false）→ 隐藏。
+                 Value 单向：VM → Slider；Slider → VM 的回传不需要（EndSeek 直读 Progress.Value），
+                 且 PositionSeconds 为只读属性，TwoWay 会在 Show 时抛只读绑定异常。 -->
+            <Slider x:Name="Progress" Grid.Row="1" Margin="0,14,0,0"
+                    IsMoveToPointEnabled="True" Minimum="0"
+                    Maximum="{Binding DurationSeconds}" Value="{Binding PositionSeconds, Mode=OneWay}">
+                <Slider.Style>
+                    <Style TargetType="Slider">
+                        <Setter Property="Visibility" Value="Visible"/>
+                        <Style.Triggers>
+                            <DataTrigger Binding="{Binding IsSeekable}" Value="False">
+                                <Setter Property="Visibility" Value="Collapsed"/>
+                            </DataTrigger>
+                        </Style.Triggers>
+                    </Style>
+                </Slider.Style>
+            </Slider>
+
+            <!-- 上一首 \uE9AB / 播放暂停 \uE768-\uE769 / 下一首 \uE9AA
+                 （实取字形经本机字体渲染核对：E89A/E89B 在 Segoe Fluent Icons/MDL2 里是
+                 页面/评论图形，真正的跳曲键为 E9AA(▷|)/E9AB(|◁)） -->
+            <UniformGrid Grid.Row="2" Columns="3" Margin="0,8,0,0">
+                <Button Style="{StaticResource TransportButtonStyle}" Content="&#xE9AB;" Command="{Binding PrevCommand}"/>
+                <Button Style="{StaticResource PlayPauseButtonStyle}" Command="{Binding TogglePlayCommand}"/>
+                <Button Style="{StaticResource TransportButtonStyle}" Content="&#xE9AA;" Command="{Binding NextCommand}"/>
+            </UniformGrid>
+
+            <!-- 歌词区：VirtualizingStackPanel；当前行 accent 高亮；占位态覆盖其上 -->
+            <Grid Grid.Row="3" Margin="0,10,0,0">
+                <ListBox x:Name="LyricsList" ItemsSource="{Binding Lyrics}"
+                         Background="Transparent" BorderThickness="0"
+                         ScrollViewer.HorizontalScrollBarVisibility="Disabled"
+                         VirtualizingStackPanel.IsVirtualizing="True"
+                         VirtualizingStackPanel.VirtualizationMode="Recycling">
+                    <ListBox.ItemContainerStyle>
+                        <Style TargetType="ListBoxItem">
+                            <Setter Property="Focusable" Value="False"/>
+                            <Setter Property="Template">
+                                <Setter.Value>
+                                    <ControlTemplate TargetType="ListBoxItem">
+                                        <ContentPresenter/>
+                                    </ControlTemplate>
+                                </Setter.Value>
+                            </Setter>
+                        </Style>
+                    </ListBox.ItemContainerStyle>
+                    <ListBox.ItemTemplate>
+                        <DataTemplate>
+                            <StackPanel Margin="0,7">
+                                <TextBlock Text="{Binding Original}" FontSize="16" FontWeight="SemiBold" TextWrapping="Wrap">
+                                    <TextBlock.Style>
+                                        <Style TargetType="TextBlock">
+                                            <Setter Property="Foreground" Value="{DynamicResource ThemeTextPrimary}"/>
+                                            <Setter Property="Opacity" Value="0.72"/>
+                                            <Style.Triggers>
+                                                <DataTrigger Binding="{Binding IsCurrent}" Value="True">
+                                                    <Setter Property="Foreground" Value="{DynamicResource ThemeAccent}"/>
+                                                    <Setter Property="Opacity" Value="1"/>
+                                                </DataTrigger>
+                                            </Style.Triggers>
+                                        </Style>
+                                    </TextBlock.Style>
+                                </TextBlock>
+                                <TextBlock Text="{Binding Translation}" FontSize="13" TextWrapping="Wrap" Margin="0,2,0,0">
+                                    <TextBlock.Style>
+                                        <Style TargetType="TextBlock">
+                                            <Setter Property="Foreground" Value="{DynamicResource ThemeTextPrimary}"/>
+                                            <Setter Property="Opacity" Value="0.65"/>
+                                            <Style.Triggers>
+                                                <DataTrigger Binding="{Binding Translation}" Value="{x:Null}">
+                                                    <Setter Property="Visibility" Value="Collapsed"/>
+                                                </DataTrigger>
+                                            </Style.Triggers>
+                                        </Style>
+                                    </TextBlock.Style>
+                                </TextBlock>
+                            </StackPanel>
+                        </DataTemplate>
+                    </ListBox.ItemTemplate>
+                </ListBox>
+                <TextBlock HorizontalAlignment="Center" VerticalAlignment="Center" FontSize="14" Opacity="0.6"
+                           Foreground="{DynamicResource ThemeTextPrimary}" Text="暂无歌词">
+                    <TextBlock.Style>
+                        <Style TargetType="TextBlock">
+                            <Setter Property="Visibility" Value="Visible"/>
+                            <Style.Triggers>
+                                <DataTrigger Binding="{Binding State}" Value="Loaded">
+                                    <Setter Property="Visibility" Value="Collapsed"/>
+                                </DataTrigger>
+                                <DataTrigger Binding="{Binding State}" Value="Loading">
+                                    <Setter Property="Text" Value="歌词加载中…"/>
+                                </DataTrigger>
+                            </Style.Triggers>
+                        </Style>
+                    </TextBlock.Style>
+                </TextBlock>
+            </Grid>
+        </Grid>
+    </Border>
+</services:AcrylicWindow>

@@ -1,12 +1,12 @@
 using System.Diagnostics;
-using System.ComponentModel;
-using System.Runtime.InteropServices;
+using System.ComponentModel;using System.Runtime.InteropServices;
 using System.Windows;
 using System.Windows.Input;
 using System.Windows.Interop;
 using System.Windows.Media;
 using System.Windows.Threading;
 using Beautiful.App.Interop;
+using Beautiful.App.MediaWidget;
 using Beautiful.App.Services;
 using Beautiful.App.Themes;
 using Beautiful.Core.Dock;
@@ -36,6 +36,13 @@ public partial class DockWindow : AcrylicWindow
 
     private readonly WindowTracker _tracker = new();
     private readonly DockViewModel _vm;
+    // 组合根（本任务最简路径）：DockWindow 持有 SmtcService + MediaViewModel，
+    // MediaViewModel 构造期自启动 SMTC；MediaPanel 惰性创建（胶囊点击时）。
+    // App.OnStartup / DockViewModel 保持不动（媒体条目由 DockViewModel 的 suffix 占位提供）。
+    private readonly SmtcService _smtc;
+    private readonly MediaViewModel _mediaVm;
+    private MediaPanel? _mediaPanel;
+    private DateTime? _panelAutoHiddenAtUtc; // 面板最近一次"失焦自动收起"时刻（胶囊点击的 toggle 语义用）
 
     private IntPtr _hwnd;
     private uint _appbarMsg;
@@ -54,6 +61,8 @@ public partial class DockWindow : AcrylicWindow
 
     public DockWindow()
     {
+        _smtc = new SmtcService();
+        _mediaVm = new MediaViewModel(_smtc, Dispatcher); // 先于 InitializeComponent：XAML 模板可能经 RelativeSource 绑定 MediaVm
         InitializeComponent();
         _vm = new DockViewModel(_tracker);
         DataContext = _vm;
@@ -62,6 +71,9 @@ public partial class DockWindow : AcrylicWindow
         ThemeManager.Apply(ThemeDefinition.HarmonyOs(), Application.Current);
         Loaded += OnWindowLoaded;
     }
+
+    /// <summary>媒体 VM（XAML 媒体条目模板经 RelativeSource 绑定到本属性）。</summary>
+    public MediaViewModel MediaVm => _mediaVm;
 
     // ---------- 生命周期 / AppBar ----------
 
@@ -112,6 +124,7 @@ public partial class DockWindow : AcrylicWindow
     protected override void OnClosing(CancelEventArgs e)
     {
         _closing = true;                             // 先于 ABM_REMOVE：作废队列中尚未执行的 BeginInvoke 重注册
+        _mediaPanel?.Close();                        // 面板随 Dock 一起关闭（Closed 处理器会清空引用）
         _animTimer?.Stop();                           // 停止动画驱动
         UnregisterAppBar();                           // ABM_REMOVE 必须在 hwnd 销毁前
         _source?.RemoveHook(WndProc);
@@ -123,6 +136,8 @@ public partial class DockWindow : AcrylicWindow
         ThemeManager.ThemeChanged -= OnThemeChanged; // 解除主题订阅，防止闭包引用已关闭窗口
         _vm.Detach();
         _tracker.Dispose();
+        _mediaVm.Dispose();                          // 停定时器 + 解除 SmtcService 事件订阅
+        _smtc.Dispose();
         base.OnClosed(e);
     }
 
@@ -345,7 +360,81 @@ public partial class DockWindow : AcrylicWindow
                 break;
 
             case DockItemKind.Media:
-                break; // Task 15 实装
+                ToggleMediaPanel();
+                break;
         }
+    }
+
+    // ---------- 媒体面板（实况窗展开） ----------
+
+    private void ToggleMediaPanel()
+    {
+        if (!_mediaVm.HasSession) return; // 无会话：胶囊已折叠（占位命中不展开）
+        if (_mediaPanel is { IsVisible: true })
+        {
+            _mediaPanel.Hide();
+            _panelAutoHiddenAtUtc = null;
+            return;
+        }
+        // 点击胶囊时面板会先因失焦自动 Hide（Deactivated 先于本 MouseUp），
+        // 刚刚自动收起（<600ms）→ 本次点击视为"收起"而非"再次展开"
+        if (_panelAutoHiddenAtUtc is { } at && (DateTime.UtcNow - at).TotalMilliseconds < 600)
+        {
+            _panelAutoHiddenAtUtc = null;
+            return;
+        }
+        ShowMediaPanel();
+    }
+
+    private void ShowMediaPanel()
+    {
+        try
+        {
+            if (_mediaPanel is null)
+            {
+                _mediaPanel = new MediaPanel(_mediaVm) { Owner = this };
+                _mediaPanel.Deactivated += (_, _) => _panelAutoHiddenAtUtc = DateTime.UtcNow;
+                _mediaPanel.Closed += (_, _) => { _mediaPanel = null; _panelAutoHiddenAtUtc = null; };
+            }
+            PositionMediaPanel();
+            _mediaPanel.Show();      // Show 默认激活 → Deactivated 自动收起链路生效
+            _mediaPanel.Activate();
+            _mediaPanel.ScrollToCurrentLine();
+        }
+        catch (Exception ex)
+        {
+            // 防御：媒体面板是附属功能，任何异常不得拖垮 Dock 本体（T17 接 Logger）
+            _mediaPanel?.Close();
+            _mediaPanel = null;
+            Trace.WriteLine($"打开媒体面板失败: {ex}");
+        }
+    }
+
+    /// <summary>面板置于胶囊上方并水平居中（钳制在屏幕内）；胶囊中心经 PointToScreen（物理 px）→ DIP 换算。</summary>
+    private void PositionMediaPanel()
+    {
+        const double panelW = 420, panelH = 520, edgeMargin = 8, gap = 6;
+        var panel = _mediaPanel;
+        if (panel is null) return;
+        var dpi = VisualTreeHelper.GetDpi(this).PixelsPerDip;
+        if (dpi <= 0) dpi = 1;
+
+        double centerDipX = Left + Width / 2; // 兜底：Dock 中心
+        var mediaIndex = -1;                  // 媒体条目恒为 suffix 末位，仍按 Kind 扫描以稳健
+        for (var i = _vm.Items.Count - 1; i >= 0; i--)
+            if (_vm.Items[i].Kind == DockItemKind.Media) { mediaIndex = i; break; }
+        if (mediaIndex >= 0 &&
+            ItemsHost.ItemContainerGenerator.ContainerFromIndex(mediaIndex) is FrameworkElement capsule &&
+            capsule.ActualWidth > 0)
+        {
+            var screenPt = capsule.PointToScreen(new Point(capsule.ActualWidth / 2, 0));
+            centerDipX = screenPt.X / dpi;
+        }
+
+        var screenW = NativeMethods.GetSystemMetrics(0) / dpi; // SM_CXSCREEN
+        var left = Math.Clamp(centerDipX - panelW / 2, edgeMargin, Math.Max(edgeMargin, screenW - panelW - edgeMargin));
+        var top = Math.Max(edgeMargin, Top - panelH - gap);
+        panel.Left = left;
+        panel.Top = top;
     }
 }

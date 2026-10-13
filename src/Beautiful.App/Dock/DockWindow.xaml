@@ -3,6 +3,8 @@
         xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         xmlns:services="clr-namespace:Beautiful.App.Services"
+        xmlns:dock="clr-namespace:Beautiful.App.Dock"
+        xmlns:mw="clr-namespace:Beautiful.App.MediaWidget"
         Title="Beautiful Dock"
         WindowStyle="None"
         AllowsTransparency="True"
@@ -19,6 +21,99 @@
          （底色/圆角/图标尺寸/字体/指示样式），切主题换字典即时生效。
          触发器可见性默认值放在元素 Style 中
          （模板触发器可覆盖 Style Setter，但不能覆盖本地值）。 -->
+    <services:AcrylicWindow.Resources>
+        <!-- 通用条目模板（Pinned/Window/RecycleBin）：图标 + 缺失回退字形 + 运行指示 + 悬停高亮。
+             Media 条目由 MediaItemTemplate 接管（DockItemTemplateSelector 分派）。 -->
+        <DataTemplate x:Key="DefaultItemTemplate">
+            <!-- ItemRoot Margin 基准 3,0 = ItemSpacing/2（代码侧 _baseMargin 随主题更新）：
+                 ApplyScale 每帧整值覆写为 ItemSpacing/2 + 6·(scale-1)，两处须保持一致 -->
+            <Grid x:Name="ItemRoot" Margin="3,0" Background="Transparent"
+                  ToolTip="{Binding Label}" ToolTipService.Placement="Top"
+                  ToolTipService.InitialShowDelay="300">
+                <Image x:Name="IconImage" Source="{Binding Icon}"
+                       Width="{DynamicResource ThemeIconSize}" Height="{DynamicResource ThemeIconSize}"
+                       RenderOptions.BitmapScalingMode="HighQuality">
+                    <Image.Style>
+                        <Style TargetType="Image">
+                            <!-- 主题遮罩（鸿蒙 squircle / Linux 圆角方形）由 ThemeManager 注入
+                                 ThemeIconClip；macOS 无此键 → 不解析 → Clip=null 原样 -->
+                            <Setter Property="Clip" Value="{DynamicResource ThemeIconClip}"/>
+                        </Style>
+                    </Image.Style>
+                </Image>
+                <!-- 图标缺失回退字形：回收站 ♻，其余 ▣ -->
+                <TextBlock x:Name="FallbackGlyph" FontSize="30" FontWeight="SemiBold"
+                           Foreground="{DynamicResource ThemeTextPrimary}"
+                           HorizontalAlignment="Center" VerticalAlignment="Center">
+                    <TextBlock.Style>
+                        <Style TargetType="TextBlock">
+                            <Setter Property="Visibility" Value="Collapsed"/>
+                            <Setter Property="Text" Value="▣"/>
+                            <Style.Triggers>
+                                <DataTrigger Binding="{Binding Kind}" Value="RecycleBin">
+                                    <Setter Property="Text" Value="♻"/>
+                                </DataTrigger>
+                            </Style.Triggers>
+                        </Style>
+                    </TextBlock.Style>
+                </TextBlock>
+                <!-- 运行窗口指示（dot=底部圆点 / bar=左侧短条；可见性由主题字典样式决定，
+                     Accent 色随主题切换）：none 主题两样式均恒 Collapsed -->
+                <Ellipse x:Name="Indicator" Width="4" Height="4"
+                         VerticalAlignment="Bottom" Margin="0,0,0,3"
+                         Style="{DynamicResource ThemeIndicatorDot}"/>
+                <Rectangle x:Name="IndicatorBar" Width="3" Height="12" RadiusX="1.5" RadiusY="1.5"
+                           HorizontalAlignment="Left" VerticalAlignment="Center"
+                           Style="{DynamicResource ThemeIndicatorBar}"/>
+                <Border x:Name="Hover" CornerRadius="12" Background="#22FFFFFF">
+                    <Border.Style>
+                        <Style TargetType="Border">
+                            <Setter Property="Visibility" Value="Collapsed"/>
+                        </Style>
+                    </Border.Style>
+                </Border>
+            </Grid>
+            <DataTemplate.Triggers>
+                <Trigger SourceName="ItemRoot" Property="IsMouseOver" Value="True">
+                    <Setter TargetName="Hover" Property="Visibility" Value="Visible"/>
+                </Trigger>
+                <DataTrigger Binding="{Binding Icon}" Value="{x:Null}">
+                    <Setter TargetName="FallbackGlyph" Property="Visibility" Value="Visible"/>
+                </DataTrigger>
+            </DataTemplate.Triggers>
+        </DataTemplate>
+        <!-- 媒体胶囊槽：承载实况窗胶囊（DataContext = DockWindow.MediaVm）。
+             无会话时整槽收起（Width=0；残余仅 ApplyScale 的基准边距 3+3px，视觉上是普通间距）。 -->
+        <DataTemplate x:Key="MediaItemTemplate">
+            <Grid x:Name="ItemRoot" Margin="3,0" Background="Transparent">
+                <Grid.Style>
+                    <Style TargetType="Grid">
+                        <Setter Property="Width" Value="124"/>
+                        <Style.Triggers>
+                            <DataTrigger
+                                Binding="{Binding MediaVm.HasSession, RelativeSource={RelativeSource AncestorType=dock:DockWindow}}"
+                                Value="False">
+                                <Setter Property="Width" Value="0"/>
+                            </DataTrigger>
+                        </Style.Triggers>
+                    </Style>
+                </Grid.Style>
+                <mw:MediaCapsule
+                    DataContext="{Binding MediaVm, RelativeSource={RelativeSource AncestorType=dock:DockWindow}}"/>
+                <!-- 悬停高亮；不参与命中（放行胶囊内部按钮的点击） -->
+                <Border x:Name="Hover" CornerRadius="16" Background="#22FFFFFF" IsHitTestVisible="False"
+                        Visibility="Collapsed"/>
+            </Grid>
+            <DataTemplate.Triggers>
+                <Trigger SourceName="ItemRoot" Property="IsMouseOver" Value="True">
+                    <Setter TargetName="Hover" Property="Visibility" Value="Visible"/>
+                </Trigger>
+            </DataTemplate.Triggers>
+        </DataTemplate>
+        <dock:DockItemTemplateSelector x:Key="ItemSelector"
+                                       DefaultTemplate="{StaticResource DefaultItemTemplate}"
+                                       MediaTemplate="{StaticResource MediaItemTemplate}"/>
+    </services:AcrylicWindow.Resources>
     <Border x:Name="DockPanelRoot"
             HorizontalAlignment="Center" VerticalAlignment="Stretch"
             CornerRadius="{DynamicResource ThemePanelCornerRadius}" Padding="10,6"
@@ -27,6 +122,7 @@
             BorderBrush="#33FFFFFF" BorderThickness="1">
         <ItemsControl x:Name="ItemsHost"
                       ItemsSource="{Binding Items}"
+                      ItemTemplateSelector="{StaticResource ItemSelector}"
                       VerticalAlignment="Center"
                       MouseMove="ItemsHost_MouseMove"
                       MouseLeave="ItemsHost_MouseLeave"
@@ -36,106 +132,6 @@
                     <StackPanel Orientation="Horizontal"/>
                 </ItemsPanelTemplate>
             </ItemsControl.ItemsPanel>
-            <ItemsControl.ItemTemplate>
-                <DataTemplate>
-                    <!-- ItemRoot Margin 基准 3,0 = ItemSpacing/2（代码侧 _baseMargin 随主题更新）：
-                         ApplyScale 每帧整值覆写为 ItemSpacing/2 + 6·(scale-1)，两处须保持一致 -->
-                    <Grid x:Name="ItemRoot" Margin="3,0" Background="Transparent"
-                          ToolTip="{Binding Label}" ToolTipService.Placement="Top"
-                          ToolTipService.InitialShowDelay="300">
-                        <Grid.Style>
-                            <Style TargetType="Grid">
-                                <Setter Property="Width" Value="{DynamicResource ThemeItemSlotWidth}"/>
-                                <Style.Triggers>
-                                    <DataTrigger Binding="{Binding Kind}" Value="Media">
-                                        <Setter Property="Width" Value="124"/>
-                                    </DataTrigger>
-                                </Style.Triggers>
-                            </Style>
-                        </Grid.Style>
-                        <Image x:Name="IconImage" Source="{Binding Icon}"
-                               Width="{DynamicResource ThemeIconSize}" Height="{DynamicResource ThemeIconSize}"
-                               RenderOptions.BitmapScalingMode="HighQuality">
-                            <Image.Style>
-                                <Style TargetType="Image">
-                                    <!-- 主题遮罩（鸿蒙 squircle / Linux 圆角方形）由 ThemeManager 注入
-                                         ThemeIconClip；macOS 无此键 → 不解析 → Clip=null 原样 -->
-                                    <Setter Property="Clip" Value="{DynamicResource ThemeIconClip}"/>
-                                    <Style.Triggers>
-                                        <DataTrigger Binding="{Binding Kind}" Value="Media">
-                                            <Setter Property="Visibility" Value="Collapsed"/>
-                                        </DataTrigger>
-                                    </Style.Triggers>
-                                </Style>
-                            </Image.Style>
-                        </Image>
-                        <!-- 图标缺失回退字形：回收站 ♻，其余 ▣ -->
-                        <TextBlock x:Name="FallbackGlyph" FontSize="30" FontWeight="SemiBold"
-                                   Foreground="{DynamicResource ThemeTextPrimary}"
-                                   HorizontalAlignment="Center" VerticalAlignment="Center">
-                            <TextBlock.Style>
-                                <Style TargetType="TextBlock">
-                                    <Setter Property="Visibility" Value="Collapsed"/>
-                                    <Setter Property="Text" Value="▣"/>
-                                    <Style.Triggers>
-                                        <DataTrigger Binding="{Binding Kind}" Value="RecycleBin">
-                                            <Setter Property="Text" Value="♻"/>
-                                        </DataTrigger>
-                                    </Style.Triggers>
-                                </Style>
-                            </TextBlock.Style>
-                        </TextBlock>
-                        <!-- 媒体胶囊占位（Task 15 实装）：♪ 媒体 + 禁用态播放钮 -->
-                        <Border x:Name="MediaPill" CornerRadius="21"
-                                Background="{DynamicResource ThemePanelBackground}"
-                                BorderBrush="#22FFFFFF" BorderThickness="1"
-                                Padding="14,7" HorizontalAlignment="Center" VerticalAlignment="Center">
-                            <Border.Style>
-                                <Style TargetType="Border">
-                                    <Setter Property="Visibility" Value="Collapsed"/>
-                                    <Style.Triggers>
-                                        <DataTrigger Binding="{Binding Kind}" Value="Media">
-                                            <Setter Property="Visibility" Value="Visible"/>
-                                        </DataTrigger>
-                                    </Style.Triggers>
-                                </Style>
-                            </Border.Style>
-                            <StackPanel Orientation="Horizontal">
-                                <TextBlock Text="♪" FontSize="18" Foreground="{DynamicResource ThemeTextPrimary}" VerticalAlignment="Center"/>
-                                <TextBlock Text="媒体" FontSize="13" Foreground="{DynamicResource ThemeTextPrimary}" Margin="7,0,0,0" VerticalAlignment="Center"/>
-                                <TextBlock Text="▶" FontSize="13" Foreground="#59FFFFFF" Margin="12,0,0,0" VerticalAlignment="Center"/>
-                            </StackPanel>
-                        </Border>
-                        <!-- 运行窗口指示（dot=底部圆点 / bar=左侧短条；可见性由主题字典样式决定，
-                             Accent 色随主题切换）：none 主题两样式均恒 Collapsed -->
-                        <Ellipse x:Name="Indicator" Width="4" Height="4"
-                                 VerticalAlignment="Bottom" Margin="0,0,0,3"
-                                 Style="{DynamicResource ThemeIndicatorDot}"/>
-                        <Rectangle x:Name="IndicatorBar" Width="3" Height="12" RadiusX="1.5" RadiusY="1.5"
-                                   HorizontalAlignment="Left" VerticalAlignment="Center"
-                                   Style="{DynamicResource ThemeIndicatorBar}"/>
-                        <Border x:Name="Hover" CornerRadius="12" Background="#22FFFFFF">
-                            <Border.Style>
-                                <Style TargetType="Border">
-                                    <Setter Property="Visibility" Value="Collapsed"/>
-                                </Style>
-                            </Border.Style>
-                        </Border>
-                    </Grid>
-                    <DataTemplate.Triggers>
-                        <Trigger SourceName="ItemRoot" Property="IsMouseOver" Value="True">
-                            <Setter TargetName="Hover" Property="Visibility" Value="Visible"/>
-                        </Trigger>
-                        <DataTrigger Binding="{Binding Icon}" Value="{x:Null}">
-                            <Setter TargetName="FallbackGlyph" Property="Visibility" Value="Visible"/>
-                        </DataTrigger>
-                        <!-- 媒体胶囊自身带外观，且其 Icon 恒为 null：须在 Icon 触发器之后声明以覆盖 -->
-                        <DataTrigger Binding="{Binding Kind}" Value="Media">
-                            <Setter TargetName="FallbackGlyph" Property="Visibility" Value="Collapsed"/>
-                        </DataTrigger>
-                    </DataTemplate.Triggers>
-                </DataTemplate>
-            </ItemsControl.ItemTemplate>
         </ItemsControl>
     </Border>
 </services:AcrylicWindow>

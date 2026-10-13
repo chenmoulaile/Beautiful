@@ -1,0 +1,76 @@
+<UserControl x:Class="Beautiful.App.MediaWidget.MediaCapsule"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+
+    <!-- 鸿蒙"实况窗"胶囊：深色半透明底白字，圆角 = Height/2（32/2 = 16）。
+         可见性由 DataContext（MediaViewModel）.HasSession 驱动：无会话 → Collapsed。
+         跑马灯视口 MarqueeHost（ClipToBounds）内 TextBlock 经 TranslateTransform.X 往复滚动，
+         未溢出时静态（动画由 code-behind 按溢出量启停）。 -->
+    <UserControl.Resources>
+        <Style x:Key="CapsulePlayButton" TargetType="Button">
+            <Setter Property="Width" Value="26"/>
+            <Setter Property="Height" Value="26"/>
+            <Setter Property="FontFamily" Value="Segoe Fluent Icons,Segoe MDL2 Assets"/>
+            <Setter Property="FontSize" Value="12"/>
+            <Setter Property="Foreground" Value="{DynamicResource ThemeTextPrimary}"/>
+            <Setter Property="Focusable" Value="False"/>
+            <Setter Property="Cursor" Value="Hand"/>
+            <Setter Property="Content" Value="&#xE768;"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Button">
+                        <Border x:Name="Bg" CornerRadius="13" Background="Transparent">
+                            <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="Bg" Property="Background" Value="#33FFFFFF"/>
+                            </Trigger>
+                            <Trigger Property="IsPressed" Value="True">
+                                <Setter TargetName="Bg" Property="Background" Value="#4DFFFFFF"/>
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+            <Style.Triggers>
+                <DataTrigger Binding="{Binding IsPlaying}" Value="True">
+                    <Setter Property="Content" Value="&#xE769;"/>
+                </DataTrigger>
+            </Style.Triggers>
+        </Style>
+    </UserControl.Resources>
+
+    <Border x:Name="PillRoot" Height="32" CornerRadius="16"
+            Background="#88000000" BorderBrush="#22FFFFFF" BorderThickness="1"
+            Padding="12,0,4,0" Cursor="Hand">
+        <Border.Style>
+            <Style TargetType="Border">
+                <Setter Property="Visibility" Value="Visible"/>
+                <Style.Triggers>
+                    <DataTrigger Binding="{Binding HasSession}" Value="False">
+                        <Setter Property="Visibility" Value="Collapsed"/>
+                    </DataTrigger>
+                </Style.Triggers>
+            </Style>
+        </Border.Style>
+        <Grid>
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="*"/>
+                <ColumnDefinition Width="Auto"/>
+            </Grid.ColumnDefinitions>
+            <Border x:Name="MarqueeHost" ClipToBounds="True" VerticalAlignment="Center">
+                <TextBlock x:Name="MarqueeText" HorizontalAlignment="Left" VerticalAlignment="Center" FontSize="13"
+                           Foreground="{DynamicResource ThemeTextPrimary}"
+                           Text="{Binding CapsuleText, NotifyOnTargetUpdated=True}">
+                    <TextBlock.RenderTransform>
+                        <TranslateTransform x:Name="MarqueeTf"/>
+                    </TextBlock.RenderTransform>
+                </TextBlock>
+            </Border>
+            <Button x:Name="PlayPauseButton" Grid.Column="1" Margin="6,0,0,0"
+                    Style="{StaticResource CapsulePlayButton}"
+                    Command="{Binding TogglePlayCommand}"/>
+        </Grid>
+    </Border>
+</UserControl>
