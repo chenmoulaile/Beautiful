@@ -1,0 +1,41 @@
+<ResourceDictionary xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+                    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+                    xmlns:sys="clr-namespace:System;assembly=mscorlib">
+
+    <!-- HarmonyOS 主题 token（调研值）：默认深色玻璃（浅色变体 #59FFFFFF 由 Task 17 系统主题跟随提供）。
+         ThemeIconClip（squircle 遮罩几何）由 ThemeManager 以 Superellipse 采样在运行时注入，勿在此声明。 -->
+
+    <!-- 鸿蒙蓝强调色：运行指示点 -->
+    <SolidColorBrush x:Key="ThemeAccent" Color="#0A59F7"/>
+    <!-- Dock 面板底色：38% 黑深色玻璃 -->
+    <SolidColorBrush x:Key="ThemeDockBackground" Color="#61000000"/>
+    <!-- 主文字色（深色玻璃上用白） -->
+    <SolidColorBrush x:Key="ThemeTextPrimary" Color="#FFFFFFFF"/>
+    <!-- 浮层面板（媒体胶囊）底色 -->
+    <SolidColorBrush x:Key="ThemePanelBackground" Color="#26FFFFFF"/>
+    <!-- 运行指示 token：底部圆点（dot | bar | none，与 ThemeDefinition.IndicatorStyle 对应） -->
+    <sys:String x:Key="ThemeIndicatorStyle">dot</sys:String>
+    <!-- 字体（FontFamily 类型实例：TextElement.FontFamily 附加属性不接受 String 资源；
+         HarmonyOS Sans 缺失时回退，Task 17 附字体嵌入与授权声明） -->
+    <FontFamily x:Key="ThemeFontFamily">HarmonyOS Sans, Segoe UI Variable Display, Segoe UI</FontFamily>
+    <!-- 面板圆角 24-34 取 28 -->
+    <CornerRadius x:Key="ThemePanelCornerRadius">28</CornerRadius>
+    <sys:Double x:Key="ThemeIconSize">44</sys:Double>
+    <sys:Double x:Key="ThemeItemSlotWidth">52</sys:Double>
+
+    <!-- 指示样式实作（dot）：底部圆点，仅 Window 条目显示 -->
+    <Style x:Key="ThemeIndicatorDot" TargetType="Ellipse">
+        <Setter Property="Fill" Value="{DynamicResource ThemeAccent}"/>
+        <Setter Property="Visibility" Value="Collapsed"/>
+        <Style.Triggers>
+            <DataTrigger Binding="{Binding Kind}" Value="Window">
+                <Setter Property="Visibility" Value="Visible"/>
+            </DataTrigger>
+        </Style.Triggers>
+    </Style>
+    <!-- 本主题无左侧短条 -->
+    <Style x:Key="ThemeIndicatorBar" TargetType="Rectangle">
+        <Setter Property="Fill" Value="{DynamicResource ThemeAccent}"/>
+        <Setter Property="Visibility" Value="Collapsed"/>
+    </Style>
+</ResourceDictionary>

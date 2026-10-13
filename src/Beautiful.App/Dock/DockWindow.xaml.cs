@@ -8,9 +8,11 @@ using System.Windows.Media;
 using System.Windows.Threading;
 using Beautiful.App.Interop;
 using Beautiful.App.Services;
+using Beautiful.App.Themes;
 using Beautiful.Core.Dock;
+using Beautiful.Core.Themes;
+using Application = System.Windows.Application;
 using Color = System.Windows.Media.Color;
-using ColorConverter = System.Windows.Media.ColorConverter;
 using Point = System.Windows.Point;
 using MouseEventArgs = System.Windows.Input.MouseEventArgs;
 
@@ -21,14 +23,15 @@ namespace Beautiful.App.Dock;
 /// + macOS 式高斯放大动画（15ms DispatcherTimer 驱动逐帧 lerp——brief 原定的
 /// CompositionTarget.Rendering 在窗口非激活/渲染管线空闲时停止回调会冻结中间态，
 /// 改用等效 60fps 定时器已经 controller 认可；RenderTransform 自底部中心缩放 + Margin 补偿）。
-/// 临时主题值（亚克力 #B4202020、MaxScale 1.8、σ 2.0、放大开启）以私有字段内联，Task 13 ThemeDefinition 接管。
+/// 主题由 ThemeManager 驱动（Task 13）：构造期 Apply(HarmonyOs)，订阅 ThemeChanged 重设
+/// 亚克力/间距；放大开关与 MaxScale 直读 ThemeManager.Current（σ 2.0 固定，控制器裁定），
+/// 其余外观（底色/圆角/图标尺寸/字体/指示）经主题字典 DynamicResource 即时生效。
 /// </summary>
 public partial class DockWindow : AcrylicWindow
 {
-    private const double DockHeightDip = 76;
-    private const double Sigma = 2.0;         // 临时主题：高斯 σ
+    private const double DockHeightDip = 76;  // 三套内置主题 DockHeight 均为 76（设置化时随 theme.DockHeight 重定位，Task 16/17）
+    private const double Sigma = 2.0;         // 高斯 σ（控制器裁定：不随主题变化）
     private const double LerpFactor = 0.35;   // 每帧插值系数
-    private const double BaseMargin = 3;      // 容器水平 Margin 基准（与 XAML ItemRoot Margin 一致，ApplyScale 每帧覆写）
     private const double MarginPerSide = 6;   // Margin 补偿：6·(scale-1)
 
     private readonly WindowTracker _tracker = new();
@@ -43,9 +46,7 @@ public partial class DockWindow : AcrylicWindow
     private bool _closing; // OnClosing 起置位：阻止关闭前挂起的 BeginInvoke 重注册在 ABM_REMOVE 后复活 AppBar
     private HwndSource? _source;
 
-    // 临时主题字段（Task 13 接管为真实主题）
-    private bool _magnificationEnabled = true;
-    private double _maxScale = 1.8;
+    private double _baseMargin = 3; // ItemSpacing/2，随主题更新（ApplyScale 每帧覆写 Margin 的基准；与 XAML 初始值一致）
 
     private double[]? _currentScales;
     private double[]? _targetScales;
@@ -56,6 +57,9 @@ public partial class DockWindow : AcrylicWindow
         InitializeComponent();
         _vm = new DockViewModel(_tracker);
         DataContext = _vm;
+        ThemeManager.ThemeChanged += OnThemeChanged;
+        // 初始主题：鸿蒙（Task 16/17 移交设置项）。Apply 会加载字典并触发 OnThemeChanged。
+        ThemeManager.Apply(ThemeDefinition.HarmonyOs(), Application.Current);
         Loaded += OnWindowLoaded;
     }
 
@@ -70,8 +74,26 @@ public partial class DockWindow : AcrylicWindow
         _appbarMsg = NativeMethods.RegisterWindowMessage("AppBarMessage");
         _taskbarCreatedMsg = NativeMethods.RegisterWindowMessage("TaskbarCreated");
         RegisterAndPositionAppBar();
-        // 临时暗色亚克力（Task 13 主题接管）
-        ApplyAcrylic((Color)ColorConverter.ConvertFromString("#B4202020"));
+        // 亚克力由主题驱动（构造期 ThemeManager.Apply → OnThemeChanged → ApplyTheme），此处不再硬编码
+    }
+
+    // ---------- 主题引擎（Task 13） ----------
+
+    private void OnThemeChanged(ThemeDefinition theme) => ApplyTheme(theme);
+
+    /// <summary>
+    /// 主题切换落地：窗口级亚克力开/关 + 间距参数；放大开关与 MaxScale 由动画/悬停路径
+    /// 直读 ThemeManager.Current；底色/圆角/图标尺寸/字体/指示样式走字典 DynamicResource 即时生效。
+    /// </summary>
+    private void ApplyTheme(ThemeDefinition theme)
+    {
+        if (theme.BlurEnabled)
+            ApplyAcrylic(Color.FromArgb(theme.AcrylicTint.A, theme.AcrylicTint.R,
+                                        theme.AcrylicTint.G, theme.AcrylicTint.B));
+        else
+            DisableAcrylic();
+        _baseMargin = theme.ItemSpacing / 2; // 下一动画帧起按新间距覆写容器 Margin
+        _baseCenters = null;                 // 尺寸参数可能变化 → 命中测试基准中心强制重算
     }
 
     private void OnWindowLoaded(object sender, RoutedEventArgs e)
@@ -98,6 +120,7 @@ public partial class DockWindow : AcrylicWindow
 
     protected override void OnClosed(EventArgs e)
     {
+        ThemeManager.ThemeChanged -= OnThemeChanged; // 解除主题订阅，防止闭包引用已关闭窗口
         _vm.Detach();
         _tracker.Dispose();
         base.OnClosed(e);
@@ -177,13 +200,13 @@ public partial class DockWindow : AcrylicWindow
 
     private void ItemsHost_MouseMove(object sender, MouseEventArgs e)
     {
-        if (!_magnificationEnabled) return;
+        if (!ThemeManager.Current.ShowMagnification) return;
         // WPF 会在布局变化后按"最后已知位置"合成 MouseMove；光标跳跃离窗时这些陈旧事件
         // 会把放大目标重置回旧条目。以 Win32 物理光标位置为准：不在窗口内的一律忽略。
         if (IsCursorOutsideWindow()) return;
         var hover = HitTestIndex(e.GetPosition(ItemsHost));
         if (hover is int idx)
-            _targetScales = Magnifier.ComputeScales(_vm.Items.Count, idx, _maxScale, Sigma);
+            _targetScales = Magnifier.ComputeScales(_vm.Items.Count, idx, ThemeManager.Current.MaxScale, Sigma);
     }
 
     private void ItemsHost_MouseLeave(object sender, MouseEventArgs e) => _targetScales = null;
@@ -199,9 +222,10 @@ public partial class DockWindow : AcrylicWindow
 
     private void OnAnimationFrame()
     {
-        if (!_magnificationEnabled) return;
         var count = _vm.Items.Count;
         if (count == 0) return;
+        // 主题关闭放大（ShowMagnification=false）→ 丢弃悬停目标，图标平滑回落到 1（而非冻结在放大态）
+        if (!ThemeManager.Current.ShowMagnification) _targetScales = null;
         // 兜底：跳跃移动可能丢失 MouseLeave（WPF 不再收到该窗口的消息）；
         // 物理光标已离开窗口则强制回落，防止放大状态卡死。
         if (_targetScales is not null && IsCursorOutsideWindow()) _targetScales = null;
@@ -232,8 +256,8 @@ public partial class DockWindow : AcrylicWindow
             container.RenderTransform = st;
         }
         if (st.ScaleX != scale) st.ScaleX = st.ScaleY = scale;
-        // Margin 每帧整值覆写：基准 3px 必须并入公式（scale=1 时恰为 3，与 XAML 初始值一致）
-        var m = BaseMargin + MarginPerSide * (scale - 1);
+        // Margin 每帧整值覆写：基准 ItemSpacing/2 必须并入公式（scale=1 时恰为基准值，与 XAML 初始值一致）
+        var m = _baseMargin + MarginPerSide * (scale - 1);
         container.Margin = new Thickness(m, 0, m, 0);
     }
 

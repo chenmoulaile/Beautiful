@@ -1,0 +1,33 @@
+<ResourceDictionary xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+                    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+                    xmlns:sys="clr-namespace:System;assembly=mscorlib">
+
+    <!-- Linux(GNOME) 主题 token：#E61C1C1C 实底（BlurEnabled=false，亚克力禁用，无 blur tint）、
+         左侧短条指示、圆角方形图标（遮罩矩形半径 8，由 ThemeManager 注入 ThemeIconClip）。 -->
+
+    <SolidColorBrush x:Key="ThemeAccent" Color="#3584E4"/>
+    <SolidColorBrush x:Key="ThemeDockBackground" Color="#E61C1C1C"/>
+    <SolidColorBrush x:Key="ThemeTextPrimary" Color="#FFFFFFFF"/>
+    <SolidColorBrush x:Key="ThemePanelBackground" Color="#26FFFFFF"/>
+    <sys:String x:Key="ThemeIndicatorStyle">bar</sys:String>
+    <FontFamily x:Key="ThemeFontFamily">Segoe UI</FontFamily>
+    <CornerRadius x:Key="ThemePanelCornerRadius">12</CornerRadius>
+    <sys:Double x:Key="ThemeIconSize">44</sys:Double>
+    <sys:Double x:Key="ThemeItemSlotWidth">52</sys:Double>
+
+    <!-- 本主题无底部圆点 -->
+    <Style x:Key="ThemeIndicatorDot" TargetType="Ellipse">
+        <Setter Property="Fill" Value="{DynamicResource ThemeAccent}"/>
+        <Setter Property="Visibility" Value="Collapsed"/>
+    </Style>
+    <!-- 指示样式实作（bar）：图标左侧 3px 圆角短条，仅 Window 条目显示 -->
+    <Style x:Key="ThemeIndicatorBar" TargetType="Rectangle">
+        <Setter Property="Fill" Value="{DynamicResource ThemeAccent}"/>
+        <Setter Property="Visibility" Value="Collapsed"/>
+        <Style.Triggers>
+            <DataTrigger Binding="{Binding Kind}" Value="Window">
+                <Setter Property="Visibility" Value="Visible"/>
+            </DataTrigger>
+        </Style.Triggers>
+    </Style>
+</ResourceDictionary>
