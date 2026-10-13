@@ -2,13 +2,13 @@
 
 Beautiful 以 MIT 许可证发布（见 [LICENSE](LICENSE)）。本项目为独立编写的原创代码，但在设计过程中参考了下列开源项目的公开实现模式、设计资源与数据接口，特此逐项声明与致谢。
 
-代码中凡参考了外部项目模式之处，均以 `// ... 参考 <repo> (<license>) ...` 形式的文件头标注（如 `src/Beautiful.App/Interop/NativeMethods.cs`、`src/Beautiful.App/Services/AcrylicWindow.cs`、`src/Beautiful.Core/Lyrics/NetEaseProvider.cs`）。
+代码中参考外部项目实现模式之处以注释就地标注（格式如 `// 实现模式参考 <repo> (<license>) ...`），例如 `src/Beautiful.App/Interop/NativeMethods.cs`、`src/Beautiful.App/Services/AcrylicWindow.cs`、`src/Beautiful.Core/Lyrics/NetEaseProvider.cs`（端点用法标注）；`src/Beautiful.Core/Lyrics/LrcLibProvider.cs` 的对应注释为数据来源说明（lrclib.net）。
 
 ---
 
 ## 1. MIT 许可的开源项目
 
-本项目未复制以上任何项目的代码，仅借鉴其公开文档/实现思路：
+本项目未复制以下任何项目的代码，仅借鉴其公开文档/实现思路：
 
 | 项目 | 许可证 | 参考内容 | 对应代码位置 |
 | --- | --- | --- | --- |
