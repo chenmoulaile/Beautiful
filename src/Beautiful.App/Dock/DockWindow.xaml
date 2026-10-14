@@ -14,7 +14,7 @@
         Topmost="True"
         SizeToContent="Manual"
         ResizeMode="NoResize"
-        Height="76">
+        Height="94">
 
     <!-- 窗口 Background={x:Null}：未绘制区域不参与命中测试，两侧点击穿透；
          可见面板 Border 自带背景。主题值统一走 ThemeManager 合并字典的 DynamicResource
@@ -25,9 +25,9 @@
         <!-- 通用条目模板（Pinned/Window/RecycleBin）：图标 + 缺失回退字形 + 运行指示 + 悬停高亮。
              Media 条目由 MediaItemTemplate 接管（DockItemTemplateSelector 分派）。 -->
         <DataTemplate x:Key="DefaultItemTemplate">
-            <!-- ItemRoot Margin 基准 3,0 = ItemSpacing/2（代码侧 _baseMargin 随主题更新）：
-                 ApplyScale 每帧整值覆写为 ItemSpacing/2 + 6·(scale-1)，两处须保持一致 -->
-            <Grid x:Name="ItemRoot" Margin="3,0" Background="Transparent"
+            <!-- 条目间距在 v2 由 DockSurface 的 Spacing 统一给出（容器 Margin 在生成时被归零），
+                 故模板根元素不再自带 Margin。 -->
+            <Grid x:Name="ItemRoot" Background="Transparent"
                   ToolTip="{Binding Label}" ToolTipService.Placement="Top"
                   ToolTipService.InitialShowDelay="300">
                 <Image x:Name="IconImage" Source="{Binding Icon}"
@@ -83,9 +83,10 @@
             </DataTemplate.Triggers>
         </DataTemplate>
         <!-- 媒体胶囊槽：承载实况窗胶囊（DataContext = DockWindow.MediaVm）。
-             无会话时整槽收起（Width=0；残余仅 ApplyScale 的基准边距 3+3px，视觉上是普通间距）。 -->
+             无会话/关闭胶囊时整槽收起（Width=0）：DockSurface 度量到宽度 ≤0 的条目直接跳过排布，
+             因此既画出为空、也不留空隙（无需 v1 的 Margin 补偿）。 -->
         <DataTemplate x:Key="MediaItemTemplate">
-            <Grid x:Name="ItemRoot" Margin="3,0" Background="Transparent">
+            <Grid x:Name="ItemRoot" Background="Transparent">
                 <Grid.Style>
                     <Style TargetType="Grid">
                         <Setter Property="Width" Value="124"/>
@@ -126,25 +127,20 @@
             <MenuItem Header="取消固定" Click="UnpinItem_Click"/>
         </ContextMenu>
     </services:AcrylicWindow.Resources>
-    <Border x:Name="DockPanelRoot"
-            HorizontalAlignment="Center" VerticalAlignment="Stretch"
-            CornerRadius="{DynamicResource ThemePanelCornerRadius}" Padding="10,6"
-            Background="{DynamicResource ThemeDockBackground}"
-            TextElement.FontFamily="{DynamicResource ThemeFontFamily}"
-            BorderBrush="#33FFFFFF" BorderThickness="1">
-        <ItemsControl x:Name="ItemsHost"
-                      ItemsSource="{Binding Items}"
-                      ItemTemplateSelector="{StaticResource ItemSelector}"
-                      VerticalAlignment="Center"
-                      MouseMove="ItemsHost_MouseMove"
-                      MouseLeave="ItemsHost_MouseLeave"
-                      MouseLeftButtonUp="ItemsHost_MouseLeftButtonUp"
-                      PreviewMouseRightButtonUp="ItemsHost_PreviewMouseRightButtonUp">
-            <ItemsControl.ItemsPanel>
-                <ItemsPanelTemplate>
-                    <StackPanel Orientation="Horizontal"/>
-                </ItemsPanelTemplate>
-            </ItemsControl.ItemsPanel>
-        </ItemsControl>
-    </Border>
+    <!-- v2 Task 6：条目由自绘 DockSurface（Canvas 派生）承载，替代 v1 的 ItemsControl+StackPanel。
+         两层叠放在同一个 Grid 单元里：底板 Border 无内容、随 Grid 尺寸拉伸，Grid 尺寸 = Surface 的
+         DesiredSize + Surface.Margin → 放大时底板随总宽一起生长，条目几何只写 Left/Top+RenderTransform，
+         逐帧不再有 Margin/LayoutTransform 改写。
+         窗口保持 AllowsTransparency=True + Background={x:Null}（分层窗口）：面板矩形之外不参与命中测试，
+         条带两侧与顶部余量点击穿透（Task 4 约束，勿改成实底）。 -->
+    <Grid x:Name="PanelHost" HorizontalAlignment="Center" VerticalAlignment="Bottom"
+          TextElement.FontFamily="{DynamicResource ThemeFontFamily}">
+        <Border x:Name="DockPanelRoot" Padding="10,6"
+                CornerRadius="{DynamicResource ThemePanelCornerRadius}"
+                Background="{DynamicResource ThemeDockBackground}"
+                BorderBrush="#33FFFFFF" BorderThickness="1"/>
+        <dock:DockSurface x:Name="Surface" Margin="10,6"
+                          ItemsSource="{Binding Items}"
+                          TemplateSelector="{StaticResource ItemSelector}"/>
+    </Grid>
 </services:AcrylicWindow>

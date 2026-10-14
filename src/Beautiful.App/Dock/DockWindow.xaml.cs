@@ -3,7 +3,6 @@ using System.ComponentModel;
 using System.Runtime.InteropServices;
 using System.Windows;
 using System.Windows.Controls;
-using System.Windows.Input;
 using System.Windows.Interop;
 using System.Windows.Media;
 using System.Windows.Threading;
@@ -16,25 +15,23 @@ using Beautiful.Core.Themes;
 using Application = System.Windows.Application;
 using Color = System.Windows.Media.Color;
 using Point = System.Windows.Point;
-using MouseEventArgs = System.Windows.Input.MouseEventArgs;
 
 namespace Beautiful.App.Dock;
 
 /// <summary>
 /// 底部居中悬浮 Dock：AppBar 注册（ABM_NEW → ABM_QUERYPOS → ABM_SETPOS，ABE_BOTTOM 全宽条带）
-/// + macOS 式高斯放大动画（15ms DispatcherTimer 驱动逐帧 lerp——brief 原定的
-/// CompositionTarget.Rendering 在窗口非激活/渲染管线空闲时停止回调会冻结中间态，
-/// 改用等效 60fps 定时器已经 controller 认可；RenderTransform 自底部中心缩放 + Margin 补偿）。
+/// + macOS 式放大（Task 6 重写）：条目交给 <see cref="DockSurface"/> 自绘——连续高斯放大场
+/// （真实物理光标坐标，非离散悬停索引）+ CompositionTarget.Rendering（vsync）驱动的指数阻尼，
+/// 逐帧只写 Canvas.Left/Top 与 RenderTransform，面板内零 Margin/LayoutTransform 改写。
+/// 条带比可见面板高 <see cref="StripHeadroomDip"/>（透明、点击穿透），放大后的图标才不被窗口上沿裁掉。
 /// 主题由 ThemeManager 驱动（Task 13）：构造期 Apply(HarmonyOs)，订阅 ThemeChanged 重设
-/// 亚克力/间距；放大开关与 MaxScale 直读 ThemeManager.Current（σ 2.0 固定，控制器裁定），
-/// 其余外观（底色/圆角/图标尺寸/字体/指示）经主题字典 DynamicResource 即时生效。
+/// 亚克力/间距/放大参数（IconSize、Spacing、MaxScale、ShowMagnification 写入 DockSurface）。
 /// </summary>
 public partial class DockWindow : AcrylicWindow
 {
-    private const double DockHeightDip = 76;  // 三套内置主题 Dock 高度均为 76（设置化时随主题重定位，Task 16/17）
-    private const double Sigma = 2.0;         // 高斯 σ（控制器裁定：不随主题变化）
-    private const double LerpFactor = 0.35;   // 每帧插值系数
-    private const double MarginPerSide = 6;   // Margin 补偿：6·(scale-1)
+    private const double DockHeightDip = 76;   // 可见面板高度：三套内置主题 Dock 高度均为 76（设置化时随主题重定位，Task 16/17）
+    private const double StripHeadroomDip = 18; // 条带在面板之上的透明余量：MaxScale 1.8 时图标最高 79DIP，需要这段空间才不被窗口裁切
+    private const double SigmaInPitches = 2.0;  // 高斯 σ（单位 = 一个图标间距；控制器裁定：不随主题变化）
 
     private readonly WindowTracker _tracker = new();
     private readonly DockViewModel _vm;
@@ -58,12 +55,6 @@ public partial class DockWindow : AcrylicWindow
     private bool _closing; // OnClosing 起置位：阻止关闭前挂起的 BeginInvoke 重注册在 ABM_REMOVE 后复活 AppBar
     private HwndSource? _source;
 
-    private double _baseMargin = 3; // ItemSpacing/2，随主题更新（ApplyScale 每帧覆写 Margin 的基准；与 XAML 初始值一致）
-
-    private double[]? _currentScales;
-    private double[]? _targetScales;
-    private DispatcherTimer? _animTimer;
-
     public DockWindow(TaskbarManager? taskbar = null)
     {
         _taskbar = taskbar;
@@ -73,6 +64,7 @@ public partial class DockWindow : AcrylicWindow
         _vm = new DockViewModel(_tracker);
         DataContext = _vm;
         _itemContextMenu = (ContextMenu)Resources["ItemContextMenu"];
+        WireSurface();
         ThemeManager.ThemeChanged += OnThemeChanged;
         // 任务栏策略切换/explorer 重启重放（TaskbarManager.Apply/Restore → PolicyApplied）后，
         // AppBar 条带需重新协商：任务栏真被移出屏幕 → Dock 贴底；还原/保留 → 让位于任务栏上方。
@@ -87,6 +79,15 @@ public partial class DockWindow : AcrylicWindow
 
     /// <summary>媒体 VM（XAML 媒体条目模板经 RelativeSource 绑定到本属性）。</summary>
     public MediaViewModel MediaVm => _mediaVm;
+
+    /// <summary>DockSurface 接线：光标取样 + 左键激活 + 右键条目菜单。</summary>
+    private void WireSurface()
+    {
+        Surface.Sigma = SigmaInPitches;
+        Surface.CursorProvider = SurfaceCursorXDip;   // 真实物理光标（含 AppBar 矩形守卫），见放大场注释
+        Surface.Activated = ActivateItem;
+        Surface.ContextRequested = OpenItemContextMenu;
+    }
 
     // ---------- 生命周期 / AppBar ----------
 
@@ -126,28 +127,30 @@ public partial class DockWindow : AcrylicWindow
                                         theme.AcrylicTint.G, theme.AcrylicTint.B));
         else
             DisableAcrylic();
-        _baseMargin = theme.ItemSpacing / 2; // 下一动画帧起按新间距覆写容器 Margin
-        _baseCenters = null;                 // 尺寸参数可能变化 → 命中测试基准中心强制重算
+        // 放大场与排布参数写入 DockSurface（尺寸参数变了要整树重排，Refresh 负责）
+        Surface.IconSize = theme.IconSize;
+        Surface.Spacing = theme.ItemSpacing;
+        Surface.MaxScale = theme.MaxScale;
+        Surface.ShowMagnification = theme.ShowMagnification;
+        Surface.Refresh();
     }
 
     private void OnWindowLoaded(object sender, RoutedEventArgs e)
     {
         _tracker.Start();
-        // brief 原定 CompositionTarget.Rendering 驱动逐帧 lerp；实测窗口非激活/渲染管线空闲时
-        // Rendering 停止回调，动画会冻结在中间态，故改用 15ms DispatcherTimer（等效 60fps）。
-        _animTimer = new DispatcherTimer(DispatcherPriority.Render)
-        {
-            Interval = TimeSpan.FromMilliseconds(15)
-        };
-        _animTimer.Tick += (_, _) => OnAnimationFrame();
-        _animTimer.Start();
+        // 动画驱动态（CompositionTarget.Rendering 钩子）由 DockSurface 自管：光标进入面板即 Wake，
+        // 全部收敛且无悬停目标时自行摘钩——此处不再有 15ms DispatcherTimer。
+        // 渲染层级一次性入日志：tier=0 表示 WPF 走软件渲染（VM/无 D3D 加速的常见情形），
+        // 帧间隔上限由合成器决定，排查"掉帧是代码还是环境"时先看这一行。
+        Logger.Info($"Dock 就绪：WPF 渲染 tier={RenderCapability.Tier >> 16}（0=软件渲染）" +
+                    $" magnification={ThemeManager.Current.ShowMagnification} maxScale={ThemeManager.Current.MaxScale}");
     }
 
     protected override void OnClosing(CancelEventArgs e)
     {
         _closing = true;                             // 先于 ABM_REMOVE：作废队列中尚未执行的 BeginInvoke 重注册
         _mediaPanel?.Close();                        // 面板随 Dock 一起关闭（Closed 处理器会清空引用）
-        _animTimer?.Stop();                           // 停止动画驱动
+        Surface.Shutdown();                           // 摘掉 CompositionTarget.Rendering 钩子
         UnregisterAppBar();                           // ABM_REMOVE 必须在 hwnd 销毁前
         _source?.RemoveHook(WndProc);
         base.OnClosing(e);
@@ -228,7 +231,9 @@ public partial class DockWindow : AcrylicWindow
         if (!_appbarRegistered) return;
         var dpiScale = NativeMethods.GetDpiForWindow(_hwnd) / 96.0;
         if (dpiScale <= 0) dpiScale = 1.0;
-        var stripH = (int)Math.Round(DockHeightDip * dpiScale);
+        // 条带 = 可见面板高 + 放大余量：面板 Grid  VerticalAlignment=Bottom 贴条带底，
+        // 多出的顶部透明带（Background={x:Null} 分层窗口不参与命中 → 仍点击穿透）供放大后的图标向上生长。
+        var stripH = (int)Math.Round((DockHeightDip + StripHeadroomDip) * dpiScale);
         var screenW = NativeMethods.GetSystemMetrics(0);  // SM_CXSCREEN
         var screenH = NativeMethods.GetSystemMetrics(1);  // SM_CYSCREEN
 
@@ -275,22 +280,14 @@ public partial class DockWindow : AcrylicWindow
         return IntPtr.Zero;
     }
 
-    // ---------- macOS 式放大 ----------
+    // ---------- 放大场光标取样 ----------
 
-    private void ItemsHost_MouseMove(object sender, MouseEventArgs e)
-    {
-        if (!ThemeManager.Current.ShowMagnification) return;
-        // WPF 会在布局变化后按"最后已知位置"合成 MouseMove；光标跳跃离窗时这些陈旧事件
-        // 会把放大目标重置回旧条目。以 Win32 物理光标位置为准：不在窗口内的一律忽略。
-        if (IsCursorOutsideWindow()) return;
-        var hover = HitTestIndex(e.GetPosition(ItemsHost));
-        if (hover is int idx)
-            _targetScales = Magnifier.ComputeScales(_vm.Items.Count, idx, ThemeManager.Current.MaxScale, Sigma);
-    }
-
-    private void ItemsHost_MouseLeave(object sender, MouseEventArgs e) => _targetScales = null;
-
-    /// <summary>物理光标（GetCursorPos）是否已不在本窗口矩形内；AppBar 未就绪时视为在窗内。</summary>
+    /// <summary>
+    /// 物理光标（GetCursorPos）是否已不在本窗口矩形内；AppBar 未就绪时视为在窗内。
+    /// 保留 v1 守卫：WPF 会在布局变化后按"最后已知位置"合成 MouseMove，若以事件坐标为准，
+    /// 光标跳跃离窗后这些陈旧事件会把放大状态钉住。v2 更进一步——动画每帧直接取真实光标，
+    /// 事件只作"唤醒"信号，因此陈旧事件连唤醒语义都没有（离场即在下一帧回落）。
+    /// </summary>
     private bool IsCursorOutsideWindow()
     {
         if (!_appbarRegistered) return false;
@@ -299,100 +296,25 @@ public partial class DockWindow : AcrylicWindow
             || pt.Y < _screenRect.Top || pt.Y >= _screenRect.Bottom;
     }
 
-    private void OnAnimationFrame()
-    {
-        var count = _vm.Items.Count;
-        if (count == 0) return;
-        // 主题关闭放大（ShowMagnification=false）→ 丢弃悬停目标，图标平滑回落到 1（而非冻结在放大态）
-        if (!ThemeManager.Current.ShowMagnification) _targetScales = null;
-        // 兜底：跳跃移动可能丢失 MouseLeave（WPF 不再收到该窗口的消息）；
-        // 物理光标已离开窗口则强制回落，防止放大状态卡死。
-        if (_targetScales is not null && IsCursorOutsideWindow()) _targetScales = null;
-        if (_targetScales is not null && _targetScales.Length != count) _targetScales = null; // 条目增删 → 丢弃陈旧目标
-        if (_currentScales is not null && _currentScales.Length != count) _currentScales = null;
-
-        var target = _targetScales ?? AllOnes(count);
-        _currentScales ??= AllOnes(count);
-
-        for (var i = 0; i < count; i++)
-        {
-            var cur = _currentScales[i];
-            var tgt = target[i];
-            var next = Math.Abs(cur - tgt) < 0.001 ? tgt : cur + (tgt - cur) * LerpFactor;
-            _currentScales[i] = next;
-            ApplyScale(i, next);
-        }
-    }
-
-    /// <summary>缩放自底部中心（RenderTransformOrigin=0.5,1）+ 水平 Margin 补偿，避免相邻图标视觉重叠。</summary>
-    private void ApplyScale(int index, double scale)
-    {
-        if (ItemsHost.ItemContainerGenerator.ContainerFromIndex(index) is not FrameworkElement container) return;
-        if (container.RenderTransform is not ScaleTransform st)
-        {
-            container.RenderTransformOrigin = new Point(0.5, 1);
-            st = new ScaleTransform(1, 1);
-            container.RenderTransform = st;
-        }
-        if (st.ScaleX != scale) st.ScaleX = st.ScaleY = scale;
-        // Margin 每帧整值覆写：基准 ItemSpacing/2 必须并入公式（scale=1 时恰为基准值，与 XAML 初始值一致）
-        var m = _baseMargin + MarginPerSide * (scale - 1);
-        container.Margin = new Thickness(m, 0, m, 0);
-    }
-
-    private static double[] AllOnes(int count)
-    {
-        var arr = new double[count];
-        Array.Fill(arr, 1.0);
-        return arr;
-    }
-
-    // ---------- 命中测试 / 点击 ----------
-
-    private double[]? _baseCenters; // 每个容器基准中心（ItemsHost 坐标系，未放大布局）
-
     /// <summary>
-    /// 以"最近基准中心"求悬停下标，而非 InputHitTest。原因：Margin 补偿随动画逐帧改变布局，
-    /// WPF 会在布局变化后合成新的 MouseMove，InputHitTest 的结果随之抖动，形成
-    /// 放大 → 布局移位 → 悬停翻转 → 再放大的反馈振荡（实测 MOVE/LEAVE 交替）。
-    /// 容器 ActualWidth 不含自身 Margin，不受放大动画影响，故基准中心恒定 → 命中结果只取决于物理光标位置。
+    /// DockSurface 的光标取样：真实物理光标 → 窗口 DIP（PointFromScreen，PerMonitorV2 下随当前 DPI）
+    /// → surface 本地 DIP（TranslatePoint）。不在窗口内 / 源未就绪时返回 null = 无悬停目标（场回落 1）。
+    /// 连续 X 交给 <see cref="MagnificationField"/>，scale 因而随光标平滑变化，
+    /// 不再出现 v1"悬停索引切换 → 整排图标一起跳"的卡顿。
     /// </summary>
-    private int? HitTestIndex(Point posInItemsHost)
+    private double? SurfaceCursorXDip()
     {
-        if (_baseCenters is null || _baseCenters.Length != _vm.Items.Count) RefreshBaseCenters();
-        if (_baseCenters is null || _baseCenters.Length == 0) return null;
-
-        int best = 0;
-        var bestDist = double.MaxValue;
-        for (var i = 0; i < _baseCenters.Length; i++)
+        if (IsCursorOutsideWindow()) return null;
+        if (!NativeMethods.GetCursorPos(out var pt)) return null;
+        try
         {
-            var d = Math.Abs(posInItemsHost.X - _baseCenters[i]);
-            if (d < bestDist) { bestDist = d; best = i; }
+            var inWindow = PointFromScreen(new Point(pt.X, pt.Y)); // 物理 px → 窗口 DIP
+            return TranslatePoint(inWindow, Surface).X;             // 窗口 DIP → surface 本地 DIP
         }
-        return best;
-    }
-
-    private void RefreshBaseCenters()
-    {
-        var n = _vm.Items.Count;
-        if (n == 0) { _baseCenters = null; return; }
-        var centers = new double[n];
-        double acc = 0;
-        for (var i = 0; i < n; i++)
+        catch (InvalidOperationException)
         {
-            var w = ItemsHost.ItemContainerGenerator.ContainerFromIndex(i) is FrameworkElement fe && fe.ActualWidth > 0
-                ? fe.ActualWidth
-                : 58.0;
-            centers[i] = acc + w / 2;
-            acc += w;
+            return null; // PresentationSource 尚未就绪（显示前）
         }
-        _baseCenters = centers;
-    }
-
-    private void ItemsHost_MouseLeftButtonUp(object sender, MouseButtonEventArgs e)
-    {
-        var idx = HitTestIndex(e.GetPosition(ItemsHost));
-        if (idx is int i && i < _vm.Items.Count) ActivateItem(_vm.Items[i]);
     }
 
     private void ActivateItem(DockItem item)
@@ -432,17 +354,15 @@ public partial class DockWindow : AcrylicWindow
     // ---------- 右键菜单：固定 / 取消固定 ----------
 
     /// <summary>
-    /// 右键条目弹出固定菜单（媒体/回收站无固定语义不弹）。手动开关而非容器 ContextMenu：
+    /// 右键条目弹出固定菜单（媒体/回收站无固定语义不弹）。仍走"代码后置手动开关"而非容器 ContextMenu：
     /// 实测 ItemContainerStyle 挂 ContextMenu 时 ContextMenuService 在本窗口把事件路由到
-    /// ItemsControl 层（Source=ItemsControl），容器菜单永远不打开——绕开服务，复用
-    /// 放大器的基准中心命中测试直接定位条目。
+    /// ItemsControl 层（Source=ItemsControl），容器菜单永远不打开。
+    /// 条目命中改由 DockSurface 用放大后矩形给出（HitTestItem），v1 的"最近基准中心"权宜法已删除。
+    /// 该菜单迁移到 FluentMenu 属另一个任务，这里保持原生 ContextMenu 可用。
     /// </summary>
-    private void ItemsHost_PreviewMouseRightButtonUp(object sender, MouseButtonEventArgs e)
+    private void OpenItemContextMenu(DockItem item, Point anchorInSurface)
     {
         if (_itemContextMenu is null) return;
-        var idx = HitTestIndex(e.GetPosition(ItemsHost));
-        if (idx is not int i || i >= _vm.Items.Count) return;
-        var item = _vm.Items[i];
         if (item.Kind is DockItemKind.Media or DockItemKind.RecycleBin) return;
         _contextItem = item;
         if (_itemContextMenu.Items[0] is MenuItem pin)
@@ -451,10 +371,9 @@ public partial class DockWindow : AcrylicWindow
                 : Visibility.Collapsed;
         if (_itemContextMenu.Items[1] is MenuItem unpin)
             unpin.Visibility = item.Kind == DockItemKind.Pinned ? Visibility.Visible : Visibility.Collapsed;
-        _itemContextMenu.PlacementTarget = ItemsHost;
+        _itemContextMenu.PlacementTarget = Surface;
         _itemContextMenu.Placement = System.Windows.Controls.Primitives.PlacementMode.MousePoint;
         _itemContextMenu.IsOpen = true;
-        e.Handled = true;
     }
 
     private void PinItem_Click(object sender, RoutedEventArgs e)
@@ -519,6 +438,14 @@ public partial class DockWindow : AcrylicWindow
         }
     }
 
+    /// <summary>媒体条目（恒为 suffix 末位，仍按 Kind 扫描以稳健）；无则 null。</summary>
+    private DockItem? MediaItemOrNull()
+    {
+        for (var i = _vm.Items.Count - 1; i >= 0; i--)
+            if (_vm.Items[i].Kind == DockItemKind.Media) return _vm.Items[i];
+        return null;
+    }
+
     /// <summary>面板置于胶囊上方并水平居中（钳制在屏幕内）；胶囊中心经 PointToScreen（物理 px）→ DIP 换算。</summary>
     private void PositionMediaPanel()
     {
@@ -529,14 +456,11 @@ public partial class DockWindow : AcrylicWindow
         if (dpi <= 0) dpi = 1;
 
         double centerDipX = Left + Width / 2; // 兜底：Dock 中心
-        var mediaIndex = -1;                  // 媒体条目恒为 suffix 末位，仍按 Kind 扫描以稳健
-        for (var i = _vm.Items.Count - 1; i >= 0; i--)
-            if (_vm.Items[i].Kind == DockItemKind.Media) { mediaIndex = i; break; }
-        if (mediaIndex >= 0 &&
-            ItemsHost.ItemContainerGenerator.ContainerFromIndex(mediaIndex) is FrameworkElement capsule &&
-            capsule.ActualWidth > 0)
+        var mediaItem = MediaItemOrNull();
+        if (mediaItem is not null && Surface.GetItemBounds(mediaItem) is { } bounds && bounds.Width > 0)
         {
-            var screenPt = capsule.PointToScreen(new Point(capsule.ActualWidth / 2, 0));
+            // 放大后的胶囊矩形中心 → 屏幕物理 px → DIP（与 v1 同一路径，容器改由 DockSurface 提供）
+            var screenPt = Surface.PointToScreen(new Point(bounds.X + bounds.Width / 2, bounds.Y));
             centerDipX = screenPt.X / dpi;
         }
 

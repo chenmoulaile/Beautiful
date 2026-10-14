@@ -1,4 +1,4 @@
-# 采样 Beautiful Dock 的动画帧间隔，客观判定放大动画是否丝滑。
+﻿# 采样 Beautiful Dock 的动画帧间隔，客观判定放大动画是否丝滑。
 # 原理：Beautiful 在 CompositionTarget.Rendering 循环里每帧写一行日志（BEAUTIFUL_FRAME <tick>）。
 #      本脚本启动 app、用鼠标横扫 Dock 触发放大动画，再从日志里解析帧间隔分布。
 # 用法: powershell -NoProfile -ExecutionPolicy Bypass -File scripts/frametime.ps1
@@ -9,13 +9,23 @@ $exe  = Join-Path $bin 'Beautiful.exe'
 if (-not (Test-Path $exe)) { Write-Output "EXE_NOT_FOUND: 先跑 dotnet build"; exit 1 }
 
 # 保证任务栏可见，便于把光标移到 Dock 上（hide 策略下 Dock 位置一致，仅影响托盘可达性）
+# 另外强制 macOS 主题：只有 macOS 主题 MaxScale>1，放大动画才会真正跑起来（鸿蒙/Linux 不放大 → 无帧日志）
 $cfgDir = Join-Path $bin 'config'
 New-Item -ItemType Directory -Force -Path $cfgDir | Out-Null
 $cfg = Get-Content (Join-Path $cfgDir 'settings.json') -Raw -ErrorAction SilentlyContinue
 if (-not $cfg) { $cfg = '{}' }
-$cfg = $cfg -replace '"TaskbarPolicy":"[^"]*"', '"TaskbarPolicy":"keep"'
+$cfg = $cfg -replace '"TaskbarPolicy"\s*:\s*"[^"]*"', '"TaskbarPolicy":"keep"'
 if ($cfg -notmatch '"TaskbarPolicy"') { $cfg = $cfg.TrimEnd('}') + ',"TaskbarPolicy":"keep"}' }
+$cfg = $cfg -replace '"Theme"\s*:\s*"[^"]*"', '"Theme": "macos"'
+if ($cfg -notmatch '"Theme"') { $cfg = $cfg.TrimEnd('}') + ',"Theme":"macos"}' }
 Set-Content -Path (Join-Path $cfgDir 'settings.json') -Value $cfg -NoNewline -Encoding UTF8
+
+# 帧埋点开关：DockSurface 仅在 BEAUTIFUL_FRAMETIME=1 时逐帧写 BEAUTIFUL_FRAME 日志
+# （Logger 每次写入都要 open/append/close，常态逐帧写盘本身就会成为掉帧源，故默认关）
+$env:BEAUTIFUL_FRAMETIME = '1'
+# 仓库内置 SDK（scripts/env.sh 的 PowerShell 等价）：apphost 找不到运行时时会直接弹 ".NET not found"
+$dotnetRoot = Join-Path $root '.dotnet'
+if (Test-Path $dotnetRoot) { $env:DOTNET_ROOT = $dotnetRoot }
 
 $logDir = Join-Path $bin 'logs'
 if (Test-Path $logDir) { Remove-Item (Join-Path $logDir '*.log') -Force -ErrorAction SilentlyContinue }
@@ -34,9 +44,21 @@ public static class Fm {
 }
 '@
 
-# 找到 Dock 窗口矩形（AppBar 贴底，取屏幕底部中央一条）逐点横扫，触发连续放大
+# 找到 Dock 窗口矩形：从日志里取 AppBar SETPOS 的真实条带矩形（任务栏可见时条带在任务栏之上，
+# 不能按"屏幕底部 -40"猜——那会落在任务栏里，光标根本进不了 Dock，放大动画不启动）。
 $b = [System.Windows.Forms.Screen]::PrimaryScreen.Bounds
-$y = $b.Bottom - 40
+$stripTop = $b.Bottom - 100; $stripBottom = $b.Bottom - 6
+$logFile = Get-ChildItem $logDir -Filter '*.log' -ErrorAction SilentlyContinue | Select-Object -First 1
+if ($logFile) {
+  $m = Select-String -Path $logFile.FullName -Pattern 'AppBar SETPOS rc=\((-?\d+),(-?\d+)\)\-\((-?\d+),(-?\d+)\)' -AllMatches
+  $mm = @($m | ForEach-Object { $_.Matches })
+  if ($mm.Count -gt 0) {
+    $g = $mm[-1].Groups
+    $stripTop = [int]$g[2].Value; $stripBottom = [int]$g[4].Value
+    Write-Output "DOCK_STRIP rc=($($g[1].Value),$($g[2].Value))-($($g[3].Value),$($g[4].Value))"
+  }
+}
+$y = [int](($stripTop + $stripBottom) / 2)
 $steps = 60
 for ($i = 0; $i -lt $steps; $i++) {
   $x = [int]($b.Width * 0.30 + ($b.Width * 0.40) * ($i / $steps))
