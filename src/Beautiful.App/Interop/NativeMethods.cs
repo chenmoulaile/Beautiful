@@ -73,6 +73,20 @@ internal static partial class NativeMethods
     [DllImport("shell32.dll")]
     public static extern IntPtr SHAppBarMessage(uint dwMessage, ref APPBARDATA pData);
 
+    /// <summary>ABM_GETSTATE：读当前 AppBar（任务栏）状态位（ABS_AUTOHIDE=1 / ABS_ALWAYSONTOP=2）。hWnd 置空取全局值。</summary>
+    public static int GetAppBarState()
+    {
+        var abd = new APPBARDATA { cbSize = (uint)Marshal.SizeOf<APPBARDATA>() };
+        return SHAppBarMessage(AbmGetState, ref abd).ToInt32();
+    }
+
+    /// <summary>ABM_SETSTATE：写 AppBar 状态位（TaskbarManager 用它开/关自动隐藏以释放/归还底部条带）。返回 TRUE=1。</summary>
+    public static int SetAppBarState(int state)
+    {
+        var abd = new APPBARDATA { cbSize = (uint)Marshal.SizeOf<APPBARDATA>(), lParam = state };
+        return SHAppBarMessage(AbmSetState, ref abd).ToInt32();
+    }
+
     // ---------- 窗口与消息 ----------
     public const int WmDisplayChange = 0x007E;
     public const int WmSettingChange = 0x001A;

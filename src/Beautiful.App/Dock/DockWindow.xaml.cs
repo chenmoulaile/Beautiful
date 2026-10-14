@@ -75,7 +75,7 @@ public partial class DockWindow : AcrylicWindow
         WireSurface();
         ThemeManager.ThemeChanged += OnThemeChanged;
         // 任务栏策略切换/explorer 重启重放（TaskbarManager.Apply/Restore → PolicyApplied）后，
-        // AppBar 条带需重新协商：任务栏真被移出屏幕 → Dock 贴底；还原/保留 → 让位于任务栏上方。
+        // AppBar 条带需重新协商：Hide 释放了底部条带预留 → Dock 贴真底；Keep → 让位在任务栏上方。
         if (_taskbar is not null) _taskbar.PolicyApplied += OnTaskbarPolicyApplied;
         // 初始主题：设置项驱动（settings.json 的 Theme，缺省鸿蒙；设置窗口切换即持久化）
         ThemeManager.Apply(SettingsService.ThemeDefinitionOf(SettingsService.Current), Application.Current);
@@ -196,9 +196,9 @@ public partial class DockWindow : AcrylicWindow
     }
 
     /// <summary>
-    /// Hide 策略下 AppBar 注册/重注册会引发 shell 重布局，Win11 可能把任务栏摆回屏幕内：
-    /// T+0.8s / T+3s 各重申一次隐藏并重新协商条带（任务栏真正移出后 Dock 才能贴底）。
-    /// 非 Hide 策略 Reassert 为 no-op，不调度。
+    /// Hide 策略下 AppBar 注册/重注册会引发 shell 重布局，Win11 可能把任务栏摆回屏幕内、甚至把
+    /// autohide 状态位改回去（= 重新占用底部条带）：T+0.8s / T+3s 各重申一次（重释放条带 + 移出窗口）
+    /// 并重新协商条带位置。非 Hide 策略 Reassert 为 no-op，不调度。
     /// </summary>
     private void ScheduleHideSettle()
     {
@@ -236,7 +236,15 @@ public partial class DockWindow : AcrylicWindow
         _appbarRegistered = false;
     }
 
-    /// <summary>ABE_BOTTOM 全宽条带：QUERYPOS → 修正高度 → SETPOS → SetWindowPos，并同步 WPF 侧 DIP 布局属性。</summary>
+    /// <summary>
+    /// ABE_BOTTOM 全宽条带：QUERYPOS → 修正高度 → SETPOS → SetWindowPos，并同步 WPF 侧 DIP 布局属性。
+    /// <para>
+    /// 底边以 <b>shell 给的可用底边</b> 为准（<c>rc.Top = rc.Bottom - stripH</c>）：任务栏策略为 Keep/AutoHide
+    /// 时那是任务栏上沿（Dock 悬在其上方，符合预期）；Hide 策略下 <see cref="TaskbarManager"/> 已用
+    /// ABM_SETSTATE(ABS_AUTOHIDE) 释放掉任务栏的条带预留，QUERYPOS 返回的 bottom 就是**真屏幕底边**，
+    /// 于是条带 = [0, screenH-stripH]-[screenW, screenH]，Dock 无缝贴底（实测 gap 48px → 0px，Task 7）。
+    /// </para>
+    /// </summary>
     private void PositionAsAppBar()
     {
         if (!_appbarRegistered) return;
@@ -251,9 +259,18 @@ public partial class DockWindow : AcrylicWindow
         _abd.uEdge = NativeMethods.AbeBottom;
         _abd.rc = new NativeMethods.RECT { Left = 0, Top = screenH - stripH, Right = screenW, Bottom = screenH };
         NativeMethods.SHAppBarMessage(NativeMethods.AbmQueryPos, ref _abd);
-        _abd.rc.Top = _abd.rc.Bottom - stripH;            // 修正：底边让位既有 AppBar/任务栏，高度以期望为准
+        var availableBottom = _abd.rc.Bottom;             // shell 允许我们占到的底边（= 既有 AppBar 的上沿）
+        _abd.rc.Top = availableBottom - stripH;           // 修正：底边让位既有 AppBar/任务栏，高度以期望为准
         NativeMethods.SHAppBarMessage(NativeMethods.AbmSetPos, ref _abd);
-        Logger.Info($"AppBar SETPOS rc=({_abd.rc.Left},{_abd.rc.Top})-({_abd.rc.Right},{_abd.rc.Bottom})");
+        // 贴底判据（Task 7 实测口径，日志即证据）：availableBottom == screenH ⇔ 任务栏条带预留已释放 ⇔ Dock 真贴底；
+        // 未释放（Keep / 释放失败）时 availableBottom = 任务栏上沿，Dock 让位在其上方，此时"间隙"即用户看到的空档。
+        var gap = screenH - availableBottom;
+        var expect = $"(0,{availableBottom - stripH})-({screenW},{availableBottom})";
+        var actual = $"({_abd.rc.Left},{_abd.rc.Top})-({_abd.rc.Right},{_abd.rc.Bottom})";
+        Logger.Info($"AppBar QUERYPOS 可用底边={availableBottom}/screenH={screenH}" +
+                    $" {(gap == 0 ? "→ 真屏幕底边（间隙 0px，条带预留已释放）" : $"→ 任务栏仍占 {gap}px")}" +
+                    $"（策略={_taskbar?.Current.ToString() ?? "N/A"}）SETPOS rc={actual} 期望={expect}" +
+                    $" {(actual == expect ? "一致" : "不一致")}");
         NativeMethods.SetWindowPos(_hwnd, IntPtr.Zero,
             _abd.rc.Left, _abd.rc.Top,
             _abd.rc.Right - _abd.rc.Left, _abd.rc.Bottom - _abd.rc.Top,
