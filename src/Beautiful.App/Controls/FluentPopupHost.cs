@@ -6,8 +6,11 @@ using System.Windows.Media;
 using System.Windows.Media.Animation;
 using System.Windows.Threading;
 using Beautiful.App.Interop;
+using Beautiful.App.Services;
+using Beautiful.App.Themes;
 using static Beautiful.App.Interop.NativeMethods;
 using Brushes = System.Windows.Media.Brushes; // UseWindowsForms 隐式全局 using 与 System.Drawing.Brushes 冲突
+using Color = System.Windows.Media.Color;     // 同上，System.Drawing.Color
 using Point = System.Windows.Point; // UseWindowsForms 隐式全局 using 与 System.Drawing.Point 冲突
 using Size = System.Windows.Size; // 同上，System.Drawing.Size
 
@@ -16,6 +19,15 @@ namespace Beautiful.App.Controls;
 /// <summary>
 /// 无边框高级弹层宿主：Topmost、不进任务栏、<c>ShowActivated=true</c> + <c>Focusable=true</c>
 /// （评审 Important#3：菜单须键盘可达 → 采用"激活式弹层"模型：窗口显示即夺取前台激活与键盘焦点）。
+/// <para>
+/// 【Task 4：真背板形态】主题启用模糊时窗口为 <c>AllowsTransparency=false</c> 的普通（非分层）窗口，
+/// 由 <see cref="Services.SystemBackdrop"/> 铺 "sheet of glass" + <c>DWMWA_SYSTEMBACKDROP_TYPE=2(Acrylic)</c>
+/// 取 Windows 11 真系统背板，圆角由 <c>DWMWA_WINDOW_CORNER_PREFERENCE=ROUND</c> 原生裁切。
+/// 因此内容必须铺满整个窗口矩形（不再有逐像素透明的外圈留白与自绘 DropShadow），入场淡入也改为动画
+/// <c>Content.Opacity</c>——<see cref="Window.Opacity"/> 会把窗口变成分层窗口（WS_EX_LAYERED），而分层
+/// 窗口与系统背板互斥（DWM 不在其后合成背板 → 黑卡）。主题禁用模糊（Linux）时才退回分层窗口 +
+/// 自绘圆角/投影形态（该分支没有背板可牺牲，逐像素 alpha 才有意义）。
+/// </para>
 /// <para>
 /// 关闭策略【Deactivated→Close 为主，光标探测看门狗为辅】：激活式窗口显示后即为前台，失去激活
 /// （点别处/Esc/选叶子）即关链——这与 v1"秒自杀"无关（v1 的病根是把 Deactivated→Close 与
@@ -45,6 +57,10 @@ public class FluentPopupHost : Window
     private DispatcherTimer? _watchdog;
     private int _outsideTicks;
     private bool _flipX, _flipY; // 最近一次收敛落位是否左/上翻转（入场动画方向用）
+    private BackdropPath _backdrop = BackdropPath.None;
+
+    /// <summary>本次显示胜出的背板路径（QA 与内容侧底色协商用；未初始化时为 <see cref="BackdropPath.None"/>）。</summary>
+    public BackdropPath Backdrop => _backdrop;
 
     /// <summary>暂停自动关闭（拖拽选择、模态确认等场景可临时置 true 抑制"光标离开即关"）。</summary>
     public bool KeepOpen { get; set; }
@@ -63,13 +79,14 @@ public class FluentPopupHost : Window
     {
         WindowStyle = WindowStyle.None;
         ResizeMode = ResizeMode.NoResize;
-        AllowsTransparency = true;           // 逐像素 alpha：圆角轮廓 + 投影。
-        // 【Task 4 约束】AllowsTransparency=true 会强制窗口成为分层窗口（WS_EX_LAYERED），而分层窗口
-        // 与 DWMWA_SYSTEMBACKDROP_TYPE 真毛玻璃互斥（背板不生效）。Task 4 弹层现代化（SwitcherWindow/
-        // LauncherWindow/日历等浮层）必须改 AllowsTransparency=false + DwmExtendFrameIntoClientArea(-1)
-        // + DWMWA_SYSTEMBACKDROP_TYPE + DWMWA_WINDOW_CORNER_PREFERENCE 取原生圆角——届时本类的逐像素
-        // alpha 圆角/投影路径整体退场，勿在此模型上叠加 DWM 背板。
-        Background = Brushes.Transparent;
+        // 【Task 4 形态选择】分层窗口（AllowsTransparency=true，WPF 唯一逐像素透明模式）与
+        // DWMWA_SYSTEMBACKDROP_TYPE 真背板互斥：DWM 拒绝在分层窗口的重定向表面后合成背板
+        // （属性写入返回 S_OK 却什么都不画 → 黑卡）。所以启用模糊的主题一律走非分层 +
+        // DwmExtendFrameIntoClientArea(-1) + 背板 + DWMWA_WINDOW_CORNER_PREFERENCE=ROUND（原生圆角），
+        // 内容铺满整个窗口矩形；只有"主题明确禁模糊"（Linux 实底）才保留逐像素 alpha 的自绘圆角/投影。
+        // 每次显示都新建宿主 → 构造期读当前主题即成立（改主题必然伴随菜单关闭重建）。
+        AllowsTransparency = !ThemeManager.Current.BlurEnabled;
+        Background = Brushes.Transparent; // 有背板 → 透出系统模糊；无背板 → 由内容自铺底（见 ApplySystemBackdrop）
         ShowInTaskbar = false;
         Topmost = true;
         Focusable = true;                    // 激活式弹层：可获焦 → 支持键盘导航（评审 Important#3）
@@ -89,6 +106,32 @@ public class FluentPopupHost : Window
         var hwnd = new WindowInteropHelper(this).Handle;
         var ex = GetWindowLongPtr(hwnd, GwlpExStyle);
         SetWindowLongPtr(hwnd, GwlpExStyle, ex | WsExToolwindow);
+
+        ApplySystemBackdrop();
+    }
+
+    /// <summary>
+    /// 取 Win11 系统背板（38 → 1029 → 旧亚克力三级降级，见 <see cref="SystemBackdrop"/>），并把胜出的路径
+    /// 告知内容（<see cref="IBackdropAware"/>）：只有真有模糊的路径内容才可用半透明底让背板透出；
+    /// 三档全失败时窗口自铺不透明底——非分层窗口没有逐像素 alpha，半透明只会露出黑色空洞，
+    /// 这条约束正是"降级路径不得悄悄画出黑卡"的落地点。
+    /// </summary>
+    private void ApplySystemBackdrop()
+    {
+        var theme = ThemeManager.Current;
+        var tint = Color.FromArgb(theme.AcrylicTint.A, theme.AcrylicTint.R,
+                                  theme.AcrylicTint.G, theme.AcrylicTint.B);
+        _backdrop = SystemBackdrop.Apply(this, tint,
+            theme.BlurEnabled ? BackdropKind.Acrylic : BackdropKind.None);
+
+        var hasBlur = _backdrop is BackdropPath.SystemBackdrop or BackdropPath.MicaLegacy
+                                        or BackdropPath.CompositionAccent;
+        if (!hasBlur && !AllowsTransparency)
+            Background = new SolidColorBrush(Color.FromArgb(0xFF, tint.R, tint.G, tint.B)); // 兜底：不留黑区
+        else
+            Background = Brushes.Transparent;
+
+        (Content as IBackdropAware)?.OnBackdropApplied(_backdrop);
     }
 
     /// <summary>
@@ -130,7 +173,9 @@ public class FluentPopupHost : Window
         if (y + hPx > work.Bottom - EdgeInset) { y = flip.Y - hPx; _flipY = true; } // 底边收拢到 flip 锚点
         if (y < work.Top + EdgeInset) y = work.Top + EdgeInset;
 
-        Opacity = 0; // 首帧即透明，杜绝任何潜在跳动
+        // 首帧即透明，杜绝任何潜在跳动。淡入只动画内容不动画窗口：Window.Opacity 会把窗口置为
+        // 分层窗口（WS_EX_LAYERED），系统背板随即停止合成 → 淡入结束会出现"由模糊变黑卡"的抖动。
+        if (Content is UIElement rootForFade) rootForFade.Opacity = 0;
         Show();
         // Show 后 WPF 可能按默认位置落一次（Left/Top 未设），以测量位置强制覆盖
         var ix = (int)Math.Round(x);
@@ -233,18 +278,20 @@ public class FluentPopupHost : Window
         // 位移方向：翻转即"从锚点那侧滑回"——托盘弹层自下而上，子菜单自左向右滑出
         var tt = new TranslateTransform(_flipX ? 6 * dpiScale : -6 * dpiScale,
                                         _flipY ? 10 * dpiScale : -10 * dpiScale);
-        if (Content is UIElement content) content.RenderTransform = tt;
+        if (Content is UIElement content)
+        {
+            content.RenderTransform = tt;
+            content.Opacity = 0; // 淡入动画内容（不可动画窗口，见 ShowAtPhysical 注释：会破坏背板合成）
+        }
 
         var ease = new CubicEase { EasingMode = EasingMode.EaseOut };
-        var slide = new Storyboard();
         var xAnim = new DoubleAnimation(tt.X, 0, TimeSpan.FromMilliseconds(120)) { EasingFunction = ease };
         var yAnim = new DoubleAnimation(tt.Y, 0, TimeSpan.FromMilliseconds(120)) { EasingFunction = ease };
         tt.BeginAnimation(TranslateTransform.XProperty, xAnim);
         tt.BeginAnimation(TranslateTransform.YProperty, yAnim);
-        BeginAnimation(OpacityProperty, new DoubleAnimation(0, 1, TimeSpan.FromMilliseconds(120))
-        {
-            EasingFunction = ease
-        });
+        if (Content is UIElement fadeTarget)
+            fadeTarget.BeginAnimation(UIElement.OpacityProperty,
+                new DoubleAnimation(0, 1, TimeSpan.FromMilliseconds(120)) { EasingFunction = ease });
     }
 
     protected override void OnClosed(EventArgs e)

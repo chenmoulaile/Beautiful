@@ -6,11 +6,14 @@ using System.Windows.Controls;
 using System.Windows.Input;
 using System.Windows.Media;
 using System.Windows.Threading;
+using Beautiful.App.Services;
 // UseWindowsForms 隐式全局 using 引入 WinForms 同名类型，此处定向消歧：
 using KeyEventArgs = System.Windows.Input.KeyEventArgs;
 using MouseEventArgs = System.Windows.Input.MouseEventArgs;
 using Point = System.Windows.Point;
 using UserControl = System.Windows.Controls.UserControl;
+using Brush = System.Windows.Media.Brush;          // 同上，System.Drawing.Brush
+using Effect = System.Windows.Media.Effects.Effect; // WPF 特效在 .Effects 子命名空间，显式别名避免再引 whole using
 
 namespace Beautiful.App.Controls;
 
@@ -31,10 +34,11 @@ namespace Beautiful.App.Controls;
 /// 优先级派发回调（退出/开窗动作不与弹层拆除打架，也无焦点劫持）。
 /// </para>
 /// </summary>
-public partial class FluentMenu : UserControl
+public partial class FluentMenu : UserControl, IBackdropAware
 {
     private const int SubmenuDwellMs = 140; // 悬停父项多久滑出子菜单
     private const int SubmenuDecayMs = 260; // 移开到普通项后子菜单延迟关闭（防横扫闪烁）
+    private static readonly Thickness SelfDrawnMargin = new(20, 18, 20, 24); // 自绘形态的投影留位
 
     private static FluentPopupHost? _openRootHost;
 
@@ -86,6 +90,33 @@ public partial class FluentMenu : UserControl
 
     /// <summary>关闭当前显示的菜单链（应用退出/重开时调用，防弹层残留）。</summary>
     public static void CloseCurrent() => _openRootHost?.Close();
+
+    internal static FluentPopupHost? CurrentHostForDebug => _openRootHost; // TEMP(T4 诊断)
+
+    // ---------- 背板协商（Task 4：FluentPopupHost 落地系统背板后回调） ----------
+
+    /// <summary>
+    /// 依宿主实际形态与背板结果切换两套视觉：
+    /// <list type="bullet">
+    /// <item>几何：宿主为分层窗口（主题禁模糊）时才允许逐像素透明的外圈留白 + 自绘圆角/投影；
+    /// 宿主非分层（走 DWM 背板）时窗口矩形即卡片，必须铺满、圆角/阴影交还给 DWM
+    /// （<c>DWMWA_WINDOW_CORNER_PREFERENCE=ROUND</c>），否则四角只剩方形背板溢出，描边也会与裁切打架。</item>
+    /// <item>底色：只有真有模糊的路径（系统背板 / 未公开 Mica / 旧亚克力）才用半透明卡底让背板透出；
+    /// 降级到底（无模糊）时实底自铺，保证文字可读、绝不露黑。</item>
+    /// </list>
+    /// </summary>
+    public void OnBackdropApplied(BackdropPath path)
+    {
+        var hasBlur = path is BackdropPath.SystemBackdrop or BackdropPath.MicaLegacy
+                                        or BackdropPath.CompositionAccent;
+        var selfDrawn = _host?.AllowsTransparency ?? true; // 分层宿主 → 自绘圆角/投影形态
+
+        Card.Background = (Brush)Resources[hasBlur ? "CardFillBlur" : "CardFillSolid"];
+        Shell.Margin = selfDrawn ? SelfDrawnMargin : new Thickness(0);
+        Card.CornerRadius = selfDrawn ? new CornerRadius(10) : new CornerRadius(0);
+        InnerGlow.CornerRadius = selfDrawn ? new CornerRadius(9) : new CornerRadius(0);
+        Card.Effect = selfDrawn ? (Effect)Resources["CardShadow"] : null;
+    }
 
     // ---------- 输入接线（激活式弹层：Window 级 PreviewKeyDown 隧道取键，Deactivated 链感知关闭） ----------
 

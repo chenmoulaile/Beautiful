@@ -5,6 +5,7 @@ using System.Windows.Threading;
 using Beautiful.App.Services;
 using Beautiful.App.Themes;
 using Color = System.Windows.Media.Color;
+using Brush = System.Windows.Media.Brush; // UseWindowsForms 隐式全局 using 与 System.Drawing.Brush 冲突
 
 namespace Beautiful.App.MediaWidget;
 
@@ -21,6 +22,11 @@ public partial class MediaPanel
 
     public MediaPanel(MediaViewModel vm)
     {
+        // 【Task 4 形态选择】面板内容铺满整个窗口（无逐像素透明留白）→ 启用模糊的主题一律走
+        // "非分层 + Win11 系统背板"（真模糊 + DWM 原生圆角）；只有主题禁模糊才保留分层自绘圆角。
+        // 必须在 InitializeComponent 之前设定：AllowsTransparency 在窗口源初始化后不可再改，
+        // 而它与 DWMWA_SYSTEMBACKDROP_TYPE 互斥（分层窗口上背板静默不画 → 黑卡）。
+        AllowsTransparency = !ThemeManager.Current.BlurEnabled;
         InitializeComponent();
         _vm = vm;
         DataContext = vm;
@@ -76,13 +82,31 @@ public partial class MediaPanel
                 LyricsList.ScrollIntoView(_vm.Lyrics[_vm.CurrentLyricIndex]);
         }));
 
+    /// <summary>
+    /// 面板按需创建 → 按当前主题落地背板：启用模糊走 Win11 系统背板（38 → 1029 → 旧亚克力三级降级，
+    /// 见 <see cref="SystemBackdrop"/>），禁模糊（Linux）走分层窗口自绘圆角。胜出的路径决定底色：
+    /// 真模糊 → 半透明透出背板；无模糊 → 自铺底，非分层形态还须把窗口底铺成不透明（无逐像素 alpha，
+    /// 半透明只会露黑）。
+    /// </summary>
     protected override void OnSourceInitialized(EventArgs e)
     {
         base.OnSourceInitialized(e);
-        var theme = ThemeManager.Current; // 面板按需创建：按当前主题套亚克力
-        if (theme.BlurEnabled)
-            ApplyAcrylic(Color.FromArgb(theme.AcrylicTint.A, theme.AcrylicTint.R, theme.AcrylicTint.G, theme.AcrylicTint.B));
+        var theme = ThemeManager.Current;
+        var tint = Color.FromArgb(theme.AcrylicTint.A, theme.AcrylicTint.R,
+                                  theme.AcrylicTint.G, theme.AcrylicTint.B);
+        var path = ApplyBackdrop(tint, theme.BlurEnabled ? BackdropKind.Acrylic : BackdropKind.None);
+        var hasBlur = path is BackdropPath.SystemBackdrop or BackdropPath.MicaLegacy
+                                        or BackdropPath.CompositionAccent;
+
+        PanelRoot.Background = (Brush)Resources[hasBlur ? "PanelFillBlur" : "PanelFillSolid"];
+        if (AllowsTransparency)
+        {
+            PanelRoot.CornerRadius = new CornerRadius(20); // 分层窗口：逐像素 alpha 自绘圆角
+        }
         else
-            DisableAcrylic();
+        {
+            PanelRoot.CornerRadius = new CornerRadius(0);  // 背板窗口：圆角由 DWM 裁切，卡必须铺满
+            if (!hasBlur) Background = (Brush)Resources["PanelFillOpaque"]; // 兜底：不留黑区
+        }
     }
 }

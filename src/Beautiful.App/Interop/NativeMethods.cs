@@ -184,6 +184,35 @@ internal static partial class NativeMethods
     [DllImport("dwmapi.dll")]
     public static extern int DwmGetWindowAttribute(IntPtr hwnd, int attr, out int value, int size);
 
+    // ---------- DWM 系统背板（Win11 Mica / Acrylic）----------
+    // DWMWA_SYSTEMBACKDROP_TYPE(38) 需 22H2+：0=AUTO 1=NONE 2=ACRYLIC 3=MICA 4=TABBED。
+    // 22H2 起该属性在 21H2/21H1 上返回 E_INVALIDARG → 退未公开 DWMWA_MICA_EFFECT(1029)（BOOL，
+    // 传 4 字节 int 1 等价，避免 bool 封送宽度歧义）→ 再退 Win10 旧 SetWindowCompositionAttribute。
+    // 关键限制：背板只合成到"非分层"窗口（WS_EX_LAYERED 即 WPF AllowsTransparency=true 的唯一透明
+    // 模式）的重定向表面上——分层窗口请求会被接受但什么都不画 → 用背板的窗口必须 AllowsTransparency=false，
+    // 圆角改由 DWMWA_WINDOW_CORNER_PREFERENCE 提供，边框由 DwmExtendFrameIntoClientArea(-1) 铺满玻璃层。
+    public const int DwmwaSystemBackdropType = 38;
+    public const int DwmwaMicaEffect = 1029;
+    // DWMWA_WINDOW_CORNER_PREFERENCE(33)：0=DEFAULT(跟随系统) 1=DONOTROUND 2=ROUND(系统圆角) 3=SMALLROUND
+    public const int DwmwaWindowCornerPreference = 33;
+    public const int DwmwaUseImmersiveDarkMode = 20; // 深色标题栏（本项目窗口均无边框，留作后续顶栏/设置窗用）
+
+    public const int DwmsbtAuto = 0, DwmsbtNone = 1, DwmsbtAcrylic = 2, DwmsbtMica = 3, DwmsbtTabbed = 4;
+    public const int DwmwcpDefault = 0, DwmwcpDoNotRound = 1, DwmwcpRound = 2, DwmwcpSmallRound = 3;
+
+    /// <summary>MARGINS：四边 -1 = 把 DWM 玻璃层铺满整个客户区（Aero 时代 "sheet of glass"，背板的载体）。</summary>
+    [StructLayout(LayoutKind.Sequential)]
+    public struct MARGINS
+    {
+        public int LeftWidth, RightWidth, TopHeight, BottomHeight;
+    }
+
+    [DllImport("dwmapi.dll")]
+    public static extern int DwmSetWindowAttribute(IntPtr hwnd, int attr, ref int pvAttribute, int cbAttribute);
+
+    [DllImport("dwmapi.dll")]
+    public static extern int DwmExtendFrameIntoClientArea(IntPtr hwnd, ref MARGINS pMarInset);
+
     // ---------- 进程路径 ----------
     public const uint ProcessQueryLimitedInformation = 0x1000;
 

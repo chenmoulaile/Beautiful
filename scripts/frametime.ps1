@@ -1,0 +1,72 @@
+# 采样 Beautiful Dock 的动画帧间隔，客观判定放大动画是否丝滑。
+# 原理：Beautiful 在 CompositionTarget.Rendering 循环里每帧写一行日志（BEAUTIFUL_FRAME <tick>）。
+#      本脚本启动 app、用鼠标横扫 Dock 触发放大动画，再从日志里解析帧间隔分布。
+# 用法: powershell -NoProfile -ExecutionPolicy Bypass -File scripts/frametime.ps1
+$ErrorActionPreference = 'Stop'
+$root = Split-Path -Parent $PSScriptRoot
+$bin  = Join-Path $root 'src\Beautiful.App\bin\Debug\net8.0-windows10.0.19041.0'
+$exe  = Join-Path $bin 'Beautiful.exe'
+if (-not (Test-Path $exe)) { Write-Output "EXE_NOT_FOUND: 先跑 dotnet build"; exit 1 }
+
+# 保证任务栏可见，便于把光标移到 Dock 上（hide 策略下 Dock 位置一致，仅影响托盘可达性）
+$cfgDir = Join-Path $bin 'config'
+New-Item -ItemType Directory -Force -Path $cfgDir | Out-Null
+$cfg = Get-Content (Join-Path $cfgDir 'settings.json') -Raw -ErrorAction SilentlyContinue
+if (-not $cfg) { $cfg = '{}' }
+$cfg = $cfg -replace '"TaskbarPolicy":"[^"]*"', '"TaskbarPolicy":"keep"'
+if ($cfg -notmatch '"TaskbarPolicy"') { $cfg = $cfg.TrimEnd('}') + ',"TaskbarPolicy":"keep"}' }
+Set-Content -Path (Join-Path $cfgDir 'settings.json') -Value $cfg -NoNewline -Encoding UTF8
+
+$logDir = Join-Path $bin 'logs'
+if (Test-Path $logDir) { Remove-Item (Join-Path $logDir '*.log') -Force -ErrorAction SilentlyContinue }
+
+Start-Process -FilePath $exe -WorkingDirectory $bin
+Start-Sleep -Seconds 8
+
+Add-Type -AssemblyName System.Windows.Forms
+Add-Type -TypeDefinition @'
+using System;
+using System.Runtime.InteropServices;
+public static class Fm {
+  [DllImport("user32.dll")] public static extern bool SetCursorPos(int x, int y);
+  [DllImport("user32.dll")] public static extern bool GetCursorPos(out P p);
+  public struct P { public int X; public int Y; }
+}
+'@
+
+# 找到 Dock 窗口矩形（AppBar 贴底，取屏幕底部中央一条）逐点横扫，触发连续放大
+$b = [System.Windows.Forms.Screen]::PrimaryScreen.Bounds
+$y = $b.Bottom - 40
+$steps = 60
+for ($i = 0; $i -lt $steps; $i++) {
+  $x = [int]($b.Width * 0.30 + ($b.Width * 0.40) * ($i / $steps))
+  [void][Fm]::SetCursorPos($x, $y)
+  Start-Sleep -Milliseconds 40
+}
+Start-Sleep -Milliseconds 600
+
+Stop-Process -Name Beautiful -Force -ErrorAction SilentlyContinue
+Start-Sleep -Milliseconds 800
+
+$frames = @()
+if (Test-Path $logDir) {
+  Get-ChildItem $logDir -Filter '*.log' | ForEach-Object {
+    Select-String -Path $_.FullName -Pattern 'BEAUTIFUL_FRAME (\d+)' -AllMatches | ForEach-Object {
+      foreach ($m in $_.Matches) { $frames += [double]$m.Groups[1].Value }
+    }
+  }
+}
+if ($frames.Count -lt 5) {
+  Write-Output "NO_FRAME_LOGS (found $($frames.Count)) — app 需按 Task 6 约定每帧写 BEAUTIFUL_FRAME <Stopwatch.GetTimestamp()>"
+  exit 2
+}
+$deltas = @()
+for ($i = 1; $i -lt $frames.Count; $i++) {
+  $d = ($frames[$i] - $frames[$i-1]) * 1000.0 / [System.Diagnostics.Stopwatch]::Frequency
+  if ($d -gt 0 -and $d -lt 500) { $deltas += $d }
+}
+$s = $deltas | Sort-Object
+$avg = ($deltas | Measure-Object -Average).Average
+Write-Output ("FRAMES={0} AVG_MS={1:N2} P50={2:N2} P95={3:N2} MAX={4:N2}" -f `
+  $deltas.Count, $avg, $s[[int]($s.Count*0.50)], $s[[int]($s.Count*0.95)], $s[-1])
+Write-Output "判据：P95 < 20ms 且 MAX < 34ms 视为丝滑（60fps vsync）；MAX > 50ms 视为可感知卡顿"

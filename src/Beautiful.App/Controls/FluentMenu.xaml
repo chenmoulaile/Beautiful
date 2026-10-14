@@ -7,28 +7,37 @@
              FontFamily="Segoe UI Variable Text, Segoe UI Variable, Segoe UI">
 
     <!-- 自绘菜单，视觉对标 macOS；无第三方代码。
-         结构：外圈 Margin 为投影留位；Card=10px 圆角深色半透明卡（顶部亮渐变+1px 发丝描边）；
+         两种形态（由 FluentPopupHost 在背板落地后经 IBackdropAware 通知切换）：
+         ① 系统背板形态（Win11 真模糊，宿主非分层）：卡铺满整个窗口，圆角/投影由 DWM 负责
+            （DWMWA_WINDOW_CORNER_PREFERENCE），卡底半透明让模糊透出——这才是"高级感"的来源；
+         ② 自绘形态（主题禁模糊 → 宿主仍是分层窗口）：外圈 Margin 为投影留位，卡自绘 10px 圆角 +
+            DropShadow + 实底（逐像素 alpha 才允许透明留白，见 FluentPopupHost 的互斥说明）。
          行模板：勾选列 | 图标列 | 标签 | ▸ 箭头列，悬停 60ms 圆角高亮滑入（缩放+淡入）。
-         渲染语言不随主题明暗：菜单恒为深色毛玻璃卡 + 近白文字（主题 token 仅取强调色/字体）。 -->
-    <Grid Margin="20,18,20,24">
-        <Border x:Name="Card" CornerRadius="10" BorderThickness="1" BorderBrush="#2AFFFFFF" MinWidth="230">
-            <Border.Background>
-                <LinearGradientBrush StartPoint="0,0" EndPoint="0,1">
-                    <GradientStop Color="#F82C2C2F" Offset="0"/>
-                    <GradientStop Color="#FB1F1F23" Offset="1"/>
-                </LinearGradientBrush>
-            </Border.Background>
-            <Border.Effect>
-                <DropShadowEffect BlurRadius="32" ShadowDepth="9" Direction="270"
-                                  Color="#000000" Opacity="0.6"/>
-            </Border.Effect>
+         渲染语言不随主题明暗：菜单恒为深色玻璃卡 + 近白文字（主题 token 仅取强调色/字体）。 -->
+    <UserControl.Resources>
+        <!-- 卡底：真背板可用时用半透明（背板模糊成为质感底层），否则自铺实底（绝不露黑） -->
+        <LinearGradientBrush x:Key="CardFillBlur" StartPoint="0,0" EndPoint="0,1">
+            <GradientStop Color="#8A232327" Offset="0"/>
+            <GradientStop Color="#9919191C" Offset="1"/>
+        </LinearGradientBrush>
+        <LinearGradientBrush x:Key="CardFillSolid" StartPoint="0,0" EndPoint="0,1">
+            <GradientStop Color="#F82C2C2F" Offset="0"/>
+            <GradientStop Color="#FB1F1F23" Offset="1"/>
+        </LinearGradientBrush>
+        <!-- 仅自绘形态使用的投影（背板形态下窗口边即卡边，画不出窗外阴影，DWM 自带窗口阴影） -->
+        <DropShadowEffect x:Key="CardShadow" BlurRadius="32" ShadowDepth="9" Direction="270"
+                          Color="#000000" Opacity="0.6"/>
+    </UserControl.Resources>
+    <Grid x:Name="Shell" Margin="0">
+        <Border x:Name="Card" CornerRadius="0" BorderThickness="1" BorderBrush="#2AFFFFFF" MinWidth="230"
+                Background="{StaticResource CardFillBlur}">
             <Grid>
                 <!-- 顶部内高光：macOS 玻璃感的"light top edge" -->
-                <Border CornerRadius="9" IsHitTestVisible="False">
+                <Border x:Name="InnerGlow" CornerRadius="0" IsHitTestVisible="False">
                     <Border.Background>
                         <LinearGradientBrush StartPoint="0,0" EndPoint="0,1">
-                            <GradientStop Color="#0DFFFFFF" Offset="0"/>
-                            <GradientStop Color="#03FFFFFF" Offset="0.35"/>
+                            <GradientStop Color="#14FFFFFF" Offset="0"/>
+                            <GradientStop Color="#05FFFFFF" Offset="0.35"/>
                             <GradientStop Color="#00FFFFFF" Offset="1"/>
                         </LinearGradientBrush>
                     </Border.Background>

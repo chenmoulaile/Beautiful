@@ -6,12 +6,28 @@
         Width="420" Height="520"
         Topmost="True"
         ShowActivated="True"
-        Background="{x:Null}"
+        Background="Transparent"
         WindowStartupLocation="Manual">
 
-    <!-- 歌词展开面板（实况窗大窗）：独立亚克力窗，胶囊上方居中（定位由 DockWindow 计算）。
-         失焦自动 Hide（Deactivated → code-behind，本任务硬编码；开关归 Task 16 设置）。 -->
+    <!-- 歌词展开面板（实况窗大窗）：胶囊上方居中（定位由 DockWindow 计算）。
+         失焦自动 Hide（Deactivated → code-behind，开关 = HidePanelOnDeactivate 设置项）。
+         【Task 4】面板内容本就铺满整个窗口（无透明留白，圆角只是自绘外观）→ 按 controller 裁定
+         转为"非分层窗口 + Win11 系统背板"：真模糊透出，圆角交 DWM 裁切；主题禁模糊（Linux）时
+         退回分层窗口 + 自绘 20px 圆角实底形态（逐像素 alpha 在该分支没有背板可牺牲）。 -->
     <services:AcrylicWindow.Resources>
+        <!-- 面板底：真背板可用时半透明（让系统模糊透出），否则实底；实底恒为不透明，兜底不露黑 -->
+        <LinearGradientBrush x:Key="PanelFillBlur" StartPoint="0,0" EndPoint="0,1">
+            <GradientStop Color="#8C1C1C1E" Offset="0"/>
+            <GradientStop Color="#99171719" Offset="1"/>
+        </LinearGradientBrush>
+        <LinearGradientBrush x:Key="PanelFillSolid" StartPoint="0,0" EndPoint="0,1">
+            <GradientStop Color="#C81C1C1E" Offset="0"/>
+            <GradientStop Color="#D5171719" Offset="1"/>
+        </LinearGradientBrush>
+        <LinearGradientBrush x:Key="PanelFillOpaque" StartPoint="0,0" EndPoint="0,1">
+            <GradientStop Color="#FF1C1C1E" Offset="0"/>
+            <GradientStop Color="#FF171719" Offset="1"/>
+        </LinearGradientBrush>
         <Style x:Key="TransportButtonStyle" TargetType="Button">
             <Setter Property="Width" Value="64"/>
             <Setter Property="Height" Value="38"/>
@@ -49,7 +65,8 @@
         </Style>
     </services:AcrylicWindow.Resources>
 
-    <Border CornerRadius="20" Background="#C81C1C1E" BorderBrush="#33FFFFFF" BorderThickness="1"
+    <Border x:Name="PanelRoot" CornerRadius="0" Background="{StaticResource PanelFillBlur}"
+            BorderBrush="#33FFFFFF" BorderThickness="1"
             Padding="20,18" TextElement.FontFamily="{DynamicResource ThemeFontFamily}">
         <Grid>
             <Grid.RowDefinitions>

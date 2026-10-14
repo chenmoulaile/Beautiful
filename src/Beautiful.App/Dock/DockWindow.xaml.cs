@@ -109,6 +109,15 @@ public partial class DockWindow : AcrylicWindow
     /// <summary>
     /// 主题切换落地：窗口级亚克力开/关 + 间距参数；放大开关与 MaxScale 由动画/悬停路径
     /// 直读 ThemeManager.Current；底色/圆角/图标尺寸/字体/指示样式走字典 DynamicResource 即时生效。
+    /// <para>
+    /// 【Task 4 裁定：Dock 不用 DWM 系统背板】本窗口的点击穿透依赖 XAML 的
+    /// <c>Background="{x:Null}"</c>（未绘制区域不参与命中测试 → 面板两侧的条带空白可点到底下的桌面/
+    /// 图标），而 WPF 里"未绘制区域真的透明"只有 <c>AllowsTransparency=true</c>（分层窗口）能做到；
+    /// 分层窗口与 <c>DWMWA_SYSTEMBACKDROP_TYPE</c> 互斥（DWM 不在其重定向表面后合成背板，写入返回
+    /// S_OK 却什么都不画 → 黑条），且 <c>DwmExtendFrameIntoClientArea</c> 在分层窗口上同样无效。
+    /// 所以 Dock 保留旧 <c>SetWindowCompositionAttribute</c> 亚克力（现代主题下确有模糊，只是非系统背板），
+    /// 真背板只用于"内容铺满窗口"的弹层族（FluentPopupHost）与 MediaPanel。勿在此窗口改用 ApplyBackdrop。
+    /// </para>
     /// </summary>
     private void ApplyTheme(ThemeDefinition theme)
     {
