@@ -38,6 +38,90 @@ public class AppSettingsTests
         Assert.Equal("autohide", new AppSettings { TaskbarPolicy = "AutoHide" }.Normalized().TaskbarPolicy);
         Assert.Equal("keep", new AppSettings { TaskbarPolicy = "keep" }.Normalized().TaskbarPolicy);
     }
+
+    [Fact]
+    public void v2默认值_顶栏切换器预览弹跳开_倒影关_图标48_放大1点8_底部_热键默认()
+    {
+        var s = new AppSettings();
+        Assert.True(s.TopBarEnabled);
+        Assert.True(s.SwitcherEnabled);
+        Assert.Equal("macos", s.SwitcherStyle);
+        Assert.Equal("alt+tab", s.SwitcherHotkey);
+        Assert.Equal(48, s.DockIconSize);
+        Assert.Equal(1.8, s.MagnificationStrength);
+        Assert.Equal("bottom", s.DockPosition);
+        Assert.True(s.PreviewEnabled);
+        Assert.True(s.BounceEnabled);
+        Assert.False(s.ReflectionEnabled);
+        Assert.True(s.FullscreenPassthrough);
+        Assert.Equal("ctrl+space", s.LauncherHotkey);
+        Assert.False(s.AutoHideDock);
+    }
+
+    [Fact]
+    public void v2数值字段_区间内与边界值_原样保留()
+    {
+        Assert.Equal(40, new AppSettings { DockIconSize = 40 }.Normalized().DockIconSize);
+        Assert.Equal(32, new AppSettings { DockIconSize = 32 }.Normalized().DockIconSize);
+        Assert.Equal(72, new AppSettings { DockIconSize = 72 }.Normalized().DockIconSize);
+        Assert.Equal(2.2, new AppSettings { MagnificationStrength = 2.2 }.Normalized().MagnificationStrength);
+        Assert.Equal(1.0, new AppSettings { MagnificationStrength = 1.0 }.Normalized().MagnificationStrength);
+        Assert.Equal(2.5, new AppSettings { MagnificationStrength = 2.5 }.Normalized().MagnificationStrength);
+    }
+
+    [Fact]
+    public void v2数值字段_越界钳制_图标32到72_放大1点0到2点5()
+    {
+        Assert.Equal(72, new AppSettings { DockIconSize = 200 }.Normalized().DockIconSize);
+        Assert.Equal(32, new AppSettings { DockIconSize = 8 }.Normalized().DockIconSize);
+        Assert.Equal(32, new AppSettings { DockIconSize = -100 }.Normalized().DockIconSize);
+        Assert.Equal(2.5, new AppSettings { MagnificationStrength = 9 }.Normalized().MagnificationStrength);
+        Assert.Equal(1.0, new AppSettings { MagnificationStrength = 0.2 }.Normalized().MagnificationStrength);
+        Assert.Equal(1.0, new AppSettings { MagnificationStrength = -5 }.Normalized().MagnificationStrength);
+    }
+
+    [Fact]
+    public void v2未知样式或停靠位_收敛为默认_大小写与首尾空白归一()
+    {
+        Assert.Equal("macos", new AppSettings { SwitcherStyle = "weird" }.Normalized().SwitcherStyle);
+        Assert.Equal("linux", new AppSettings { SwitcherStyle = "Linux" }.Normalized().SwitcherStyle);
+        Assert.Equal("harmonyos", new AppSettings { SwitcherStyle = "  HARMONYOS  " }.Normalized().SwitcherStyle);
+        Assert.Equal("bottom", new AppSettings { DockPosition = "x" }.Normalized().DockPosition);
+        Assert.Equal("left", new AppSettings { DockPosition = "LEFT" }.Normalized().DockPosition);
+        Assert.Equal("bottom", new AppSettings { DockPosition = "diagonal" }.Normalized().DockPosition);
+    }
+
+    [Fact]
+    public void v2字符串字段null或空白_Normalized兜默认且不抛异常()
+    {
+        // 手改 JSON 可把 string 写成 null（STJ 填进非可空属性）；空白串等同未配置
+        var nulled = new AppSettings
+        {
+            SwitcherStyle = null!, DockPosition = null!, SwitcherHotkey = null!, LauncherHotkey = null!
+        }.Normalized();
+        Assert.Equal("macos", nulled.SwitcherStyle);
+        Assert.Equal("bottom", nulled.DockPosition);
+        Assert.Equal("alt+tab", nulled.SwitcherHotkey);
+        Assert.Equal("ctrl+space", nulled.LauncherHotkey);
+
+        var blank = new AppSettings { SwitcherStyle = "   ", DockPosition = "", SwitcherHotkey = "  ", LauncherHotkey = "" }.Normalized();
+        Assert.Equal("macos", blank.SwitcherStyle);
+        Assert.Equal("bottom", blank.DockPosition);
+        Assert.Equal("alt+tab", blank.SwitcherHotkey);
+        Assert.Equal("ctrl+space", blank.LauncherHotkey);
+    }
+
+    [Fact]
+    public void Normalized幂等_钳制与收敛后再跑一次不变()
+    {
+        var once = new AppSettings
+        {
+            DockIconSize = 500, MagnificationStrength = 12, SwitcherStyle = "weird",
+            DockPosition = "x", Theme = "nope", TaskbarPolicy = "nope",
+            SwitcherHotkey = null!, LauncherHotkey = " ", LyricsOffsetMs = 99999
+        }.Normalized();
+        Assert.Equal(once, once.Normalized());
+    }
 }
 
 public class AppSettingsStoreTests : IDisposable
@@ -74,7 +158,20 @@ public class AppSettingsStoreTests : IDisposable
             Autostart = true,
             LyricsOffsetMs = -350,
             ShowMediaCapsule = false,
-            HidePanelOnDeactivate = false
+            HidePanelOnDeactivate = false,
+            TopBarEnabled = false,
+            SwitcherEnabled = false,
+            SwitcherStyle = "harmonyos",
+            SwitcherHotkey = "ctrl+alt+tab",
+            DockIconSize = 64,
+            MagnificationStrength = 2.2,
+            DockPosition = "left",
+            PreviewEnabled = false,
+            BounceEnabled = false,
+            ReflectionEnabled = true,
+            FullscreenPassthrough = false,
+            LauncherHotkey = "win+space",
+            AutoHideDock = true
         };
         _store.Save(original);
         Assert.Equal(original, _store.Load());
@@ -145,6 +242,82 @@ public class AppSettingsStoreTests : IDisposable
         File.WriteAllText(Path.Combine(_dir, "settings.json"),
             """{"LyricsOffsetMs":-5000}""");
         Assert.Equal(-2000, _store.Load().LyricsOffsetMs);
+    }
+
+    [Fact]
+    public void v1旧配置JSON_缺省v2字段_加载取v2代码默认()
+    {
+        // 升级兼容：v1 已有用户的 settings.json 不含 v2 字段，加载后须落在 v2 代码默认而不是 false/0
+        Directory.CreateDirectory(_dir);
+        File.WriteAllText(Path.Combine(_dir, "settings.json"),
+            """{"Theme":"macos","TaskbarPolicy":"hide","Autostart":true,"LyricsOffsetMs":-20,"ShowMediaCapsule":false,"HidePanelOnDeactivate":true}""");
+        var s = _store.Load();
+        Assert.Equal("macos", s.Theme);
+        Assert.True(s.TopBarEnabled);
+        Assert.True(s.SwitcherEnabled);
+        Assert.Equal("macos", s.SwitcherStyle);
+        Assert.Equal("alt+tab", s.SwitcherHotkey);
+        Assert.Equal(48, s.DockIconSize);
+        Assert.Equal(1.8, s.MagnificationStrength);
+        Assert.Equal("bottom", s.DockPosition);
+        Assert.True(s.PreviewEnabled);
+        Assert.True(s.BounceEnabled);
+        Assert.False(s.ReflectionEnabled);
+        Assert.True(s.FullscreenPassthrough);
+        Assert.Equal("ctrl+space", s.LauncherHotkey);
+        Assert.False(s.AutoHideDock);
+    }
+
+    [Fact]
+    public void v2数值字段越界JSON_加载时钳制到区间()
+    {
+        Directory.CreateDirectory(_dir);
+        File.WriteAllText(Path.Combine(_dir, "settings.json"),
+            """{"DockIconSize":200,"MagnificationStrength":9}""");
+        var s = _store.Load();
+        Assert.Equal(72, s.DockIconSize);
+        Assert.Equal(2.5, s.MagnificationStrength);
+
+        File.WriteAllText(Path.Combine(_dir, "settings.json"),
+            """{"DockIconSize":10,"MagnificationStrength":0.5}""");
+        s = _store.Load();
+        Assert.Equal(32, s.DockIconSize);
+        Assert.Equal(1.0, s.MagnificationStrength);
+    }
+
+    [Fact]
+    public void v2未知枚举串JSON_收敛默认且不删文件()
+    {
+        // 值域问题由 Normalized 兜底，不是结构损坏 → 自愈网不删用户的其余配置
+        Directory.CreateDirectory(_dir);
+        File.WriteAllText(Path.Combine(_dir, "settings.json"),
+            """{"SwitcherStyle":"weird","DockPosition":"x","Theme":"macos"}""");
+        var s = _store.Load();
+        Assert.Equal("macos", s.SwitcherStyle);
+        Assert.Equal("bottom", s.DockPosition);
+        Assert.Equal("macos", s.Theme);
+        Assert.True(File.Exists(Path.Combine(_dir, "settings.json")));
+    }
+
+    [Fact]
+    public void v2字符串字段null的JSON_Load兜默认且不删文件()
+    {
+        Directory.CreateDirectory(_dir);
+        File.WriteAllText(Path.Combine(_dir, "settings.json"),
+            """{"SwitcherStyle":null,"DockPosition":null,"SwitcherHotkey":null,"LauncherHotkey":null}""");
+        var s = _store.Load();
+        Assert.Equal(new AppSettings(), s);
+        Assert.True(File.Exists(Path.Combine(_dir, "settings.json")));
+    }
+
+    [Fact]
+    public void v2布尔字段类型错误的JSON_视为损坏恢复默认并删除()
+    {
+        Directory.CreateDirectory(_dir);
+        File.WriteAllText(Path.Combine(_dir, "settings.json"),
+            """{"TopBarEnabled":"yes"}""");
+        Assert.Equal(new AppSettings(), _store.Load());
+        Assert.False(File.Exists(Path.Combine(_dir, "settings.json")));
     }
 
     [Fact]
