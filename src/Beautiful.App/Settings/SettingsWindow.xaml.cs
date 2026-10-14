@@ -31,7 +31,9 @@ namespace Beautiful.App.Settings;
 /// 偏移 → MediaViewModel.ApplyLyricsOffset；胶囊/失焦收起 → MediaViewModel 标志；
 /// 固定应用 → dock.json + DockViewModel.ReloadPinned。
 /// 持久化：离散控件立即 Save；三个滑杆走 400ms 防抖合并写盘（拖动不产生写风暴）。
-/// 弹跳 / 悬停预览目前无渲染器消费（见报告）——控件仅落盘并回显，视觉待后续版本；Dock 停靠边未提供（底部 AppBar 专化）。
+/// 渲染器覆盖（Task 15 收尾核对）：倒影/启动弹跳自 Task 15 起在 DockSurface 有渲染器并即时生效；
+/// 悬停预览自 Task 13 起由 DWM 缩略图渲染（最小化窗口无可预览源，属 Windows 合成本身的限制）。
+/// 唯一无渲染项是 Dock 停靠边：未提供控件，底部注释已如实说明（底部 AppBar 专化）。
 /// 写入统一经 SettingsService.Update/UpdateAndSave（内部过 AppSettings.Normalized），内存态永不越界。
 /// 初始化期间 _loading 屏蔽 Checked/ValueChanged 处理器，避免构造期回写。
 /// </summary>
@@ -185,13 +187,14 @@ public partial class SettingsWindow : Window
         if (_loading) return;
         var on = ReflectionCheck.IsChecked == true;
         SettingsService.UpdateAndSave(SettingsService.Current with { ReflectionEnabled = on });
-        App.ApplyDockLayout(); // 落旗标到 DockSurface.ReflectionEnabled（倒影渲染器待后续任务）
+        // DockSurface 倒影渲染器即时增删镜像元素并加长条目行（ApplyDockLayout → 重落旗标 + 重排条带）
+        App.ApplyDockLayout();
     }
 
     private void Bounce_Changed(object sender, RoutedEventArgs e)
     {
         if (_loading) return;
-        // 弹跳动画尚无渲染器消费：仅持久化 + 回显（见报告"待接线"）
+        // 弹跳无需重放：启动固定项的路径每次实时读 BounceEnabled（DockWindow.ActivateItem → Surface.StartBounce）
         SettingsService.UpdateAndSave(SettingsService.Current with { BounceEnabled = BounceCheck.IsChecked == true });
     }
 
@@ -311,6 +314,12 @@ public partial class SettingsWindow : Window
         SettingsService.SetAutostart(s.Autostart);
         App.SetTopBarEnabled(s.TopBarEnabled);
         App.SetSwitcherEnabled(s.SwitcherEnabled);
+        // 恢复默认后必须连同"触发键 + 全屏直通"整体重放（Task 16 评审 Important#2）：
+        // SwitcherService.SetHookEnabled 仅在钩子**未启动**时才回读 Hook.FullscreenPassthrough，
+        // 上面那步若把钩子原样留着，直通旗标就停在旧值——文件/勾选框已回到默认 true 而钩子还拿着
+        // false。ApplySwitcherHotkey 走 StopHook + 重装路径，两个值都会按当前设置重读。
+        if (s.SwitcherEnabled)
+            App.ApplySwitcherHotkey(s.SwitcherHotkey, s.FullscreenPassthrough);
         App.ApplyDockLayout();
         _mediaVm.CapsuleVisible = s.ShowMediaCapsule;
         _mediaVm.PanelAutoHideOnDeactivate = s.HidePanelOnDeactivate;
