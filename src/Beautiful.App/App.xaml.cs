@@ -17,12 +17,13 @@ namespace Beautiful.App;
 /// 启动：Logger → 全局异常兜底 → 单实例 Mutex（第二实例弹窗即退）→ SettingsService.Load →
 /// 任务栏策略/自启落地 → DockWindow（构造期按设置应用主题；SMTC 经 MediaViewModel 构造期
 /// fire-and-forget 初始化，失败仅记日志降级为无胶囊）→ 顶栏 TopBarWindow（TopBarEnabled，
-/// Task 8；创建失败仅降级不连坐）→ --settings 打开设置窗口 → 托盘。
+/// Task 8；创建失败仅降级不连坐）→ 切换器 SwitcherService + 可见面板 SwitcherWindow（Task 11/12，
+/// 接管开关关闭时不装配面板 → Alt+Tab 回到系统原生）→ --settings 打开设置窗口 → 托盘。
 /// 策略落地至托盘就位整体 try/catch：失败还原任务栏/托盘后优雅退出，防僵尸进程。
 /// ShutdownMode=OnExplicitShutdown：Dock 被 Alt+F4 等关闭后壳层仍驻留（托盘可重载/退出），
 /// 退出只走托盘"退出"或显式 <see cref="Application.Shutdown"/>。
-/// 退出链路（ExitApp）：关设置窗 → 关顶栏（ABE_TOP ABM_REMOVE）→ 关 Dock（ABM_REMOVE）
-/// → TaskbarManager.Restore → 托盘 Dispose → 设置兜底落盘 → Shutdown；
+/// 退出链路（ExitApp）：关设置窗 → 收切换面板 + 卸键盘钩子 → 关顶栏（ABE_TOP ABM_REMOVE）
+/// → 关 Dock（ABM_REMOVE）→ TaskbarManager.Restore → 托盘 Dispose → 设置兜底落盘 → Shutdown；
 /// OnExit 兜底重复清理（全部幂等）。
 /// </summary>
 public partial class App : Application
@@ -37,6 +38,7 @@ public partial class App : Application
     private DockWindow? _dock;
     private TopBarWindow? _topBar;
     private Switcher.SwitcherService? _switcher;
+    private Switcher.SwitcherWindow? _switcherWindow;
     private Settings.SettingsWindow? _settingsWindow;
     private TrayIconManager? _tray;
     private bool _exiting;
@@ -197,12 +199,16 @@ public partial class App : Application
         Logger.Info("重载 Dock：开始");
         _settingsWindow?.Close();
         DestroyTopBar(); // 先归还顶部条带再重建（同"先关后开"理由）
+        // 切换面板随 Dock 一并重建：背板 tint 只在 HWND 初始化时读一次主题，重载（含换主题）后
+        // 必须换新实例才能拿到新的 tint；同时保证重载瞬间屏幕上不留任何旧面板。
+        DestroySwitcherWindow();
         var old = _dock;
         _dock = null;
         old.Close(); // 同步走完 OnClosing（ABM_REMOVE）/ OnClosed（tracker/smtc 释放）
         _dock = new DockWindow(_taskbar);
         _dock.Show();
         if (SettingsService.Current.TopBarEnabled) EnsureTopBar();
+        EnsureSwitcherWindow();
         Logger.Info("重载 Dock：完成");
     }
 
@@ -266,8 +272,10 @@ public partial class App : Application
     // ---------- 切换器生命周期（Task 11） ----------
 
     /// <summary>
-    /// 确保切换器服务存在（幂等）。服务本身始终启动（MRU 跟踪供"窗口"菜单等复用），
+    /// 确保切换器服务与可见面板存在（幂等）。服务本身始终启动（MRU 跟踪供"窗口"菜单等复用），
     /// 是否吞 Alt+Tab 由 <c>SwitcherEnabled</c> 决定；钩子装不上仅记日志（退回原生行为）。
+    /// 面板（Task 12）只在开关打开时装配：关掉接管就没有事件源，面板自然不显示，
+    /// 但**不创建**更干净——少一个常驻 HWND，也不会因异常路径留下可见残留。
     /// </summary>
     private void EnsureSwitcher()
     {
@@ -278,6 +286,7 @@ public partial class App : Application
             svc.Hook.EmergencyDisabled += OnSwitcherEmergencyDisabled;
             _switcher = svc;
             svc.Start(SettingsService.Current.SwitcherEnabled);
+            EnsureSwitcherWindow();
         }
         catch (Exception ex)
         {
@@ -286,16 +295,48 @@ public partial class App : Application
         }
     }
 
-    /// <summary>销毁切换器：卸钩 + 停跟踪（幂等）。必须在窗口关闭链路里最先执行，
+    /// <summary>
+    /// 装配可见切换面板（幂等）。面板构造时不创建 HWND、不显示——首次 OpenRequested 才 Show，
+    /// 因此常驻成本只是一个托管对象；关闭接管开关时不装配（原生 Alt+Tab 与原生观感一致）。
+    /// </summary>
+    private void EnsureSwitcherWindow()
+    {
+        if (_switcherWindow is not null || _switcher is null || _exiting) return;
+        if (!SettingsService.Current.SwitcherEnabled) return;
+        try
+        {
+            _switcherWindow = new Switcher.SwitcherWindow(_switcher);
+            Logger.Info($"切换面板已装配（样式={SettingsService.Current.SwitcherStyle}）");
+        }
+        catch (Exception ex)
+        {
+            _switcherWindow = null;
+            // 面板装不上只是回到"无界面切换"（Task 11 的状态），Alt+Tab 仍然可用；不得连坐服务
+            Logger.Warn($"切换面板装配失败（Alt+Tab 仍可用，但无可见界面）: {ex.Message}");
+        }
+    }
+
+    /// <summary>销毁面板（幂等）：先隐藏再 Close，Close 走 OnClosed 断开对服务与钩子的订阅。</summary>
+    private void DestroySwitcherWindow()
+    {
+        if (_switcherWindow is null) return;
+        var old = _switcherWindow;
+        _switcherWindow = null;
+        try { old.ForceClose(); } catch { /* 隐藏失败仍要 Close */ }
+        try { old.Close(); } catch (Exception ex) { Logger.Warn($"切换面板关闭失败: {ex.Message}"); }
+    }
+
+    /// <summary>销毁切换器：先收面板（不留残影）→ 卸钩 + 停跟踪（幂等）。必须在窗口关闭链路里最先执行，
     /// 保证进程退出后不再有任何键盘拦截残留。</summary>
     private void DestroySwitcher()
     {
+        DestroySwitcherWindow();
         if (_switcher is null) return;
         var old = _switcher;
         _switcher = null;
         try { old.Hook.EmergencyDisabled -= OnSwitcherEmergencyDisabled; } catch { }
         old.Dispose();
-        Logger.Info("切换器已销毁（键盘钩子已卸载）");
+        Logger.Info("切换器已销毁（键盘钩子已卸载、面板已关闭）");
     }
 
     /// <summary>
@@ -306,16 +347,21 @@ public partial class App : Application
     private void OnSwitcherEmergencyDisabled()
     {
         _switcher?.SetHookEnabled(false);
+        // 钩子被摘时若面板正显示着，就再不会有人发 Commit/Cancel —— 必须就地收起（不提交，不切窗口）
+        _switcherWindow?.ForceClose();
         Logger.Warn("切换器已应急停用：如需重新启用，请在设置中打开“窗口切换器”开关后重启或重载");
     }
 
     /// <summary>
-    /// 设置页切换器开关的即时生效入口（Task 16 接线用）：落盘 + 装/摘钩，无需重启。
+    /// 设置页切换器开关的即时生效入口（Task 16 接线用）：落盘 + 装/摘钩 + 装配/收起面板，无需重启。
     /// </summary>
     public static void SetSwitcherEnabled(bool enabled)
     {
         SettingsService.UpdateAndSave(SettingsService.Current with { SwitcherEnabled = enabled });
-        (Current as App)?._switcher?.SetHookEnabled(enabled);
+        var app = Current as App;
+        app?._switcher?.SetHookEnabled(enabled);
+        if (enabled) app?.EnsureSwitcherWindow();
+        else app?.DestroySwitcherWindow(); // 关接管即收起面板：不留任何自绘界面在屏幕上
     }
 
     /// <summary>
@@ -353,7 +399,8 @@ public partial class App : Application
         try
         {
             _settingsWindow?.Close();
-            DestroySwitcher();         // 先卸键盘钩子：退出过程中任何一次 Alt+Tab 都不该被吞，也不留残留拦截
+            DestroySwitcher();         // 先收面板 + 卸键盘钩子：退出过程中任何一次 Alt+Tab 都不该被吞，
+                                       // 也绝不能在屏幕上留下一块永不消失的切换面板（Task 12）
             DestroyTopBar();           // 顶栏 OnClosing：ABE_TOP ABM_REMOVE（hwnd 销毁前）
             _dock?.Close();          // DockWindow.OnClosing：AppBar ABM_REMOVE（hwnd 销毁前）
             _taskbar?.Restore();     // Hide/AutoHide 还原系统任务栏

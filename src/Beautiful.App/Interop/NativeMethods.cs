@@ -154,6 +154,23 @@ internal static partial class NativeMethods
 
     public const uint SwpNosize = 0x0001;
 
+    // 窗口区域裁切（Task 12 切换面板）。非分层窗口没有逐像素 alpha，而
+    // DWMWA_WINDOW_CORNER_PREFERENCE 只提供系统那一种半径（约 8 物理 px），做不出 macOS 大圆角、
+    // 更做不出鸿蒙胶囊；于是改由 SetWindowRgn 在原生层把窗口裁成任意圆角矩形——
+    // 形状由区域给出，DWM 的投影/背板会依该区域自动成形。坐标是**窗口客户区物理像素**
+    // （WindowStyle=None 时客户区即窗口矩形），与 WPF 的 DIP 无关。
+    [DllImport("gdi32.dll")]
+    public static extern IntPtr CreateRoundRectRgn(int left, int top, int right, int bottom, int width, int height);
+
+    // 返回 1=成功、0=失败。**成功时区域所有权转移给系统**（此后不得再 DeleteObject，否则会
+    // 销毁仍被窗口引用的区域）；只有失败时才由调用方删除——这是 GDI 句柄泄漏的经典陷阱。
+    [DllImport("user32.dll")]
+    public static extern int SetWindowRgn(IntPtr hWnd, IntPtr region, bool redraw);
+
+    // 异步键盘状态（切换面板防卡死看门狗用）：最高位为 1 表示该键此刻物理按下。
+    [DllImport("user32.dll")]
+    public static extern short GetAsyncKeyState(int vKey);
+
     [DllImport("user32.dll", EntryPoint = "GetWindowLongPtrW")]
     private static extern IntPtr GetWindowLongPtr64(IntPtr hWnd, int nIndex);
     public static long GetWindowLongPtr(IntPtr hWnd, int nIndex) => GetWindowLongPtr64(hWnd, nIndex).ToInt64();
