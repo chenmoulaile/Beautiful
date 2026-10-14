@@ -283,11 +283,9 @@ public partial class TopBarWindow : AcrylicWindow
 
     private static string FallbackWindowTitle(IntPtr hwnd)
     {
-        var len = NativeMethods.GetWindowTextLength(hwnd);
-        if (len <= 0) return "Beautiful";
-        var sb = new System.Text.StringBuilder(len + 1);
-        NativeMethods.GetWindowText(hwnd, sb, sb.Capacity);
-        var title = sb.ToString().Trim();
+        // 走 WindowEligibility 的统一收口：内含 IsHungAppWindow 早退，
+        // 避免向可能挂死的前台线程 SEND 读标题冻住我们自己的 UI 线程（终审 I-7 同类残留）。
+        var title = Services.WindowEligibility.GetWindowTitle(hwnd).Trim();
         return title.Length > 0 ? title : "Beautiful";
     }
 

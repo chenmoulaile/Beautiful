@@ -1,7 +1,8 @@
 name: release
 
-# 推送 v* 标签时自动构建、打包并挂到该标签的 GitHub Release 上（云端兜底，
-# 与 scripts/release.ps1 的本地一键发布互补）。
+# 推送 v* 标签时自动构建、打包并创建 GitHub Release。
+# Release 资产由本工作流独占（唯一归属方）；scripts/release.ps1 只负责本地测试门禁、
+# 版本号、打 tag 与推送，不再自行上传资产，避免同名资产竞争。
 on:
   push:
     tags: ['v*']

@@ -221,7 +221,7 @@ public sealed class TaskbarManager
             // 任务栏被永久隐藏，README 限制 6 的"再次启动并正常退出即清掉"只对移出屏幕变体成立。
             // 修复：HideAll 开头先 SW_SHOWNA（显示但不抢焦点）认领孤立隐藏态窗口，让本次
             // 正常走"截图基准 → 移出屏幕/重新 SW_HIDE 并登记 _swHidden"链路，退出即可还原。
-            if (!NativeMethods.IsWindowVisible(hwnd))
+            if (!NativeMethods.IsWindowVisible(hwnd) && !_swHidden.Contains(hwnd))
             {
                 NativeMethods.ShowWindow(hwnd, NativeMethods.SwShowna);
                 Logger.Info($"HideAll: hwnd=0x{hwnd.ToInt64():X} 处于孤立隐藏态（先前实例遗留），已 SW_SHOWNA 认领，稍后按本进程策略重新隐藏以便退出还原");

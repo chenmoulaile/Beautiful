@@ -1,4 +1,4 @@
-# Beautiful 一键发布（本地半程）：版本号 → 工作树检查 → 构建 + 测试门禁（不绿不发布）→
+﻿# Beautiful 一键发布（本地半程）：版本号 → 工作树检查 → 构建 + 测试门禁（不绿不发布）→
 #   提交 chore(release) → 打 v* 标签并推送。推送到远端即触发 .github/workflows/release.yml，
 #   由 **CI 独占** Release 创建与资产（zip）上传。
 # 用法（在仓库根目录）:
