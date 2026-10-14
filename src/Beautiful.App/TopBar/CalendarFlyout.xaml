@@ -1,0 +1,41 @@
+<UserControl x:Class="Beautiful.App.TopBar.CalendarFlyout"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             TextOptions.TextFormattingMode="Ideal"
+             FontFamily="{DynamicResource ThemeFontFamily}"
+             Foreground="{DynamicResource ThemeTextPrimary}">
+
+    <!-- 顶栏时钟点击的日历浮层（Task 9）：经 FluentPopupHost 承载，共享背板/圆角规则。
+         卡底取 ThemeDockBackground（半透明深色）：背板胜出时透出系统模糊（质感），
+         无模糊降级路径宿主已铺不透明 tint 兜底 → 叠在其上仍可读、绝不露黑。
+         生命周期短暂（点击打开、失焦即关）→ 构造期取当前主题即可，无需订阅 ThemeChanged。 -->
+    <Border Background="{DynamicResource ThemeDockBackground}" CornerRadius="10"
+            Padding="12,10,12,12" Width="248">
+        <StackPanel>
+            <!-- 头部：‹ 月份 › -->
+            <Grid Margin="0,0,0,8">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="Auto"/>
+                    <ColumnDefinition Width="*"/>
+                    <ColumnDefinition Width="Auto"/>
+                </Grid.ColumnDefinitions>
+                <Button x:Name="PrevBtn" Grid.Column="0" Content="&#xE76B;" Width="26" Height="26"
+                        FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets" FontSize="12"
+                        Background="Transparent" BorderThickness="0" Foreground="{DynamicResource ThemeTextPrimary}"
+                        Click="OnPrev"/>
+                <TextBlock x:Name="MonthLabel" Grid.Column="1" FontWeight="SemiBold" FontSize="14"
+                           HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                <Button x:Name="NextBtn" Grid.Column="2" Content="&#xE76C;" Width="26" Height="26"
+                        FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets" FontSize="12"
+                        Background="Transparent" BorderThickness="0" Foreground="{DynamicResource ThemeTextPrimary}"
+                        Click="OnNext"/>
+            </Grid>
+
+            <!-- 星期表头（周日起，与 Windows 中文习惯一致） -->
+            <Grid x:Name="WeekHeader" Margin="0,0,0,4"/>
+
+            <!-- 日期网格：代码填充行/列（每格 30×30，今天以强调色圆形高亮） -->
+            <Grid x:Name="DayGrid"/>
+        </StackPanel>
+    </Border>
+</UserControl>

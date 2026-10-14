@@ -255,7 +255,7 @@ public partial class FluentMenu : UserControl, IBackdropAware
     }
 
     private bool IsSelectableAt(int i) =>
-        i >= 0 && i < Rows.Items.Count && Rows.Items[i] is MenuItemView it && !it.IsSeparator;
+        i >= 0 && i < Rows.Items.Count && Rows.Items[i] is MenuItemView it && !it.IsSeparator && it.IsEnabled;
 
     private void SelectByIndex(int i)
     {
@@ -316,7 +316,7 @@ public partial class FluentMenu : UserControl, IBackdropAware
     private void ActivateCurrent()
     {
         var item = CurrentItem();
-        if (item is null || item.IsSeparator) return;
+        if (item is null || item.IsSeparator || !item.IsEnabled) return;
         if (item.HasChildren) { OpenChildFromCurrent(); return; } // 父项 Enter=展开并进子菜单
         Select(item);
     }
@@ -346,7 +346,8 @@ public partial class FluentMenu : UserControl, IBackdropAware
 
     private void Row_MouseEnter(object sender, MouseEventArgs e)
     {
-        if (sender is not Border row || row.DataContext is not MenuItemView item || item.IsSeparator) return;
+        if (sender is not Border row || row.DataContext is not MenuItemView item
+            || item.IsSeparator || !item.IsEnabled) return;
         Rows.SelectedItem = item; // 悬停与键盘高亮同源（IsSelected 驱动）
         _decayTimer.Stop();       // 指针仍在本菜单体内
         StopAncestorTimers();     // 评审 Important#2：指针进入本（子）层 → 逐层停祖先 decay/dwell，防父把本层关掉
@@ -388,7 +389,8 @@ public partial class FluentMenu : UserControl, IBackdropAware
 
     private void Row_MouseLeftButtonUp(object sender, MouseButtonEventArgs e)
     {
-        if (sender is not Border row || row.DataContext is not MenuItemView item || item.IsSeparator) return;
+        if (sender is not Border row || row.DataContext is not MenuItemView item
+            || item.IsSeparator || !item.IsEnabled) return;
         if (item.HasChildren)
         {
             _dwellTimer.Stop();

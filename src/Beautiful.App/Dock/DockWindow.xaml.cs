@@ -88,6 +88,17 @@ public partial class DockWindow : AcrylicWindow
     /// <summary>媒体 VM（XAML 媒体条目模板经 RelativeSource 绑定到本属性）。</summary>
     public MediaViewModel MediaVm => _mediaVm;
 
+    /// <summary>窗口跟踪器（顶栏"窗口"菜单数据源/激活动作，Task 9）。</summary>
+    public WindowTracker Tracker => _tracker;
+
+    /// <summary>顶栏媒体迷你项点击：展开 Dock 媒体面板（无会话时面板自身按 HasSession 折叠，不展开）。
+    /// 复用既有 PositionMediaPanel 落位（面板锚在 Dock 胶囊上方），顶栏仅提供触发入口。</summary>
+    public void OpenMediaPanelFromTopBar()
+    {
+        if (!_mediaVm.HasSession) return;
+        ShowMediaPanel();
+    }
+
     /// <summary>DockSurface 接线：光标取样 + 左键激活 + 右键条目菜单。</summary>
     private void WireSurface()
     {

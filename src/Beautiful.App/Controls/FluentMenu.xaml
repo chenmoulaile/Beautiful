@@ -104,6 +104,10 @@
                                                        FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets"
                                                        FontSize="14" Foreground="#D6FFFFFF"
                                                        HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                                            <Image x:Name="IconImage" Grid.Column="1" Source="{Binding Icon}"
+                                                   Width="16" Height="16" Stretch="Uniform"
+                                                   HorizontalAlignment="Center" VerticalAlignment="Center"
+                                                   Visibility="Collapsed"/>
                                             <TextBlock x:Name="LabelText" Grid.Column="2" Text="{Binding Label}"
                                                        FontSize="13.5" Foreground="{DynamicResource ThemeTextPrimary}"
                                                        VerticalAlignment="Center" TextTrimming="CharacterEllipsis"/>
@@ -132,6 +136,17 @@
                                 </DataTrigger>
                                 <DataTrigger Binding="{Binding HasChildren}" Value="True">
                                     <Setter TargetName="Arrow" Property="Visibility" Value="Visible"/>
+                                </DataTrigger>
+                                <!-- 位图图标（窗口菜单真实图标）：有图时隐藏字形、显示 Image -->
+                                <DataTrigger Binding="{Binding HasIcon}" Value="True">
+                                    <Setter TargetName="GlyphText" Property="Visibility" Value="Collapsed"/>
+                                    <Setter TargetName="IconImage" Property="Visibility" Value="Visible"/>
+                                </DataTrigger>
+                                <!-- 置灰（控制器裁定：无对应系统能力的 macOS 风格条目）：淡文字、不可交互 -->
+                                <DataTrigger Binding="{Binding IsEnabled}" Value="False">
+                                    <Setter TargetName="LabelText" Property="Foreground" Value="#54FFFFFF"/>
+                                    <Setter TargetName="GlyphText" Property="Foreground" Value="#3CFFFFFF"/>
+                                    <Setter TargetName="IconImage" Property="Opacity" Value="0.4"/>
                                 </DataTrigger>
                                 <DataTrigger Binding="{Binding IsSelected, RelativeSource={RelativeSource AncestorType=ListBoxItem}}" Value="True">
                                     <DataTrigger.EnterActions>

@@ -1,5 +1,6 @@
 // 自绘菜单，视觉对标 macOS；无第三方代码。
 using System.Collections.Generic;
+using System.Windows.Media;
 
 namespace Beautiful.App.Controls;
 
@@ -16,11 +17,26 @@ public sealed class MenuItemView
     /// <summary>左侧图标列字形（Segoe Fluent Icons / Segoe MDL2 码点字符）；null = 留空保持对齐。</summary>
     public string? Glyph { get; init; }
 
+    /// <summary>
+    /// 左侧图标列位图（优先于 <see cref="Glyph"/>，用于"窗口"菜单展示真实窗口图标）。
+    /// null = 该列改渲染字形（或留空）。冻结的 BitmapSource 可跨弹层安全复用。
+    /// </summary>
+    public ImageSource? Icon { get; init; }
+
+    /// <summary>是否有位图图标（绑定渲染：有图则隐藏字形列内容、显示 Image）。</summary>
+    public bool HasIcon => Icon is not null;
+
     /// <summary>标题文本。</summary>
     public string Label { get; init; } = string.Empty;
 
     /// <summary>勾选态：渲染 ✓（强调色）于勾选列；列常驻占位保证标签对齐。</summary>
     public bool IsChecked { get; init; }
+
+    /// <summary>
+    /// 可用性：false = 置灰不可交互（控制器裁定：无对应系统能力的 macOS 风格条目据此渲染为灰色而非假装有功能）。
+    /// 置灰项不参与键盘导航/悬停高亮/命中。默认 true。
+    /// </summary>
+    public bool IsEnabled { get; init; } = true;
 
     /// <summary>分隔线项：仅渲染一条贯穿淡线，不可交互。</summary>
     public bool IsSeparator { get; init; }

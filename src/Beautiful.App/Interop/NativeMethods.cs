@@ -295,4 +295,30 @@ internal static partial class NativeMethods
     [DllImport("user32.dll")] public static extern bool DestroyIcon(IntPtr hIcon);
 
     [DllImport("gdi32.dll")] public static extern bool DeleteObject(IntPtr hObject);
+
+    // ---------- 电源（顶栏电量状态项，Task 9） ----------
+    /// <summary>SYSTEM_POWER_STATUS（kernel32 GetSystemPowerStatus）：均为字节/双字，Pack=1 对齐 Win32 布局。</summary>
+    [StructLayout(LayoutKind.Sequential, Pack = 1)]
+    public struct SYSTEM_POWER_STATUS
+    {
+        public byte ACLineStatus;        // 0=电池供电 1=接交流电 255=未知
+        public byte BatteryFlag;         // 位1高 位2低 位4临界 位8充电中；128=无电池 255=电池不存在
+        public byte BatteryLifePercent;  // 0..100（255=未知）
+        public byte SystemStatus;        // bit0 节能 bit1 低电警告 bit2 临界动作 bit3 电池耗尽事件
+        public uint BatteryLifeTime;     // 剩余分钟（-1=未知）
+        public uint BatteryFullLifeTime; // 满电分钟（-1=未知）
+    }
+
+    public const byte AcLineUnknown = 255, BatteryFlagNoBattery = 128, BatteryFlagUnknown = 255, BatteryPercentUnknown = 255;
+    public const int BatteryChargingBit = 0x8;
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    public static extern bool GetSystemPowerStatus(out SYSTEM_POWER_STATUS sps);
+
+    // ---------- 关闭窗口（顶栏"窗口"菜单：对前台窗口发 WM_CLOSE） ----------
+    public const int WmClose = 0x0010;
+    public const int SwMinimize = 6; // SW_MINIMIZE（另有 SW_RESTORE=9 已在 WindowTracker 本地定义）
+
+    [DllImport("user32.dll", SetLastError = true)]
+    public static extern bool PostMessage(IntPtr hWnd, uint msg, IntPtr wParam, IntPtr lParam);
 }

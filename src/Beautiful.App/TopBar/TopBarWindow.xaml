@@ -23,21 +23,54 @@
          背板 tint/开关在代码侧随 ThemeChanged 重刷（见 ApplyTheme）。
          BarBackground 半透明底铺满全窗：背板胜出时透出系统模糊；无模糊路径时代码把
          窗口 Background 铺成不透明兜底（同 FluentPopupHost 的约定）。 -->
+
+    <!-- macOS 顶栏扁平按钮：透明底 + 悬停强调底色（ThemePanelBackground，DynamicResource 随主题）。
+         左区菜单按钮与右区状态项共用；圆角 5 贴合系统菜单栏选中态。 -->
+    <services:AcrylicWindow.Resources>
+        <Style x:Key="BarButton" TargetType="Button">
+            <Setter Property="Background" Value="Transparent"/>
+            <Setter Property="BorderThickness" Value="0"/>
+            <Setter Property="Foreground" Value="{DynamicResource ThemeTextPrimary}"/>
+            <Setter Property="FontSize" Value="12"/>
+            <Setter Property="Height" Value="24"/>
+            <Setter Property="Padding" Value="8,0"/>
+            <Setter Property="Margin" Value="1,0"/>
+            <Setter Property="VerticalAlignment" Value="Center"/>
+            <Setter Property="SnapsToDevicePixels" Value="True"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Button">
+                        <Border x:Name="bg" Background="{TemplateBinding Background}"
+                                CornerRadius="5" Padding="{TemplateBinding Padding}">
+                            <ContentPresenter VerticalAlignment="Center" HorizontalAlignment="Center"/>
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="bg" Property="Background" Value="{DynamicResource ThemePanelBackground}"/>
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+    </services:AcrylicWindow.Resources>
+
     <Grid x:Name="RootHost"
           TextElement.FontFamily="{DynamicResource ThemeFontFamily}"
           TextElement.Foreground="{DynamicResource ThemeTextPrimary}">
         <Border x:Name="BarBackground" Background="{DynamicResource ThemeDockBackground}"/>
 
-        <!-- ══ 左区（Task 9 插入点）：logo 菜单按钮 + 前台应用名（粗体）+ 各菜单（文件/编辑/…）
-             依次作为子项加入 LeftHost 即可，勿重排本布局。 ══ -->
+        <!-- ══ 左区（Task 9）：[logo 菜单按钮] + 前台应用名（粗体，macOS "应用菜单"位）+
+             文件/编辑/视图/窗口/帮助 菜单按钮。logo 与菜单按钮由代码按 BarButton 样式注入 LeftHost，
+             顺序：logo 前插到应用名之前，菜单按钮追加到应用名之后。 ══ -->
         <StackPanel x:Name="LeftHost" Orientation="Horizontal" HorizontalAlignment="Left"
                     VerticalAlignment="Stretch" Margin="10,0,0,0">
-            <!-- 前台应用名：本任务唯一实装项，TopBarWindow.RefreshForegroundApp() 驱动 -->
+            <!-- 前台应用名：TopBarWindow.RefreshForegroundApp() 驱动（本任务保留、非交互，见代码注释） -->
             <TextBlock x:Name="ForegroundAppText" Text="Beautiful"
-                       FontWeight="Bold" FontSize="12" VerticalAlignment="Center"/>
+                       FontWeight="Bold" FontSize="12" VerticalAlignment="Center" Margin="2,0,8,0"/>
         </StackPanel>
 
-        <!-- ══ 右区（Task 9 插入点）：状态项（时钟/媒体/网络/…）依次加入 RightHost。 ══ -->
+        <!-- ══ 右区（Task 9）：状态项（媒体/时钟/音量/网络/电量）由代码注入 RightHost ══ -->
         <StackPanel x:Name="RightHost" Orientation="Horizontal" HorizontalAlignment="Right"
                     VerticalAlignment="Stretch" Margin="0,0,10,0"/>
     </Grid>

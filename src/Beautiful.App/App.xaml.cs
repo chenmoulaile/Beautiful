@@ -206,9 +206,10 @@ public partial class App : Application
     private void EnsureTopBar()
     {
         if (_topBar is not null || _exiting) return;
+        TopBarWindow? bar = null; // 提升出 try：catch 需能 Close 已创建实例（Task 8 泄漏修复，见下）
         try
         {
-            var bar = new TopBarWindow();
+            bar = new TopBarWindow(BuildTopBarContext());
             bar.Show();
             _topBar = bar;
             Logger.Info("顶栏已显示");
@@ -216,9 +217,27 @@ public partial class App : Application
         catch (Exception ex)
         {
             _topBar = null;
+            // Show() 已完成 OnSourceInitialized（ABE_TOP 条带已申请、ThemeChanged 已订阅、WinEventHook/定时器已装），
+            // 但若其后 ApplyTheme/StartForegroundTracking 抛异常，句柄即将随局部变量丢弃——必须 Close() 走 OnClosing
+            // （ABM_REMOVE + 停 timer + 解 hook + 解订阅），否则顶部条带永久预留且静态订阅泄漏。Close 幂等且异常安全。
+            try { bar?.Close(); } catch { /* 降级路径：Close 失败不掩盖原始异常 */ }
             Logger.Warn($"顶栏创建失败（降级为无顶栏运行）: {ex.Message}");
         }
     }
+
+    /// <summary>组合根：顶栏依赖注入（窗口跟踪器/媒体 VM/系统动作回调均转接到当前 Dock 与 App 生命周期方法）。
+    /// 用闭包取 _dock 现值——重载 Dock 后旧顶栏已随 ReloadDock 销毁重建，捕获的始终是当时的 Dock。</summary>
+    private TopBarContext BuildTopBarContext() => new()
+    {
+        Tracker = () => _dock?.Tracker,
+        Media = () => _dock?.MediaVm,
+        OpenMediaPanel = () => _dock?.OpenMediaPanelFromTopBar(),
+        OpenSettings = OpenSettings,
+        ReloadDock = ReloadDock,
+        Exit = ExitApp,
+        ApplyTheme = ApplyThemeFromTray,
+        CurrentTheme = () => SettingsService.Current.Theme,
+    };
 
     /// <summary>销毁顶栏并归还 ABE_TOP 条带（幂等；OnClosing 内 ABM_REMOVE）。</summary>
     private void DestroyTopBar()
