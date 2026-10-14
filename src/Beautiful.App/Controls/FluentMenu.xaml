@@ -33,12 +33,30 @@
                         </LinearGradientBrush>
                     </Border.Background>
                 </Border>
-                <ItemsControl x:Name="Rows" Margin="5,7,5,7" Focusable="False">
-                    <ItemsControl.ItemTemplate>
+                <ListBox x:Name="Rows" Margin="5,7,5,7" Focusable="False" Background="Transparent"
+                         BorderThickness="0" ScrollViewer.HorizontalScrollBarVisibility="Disabled"
+                         ScrollViewer.VerticalScrollBarVisibility="Disabled">
+                    <ListBox.ItemContainerStyle>
+                        <!-- 容器纯平铺（无选中/悬停 chrome，悬停高亮在行模板内自绘）；
+                             HorizontalContentAlignment=Stretch 让行贯穿卡宽（单趟布局即定形，
+                             ItemsControl 的 ContentPresenter 对齐为只读附加属性，无法走此路） -->
+                        <Style TargetType="ListBoxItem">
+                            <Setter Property="HorizontalContentAlignment" Value="Stretch"/>
+                            <Setter Property="Padding" Value="0"/>
+                            <Setter Property="Margin" Value="0"/>
+                            <Setter Property="Focusable" Value="False"/>
+                            <Setter Property="Template">
+                                <Setter.Value>
+                                    <ControlTemplate TargetType="ListBoxItem">
+                                        <ContentPresenter/>
+                                    </ControlTemplate>
+                                </Setter.Value>
+                            </Setter>
+                        </Style>
+                    </ListBox.ItemContainerStyle>
+                    <ListBox.ItemTemplate>
                         <DataTemplate>
-                            <!-- MinWidth=宿主列宽：行高亮/分隔线贯穿全宽（ContentPresenter.HorizontalContentAlignment
-                                 为只读附加属性，无法经 ItemContainerStyle 设置，改用此惯用法） -->
-                            <Grid MinWidth="{Binding ActualWidth, ElementName=Rows}">
+                            <Grid>
                                 <Border x:Name="Row" Height="31" Margin="5,1.5" CornerRadius="7"
                                         Background="Transparent"
                                         MouseEnter="Row_MouseEnter" MouseLeave="Row_MouseLeave"
@@ -140,8 +158,8 @@
                                 </Trigger>
                             </DataTemplate.Triggers>
                         </DataTemplate>
-                    </ItemsControl.ItemTemplate>
-                </ItemsControl>
+                    </ListBox.ItemTemplate>
+                </ListBox>
             </Grid>
         </Border>
     </Grid>

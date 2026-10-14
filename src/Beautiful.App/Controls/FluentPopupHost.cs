@@ -9,6 +9,7 @@ using Beautiful.App.Interop;
 using static Beautiful.App.Interop.NativeMethods;
 using Brushes = System.Windows.Media.Brushes; // UseWindowsForms 隐式全局 using 与 System.Drawing.Brushes 冲突
 using Point = System.Windows.Point; // UseWindowsForms 隐式全局 using 与 System.Drawing.Point 冲突
+using Size = System.Windows.Size; // 同上，System.Drawing.Size
 
 namespace Beautiful.App.Controls;
 
@@ -25,9 +26,9 @@ namespace Beautiful.App.Controls;
 /// </para>
 /// <para>
 /// 定位全程物理像素：输入锚点即 <c>GetCursorPos</c>/<c>Cursor.Position</c> 的物理坐标；
-/// 尺寸取显示后 <c>GetWindowRect</c> 的真实物理矩形（免 DPI 往返换算），边缘翻转用锚点所在显示器的
-/// <c>rcWork</c>（物理），再 <c>SetWindowPos</c> 落位。入场 120ms 淡入 + 位移（CubicEase，
-/// 方向随翻转：托盘弹层从下往上滑入，子菜单自父项向右滑出）。
+/// 尺寸取内容同步 <c>Measure</c> 的 DesiredSize×窗口 DPI（确定性，不等 SizeToContent 的异步
+/// HWND 定形），边缘翻转用锚点所在显示器的 <c>rcWork</c>（物理），再 <c>SetWindowPos</c> 落位。
+/// 入场 120ms 淡入 + 位移（CubicEase，方向随翻转：托盘弹层从下往上滑入，子菜单自父项向右滑出）。
 /// </para>
 /// </summary>
 public class FluentPopupHost : Window
@@ -40,6 +41,7 @@ public class FluentPopupHost : Window
 
     private DispatcherTimer? _watchdog;
     private int _outsideTicks;
+    private bool _flipX, _flipY; // 最近一次收敛落位是否左/上翻转（入场动画方向用）
 
     /// <summary>暂停自动关闭（拖拽选择、模态确认等场景可临时置 true 抑制"光标离开即关"）。</summary>
     public bool KeepOpen { get; set; }
@@ -92,30 +94,41 @@ public class FluentPopupHost : Window
     /// <summary>双锚点摆位：放得下则左上角贴 <paramref name="primary"/>，否则右边贴 <paramref name="flip"/>.X / 底边贴 <paramref name="flip"/>.Y。</summary>
     internal void ShowAtPhysical(Point primary, Point flip)
     {
-        Opacity = 0; // 先透明：显示→测真实物理尺寸→重定位，落位跳动不可见
-        Show();
-        Dispatcher.Invoke(static () => { }, DispatcherPriority.Loaded); // 冲刷布局/测量（SizeToContent 定形）
+        var hwnd = new WindowInteropHelper(this).EnsureHandle();
+        // 尺寸确定性来源 = 同步 Measure 的 DesiredSize（DIP），不依赖任何 dispatcher 冲刷时机：
+        // Show 后 SizeToContent 对 HWND 的真实尺寸调整发生在低于 Render 的派发优先级里，
+        // GetWindowRect 即时读数会拿到未定形旧尺寸 → 翻转计算错误（曾致托盘弹层落位偏 150px）。
+        double wPx = 0, hPx = 0;
+        if (Content is FrameworkElement fe)
+        {
+            fe.Measure(new Size(double.PositiveInfinity, double.PositiveInfinity));
+            double scale = GetDpiForWindow(hwnd);
+            if (scale <= 0) scale = 96;
+            scale /= 96.0;
+            wPx = fe.DesiredSize.Width * scale;
+            hPx = fe.DesiredSize.Height * scale;
+        }
 
-        var hwnd = new WindowInteropHelper(this).Handle;
-        if (!GetWindowRect(hwnd, out var r)) { Opacity = 1; return; }
-        double w = r.Right - r.Left, h = r.Bottom - r.Top;
         var work = WorkAreaOf(primary);
-
-        var flippedX = false;
+        _flipX = false;
         double x = primary.X;
-        if (x + w > work.Right - EdgeInset) { x = flip.X - w; flippedX = true; } // 右边收拢到 flip 锚点
+        if (x + wPx > work.Right - EdgeInset) { x = flip.X - wPx; _flipX = true; } // 右边收拢到 flip 锚点
         if (x < work.Left + EdgeInset) x = work.Left + EdgeInset;
 
-        var flippedY = false;
+        _flipY = false;
         double y = primary.Y;
-        if (y + h > work.Bottom - EdgeInset) { y = flip.Y - h; flippedY = true; } // 底边收拢到 flip 锚点
+        if (y + hPx > work.Bottom - EdgeInset) { y = flip.Y - hPx; _flipY = true; } // 底边收拢到 flip 锚点
         if (y < work.Top + EdgeInset) y = work.Top + EdgeInset;
 
-        SetWindowPos(hwnd, IntPtr.Zero, (int)Math.Round(x), (int)Math.Round(y), 0, 0,
-            SwpNosize | SwpNozorder | SwpNoactivate);
-        PlacedPhysicalRect = new Rect(x, y, w, h);
+        Opacity = 0; // 首帧即透明，杜绝任何潜在跳动
+        Show();
+        // Show 后 WPF 可能按默认位置落一次（Left/Top 未设），以测量位置强制覆盖
+        var ix = (int)Math.Round(x);
+        var iy = (int)Math.Round(y);
+        SetWindowPos(hwnd, IntPtr.Zero, ix, iy, 0, 0, SwpNosize | SwpNozorder | SwpNoactivate);
+        PlacedPhysicalRect = new Rect(ix, iy, wPx, hPx);
 
-        PlayEntrance(flippedX, flippedY);
+        PlayEntrance();
         if (ParentHost is null) StartWatchdog(); // 子宿主不自律：随根链级联关闭
     }
 
@@ -163,12 +176,12 @@ public class FluentPopupHost : Window
     /// <summary>本窗口自身的判定容差（物理 px）：桥接父子弹层间 ~8px 空隙 + 光标微抖。</summary>
     internal const double RectInflate = 16;
 
-    private void PlayEntrance(bool flippedX, bool flippedY)
+    private void PlayEntrance()
     {
         var dpiScale = GetDpiForWindow(new WindowInteropHelper(this).Handle) / 96.0;
         // 位移方向：翻转即"从锚点那侧滑回"——托盘弹层自下而上，子菜单自左向右滑出
-        var tt = new TranslateTransform(flippedX ? 6 * dpiScale : -6 * dpiScale,
-                                        flippedY ? 10 * dpiScale : -10 * dpiScale);
+        var tt = new TranslateTransform(_flipX ? 6 * dpiScale : -6 * dpiScale,
+                                        _flipY ? 10 * dpiScale : -10 * dpiScale);
         if (Content is UIElement content) content.RenderTransform = tt;
 
         var ease = new CubicEase { EasingMode = EasingMode.EaseOut };
