@@ -277,6 +277,10 @@ public partial class App : Application
     /// </summary>
     public static void ApplyDockLayout() => (Current as App)?._dock?.RefreshLayoutFromSettings();
 
+    /// <summary>设置页切换 PreviewEnabled 后的即时生效入口：关闭时立即收起正在显示的预览
+    /// （开启无需动作——下一次悬停按新值放行）。让该开关不再是死控件。</summary>
+    public static void ApplyPreviewEnabled() => (Current as App)?._dock?.ApplyPreviewSetting();
+
 
     // ---------- 切换器生命周期（Task 11） ----------
 

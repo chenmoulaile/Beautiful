@@ -282,6 +282,144 @@ internal static partial class NativeMethods
     [DllImport("dwmapi.dll")]
     public static extern int DwmExtendFrameIntoClientArea(IntPtr hwnd, ref MARGINS pMarInset);
 
+    // ---------- DWM 缩略图（Task 13 悬停实时预览）----------
+    // 与上面三个"属性类"DWM API 不同，缩略图是一组**句柄型** API：DwmRegisterThumbnail 在目标窗口
+    // （dst）上注册一张源窗口（src）的实时画面，返回一个缩略图句柄。该句柄**必须** DwmUnregisterThumbnail
+    // 释放——它不是进程退出自动回收的普通 HWND 引用，驻留进程里每次悬停泄漏一个就是"越开越慢/句柄数
+    // 单调上涨"的经典故障（本任务的首要风险，见 Preview/ThumbnailPreview.cs 的释放矩阵）。
+    // 合成位置：DWM 把缩略图画进 **dst 窗口的客户区坐标系**（rcDestination）。dst 若是 WPF 窗口，
+    // WPF 的合成表面覆盖在缩略图之上（airspace）→ 预览必须注册到一个客户区只用来承载缩略图的
+    // 纯 Win32 窗口，卡片的边框/标题由 GDI 画在缩略图矩形**之外**的留白环里。
+    [StructLayout(LayoutKind.Sequential)]
+    public struct SIZE { public int cx, cy; }
+
+    /// <summary>
+    /// DWM_THUMBNAIL_PROPERTIES（dwmapi.h）。字段顺序必须与原生结构逐字节一致：
+    /// DWORD / 两个 RECT / BYTE / 两个 BOOL——BYTE 之后原生对齐会填 3 字节，LayoutKind.Sequential
+    /// 的默认打包给出同样的空洞，故无需 Pack=1（填了反而错位）。dwFlags 是**逐字段生效开关**：
+    /// 未在 flags 中置位的字段会被 DWM 忽略（不是"取默认值"），所以每次更新都要把要写的位的并集传进去。
+    /// </summary>
+    [StructLayout(LayoutKind.Sequential)]
+    public struct DWM_THUMBNAIL_PROPERTIES
+    {
+        public int dwFlags;
+        public RECT rcDestination;
+        public RECT rcSource;
+        public byte opacity;          // 0..255（需 DwmtOpacity）
+        public bool fVisible;         // BOOL（4 字节），需 DwmtVisible
+        public bool fSourceClientAreaOnly; // BOOL，需 DwmtSourceClientAreaOnly
+    }
+
+    public const int DwmtRectSource = 0x1, DwmtRectDestination = 0x2, DwmtOpacity = 0x4,
+                     DwmtVisible = 0x8, DwmtSourceClientAreaOnly = 0x10;
+
+    [DllImport("dwmapi.dll")]
+    public static extern int DwmRegisterThumbnail(IntPtr dst, IntPtr src, out IntPtr thumb);
+
+    [DllImport("dwmapi.dll")]
+    public static extern int DwmUnregisterThumbnail(IntPtr thumb);
+
+    [DllImport("dwmapi.dll")]
+    public static extern int DwmUpdateThumbnailProperties(IntPtr thumb, ref DWM_THUMBNAIL_PROPERTIES props);
+
+    [DllImport("dwmapi.dll")]
+    public static extern int DwmQueryThumbnailSourceSize(IntPtr thumb, out SIZE size);
+
+    // ---------- 原生窗口类（预览宿主：不用 WPF，规避 airspace）----------
+    [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
+    public struct WNDCLASSEXW
+    {
+        public uint cbSize;
+        public uint style;
+        public WndProcDelegate lpfnWndProc;
+        public int cbClsExtra;
+        public int cbWndExtra;
+        public IntPtr hInstance;
+        public IntPtr hIcon;
+        public IntPtr hCursor;
+        public IntPtr hbrBackground;
+        public string? lpszMenuName;   // 无菜单须传 NULL（string? → 封送 0 指针）；空串是非法菜单名
+        public string lpszClassName;
+        public IntPtr hIconSm;
+    }
+
+    public delegate IntPtr WndProcDelegate(IntPtr hwnd, uint msg, IntPtr wParam, IntPtr lParam);
+
+    // 回调委托必须由调用方长期持有（本类的 WndProc 存在静态字段里）：委托被 GC 后消息打到已回收的桩上
+    // 就是随机的原生崩溃——与 WinEventDelegate 同一套纪律。
+    [DllImport("user32.dll", CharSet = CharSet.Unicode)]
+    public static extern ushort RegisterClassExW(ref WNDCLASSEXW lpwcx);
+
+    [DllImport("user32.dll", CharSet = CharSet.Unicode)]
+    public static extern IntPtr CreateWindowExW(uint exStyle, string className, string? windowName,
+        uint style, int x, int y, int w, int h, IntPtr parent, IntPtr menu, IntPtr instance, IntPtr param);
+
+    [DllImport("user32.dll")]
+    public static extern bool DestroyWindow(IntPtr hwnd);
+
+    [DllImport("user32.dll")]
+    public static extern IntPtr DefWindowProc(IntPtr hwnd, uint msg, IntPtr wParam, IntPtr lParam);
+
+    [DllImport("user32.dll", SetLastError = true)]
+    public static extern bool SetWindowLong(IntPtr hWnd, int nIndex, int dwNewLong);
+
+    // GWL_STYLE(-16) 的 32 位写入：WS_EX_* 用 SetWindowLongPtr，样式位仍走 32 位入口
+    [DllImport("user32.dll")] public static extern bool UpdateWindow(IntPtr hWnd);
+    [DllImport("user32.dll")] public static extern bool InvalidateRect(IntPtr hWnd, IntPtr rect, bool erase);
+
+    // RegisterClassEx 的 hInstance 须为模块基址；GetModuleHandle(null) 返回主 exe 句柄。
+    [DllImport("kernel32.dll", CharSet = CharSet.Unicode)]
+    public static extern IntPtr GetModuleHandle(string? moduleName);
+
+    // 类样式：CS_DROPSHADOW(0x20000) 让顶层弹出窗口自带系统投影（预览卡片的阴影来源）。
+    public const uint CsDropShadow = 0x0002_0000;
+    // ShowWindow nCmdShow：SW_SHOWNOACTIVATE=4（显示但不夺焦；SW_HIDE=0 已在上方"窗口与消息"段定义）。
+    public const int SwShowNoActivate = 4;
+    // SetWindowPos 的 hwndInsertAfter：HWND_TOPMOST=-1（预览浮于其他窗口之上，配合 SWP_NOACTIVATE 不抢焦点）。
+    public static readonly IntPtr HwndTopmost = new(-1);
+
+    public const uint WsPopup = 0x8000_0000, WsVisible = 0x1000_0000;
+    // WsExToolwindow(0x80) 已在上方"窗口与消息"段以 long 形式声明（供 WindowEligibility 与 long
+    // 的 ex 位与）——此处不再重复定义；CreateWindowExW 的 exStyle 是 uint，调用点显式转型即可。
+    public const uint WsExNoActivate = 0x0800_0000, WsExTransparent = 0x20;
+
+    // ---------- GDI 绘制（预览卡片边框/标题：画在缩略图矩形之外的留白环里）----------
+    [StructLayout(LayoutKind.Sequential)]
+    public struct TEXTMETRICW
+    {
+        public int tmHeight, tmAscent, tmDescent, tmInternalLeading, tmExternalLeading;
+        public int tmAveCharWidth, tmMaxCharWidth, tmWeight, tmOverhang, tmDigitizedAspectX, tmDigitizedAspectY;
+        public char tmFirstChar, tmLastChar, tmDefaultChar, tmBreakChar;
+        public byte tmItalic, tmUnderlined, tmStruckOut, tmPitchAndFamily, tmCharSet;
+    }
+
+    [DllImport("gdi32.dll")] public static extern IntPtr CreateSolidBrush(uint color);  // 0x00BBGGRR
+    [DllImport("gdi32.dll")] public static extern IntPtr GetStockObject(int fn);
+    // FillRect 在 user32.dll（不在 gdi32！）——误标 gdi32 会 EntryPointNotFoundException，
+    // 且它发生在 WndProc 的 WM_PAINT 栈上 → 直接崩掉驻留进程（Task 13 实测踩过）。
+    [DllImport("user32.dll")] public static extern bool FillRect(IntPtr hdc, ref RECT rect, IntPtr brush);
+    [DllImport("gdi32.dll")] public static extern bool SetTextColor(IntPtr hdc, uint color);
+    [DllImport("gdi32.dll")] public static extern bool SetBkMode(IntPtr hdc, int mode);
+    [DllImport("gdi32.dll")] public static extern IntPtr SelectObject(IntPtr hdc, IntPtr obj);
+    [DllImport("gdi32.dll")] public static extern bool GetTextMetricsW(IntPtr hdc, out TEXTMETRICW tm);
+    [DllImport("gdi32.dll", CharSet = CharSet.Unicode)]
+    public static extern IntPtr CreateFontW(int height, int width, int escapement, int orientation,
+        int weight, bool italic, bool underline, bool strikeOut,
+        int charSet, int outPrecision, int clipPrecision, int quality, int pitchAndFamily, string faceName);
+
+    [DllImport("user32.dll")] public static extern IntPtr BeginPaint(IntPtr hwnd, IntPtr lpps);
+    [DllImport("user32.dll")] public static extern bool EndPaint(IntPtr hwnd, IntPtr lpps);
+    [DllImport("user32.dll")] public static extern bool GetClientRect(IntPtr hWnd, out RECT rect);
+    [DllImport("user32.dll", CharSet = CharSet.Unicode)]
+    public static extern int DrawTextW(IntPtr hdc, string text, int count, ref RECT rect, uint flags);
+
+    public const int ObsoleteNull = 5;  // NULL_BRUSH（GDI 保留对象，非分层窗口用它 = 客户区不填充）
+    public const int BkOpaque = 2, BkTransparent = 1;   // SetBkMode：Win32 定义 TRANSPARENT=1、OPAQUE=2（原声明写反）
+    public const uint DtRight = 0x2, DtSingleLine = 0x20, DtEndEllipsis = 0x8000, DtPathEllipsis = 0x20000;
+    public const int WsExGwl = (-20);
+
+    public const uint WmPaint = 0x000F, WmDestroy = 0x0002, WmNcHitTest = 0x0084;
+
     // ---------- 进程路径 ----------
     public const uint ProcessQueryLimitedInformation = 0x1000;
 

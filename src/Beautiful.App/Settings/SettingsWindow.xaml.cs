@@ -276,8 +276,9 @@ public partial class SettingsWindow : Window
     private void Preview_Changed(object sender, RoutedEventArgs e)
     {
         if (_loading) return;
-        // DWM 缩略图预览渲染器尚未实现（Task 13）：仅持久化 + 回显（见报告"待接线"）
         SettingsService.UpdateAndSave(SettingsService.Current with { PreviewEnabled = PreviewCheck.IsChecked == true });
+        // 即时生效（Task 13）：关闭立即收起正在显示的预览，开启则下次悬停放行（悬停路径每次读 Current）。
+        App.ApplyPreviewEnabled();
     }
 
     private void ScheduleSave()

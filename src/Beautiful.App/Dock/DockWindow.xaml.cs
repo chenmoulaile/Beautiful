@@ -1,13 +1,16 @@
 using System.Diagnostics;
 using System.ComponentModel;
+using System.IO;
 using System.Runtime.InteropServices;
 using System.Windows;
 using System.Windows.Controls;
+using System.Windows.Input;
 using System.Windows.Interop;
 using System.Windows.Media;
 using System.Windows.Threading;
 using Beautiful.App.Interop;
 using Beautiful.App.MediaWidget;
+using Beautiful.App.Preview;
 using Beautiful.App.Services;
 using Beautiful.App.Themes;
 using Beautiful.Core.Dock;
@@ -15,6 +18,8 @@ using Beautiful.Core.Themes;
 using Application = System.Windows.Application;
 using Color = System.Windows.Media.Color;
 using Point = System.Windows.Point;
+using Rect = System.Windows.Rect;
+using MouseEventArgs = System.Windows.Input.MouseEventArgs;   // 与 System.Windows.Forms.MouseEventArgs 歧义（UseWindowsForms）
 
 namespace Beautiful.App.Dock;
 
@@ -61,6 +66,14 @@ public partial class DockWindow : AcrylicWindow
     // 用一次性防抖把拖动期间的多次请求合并成落定后的一次重排（排布参数本身每帧即时写入，图标视觉跟手）。
     private DispatcherTimer? _repositionDebounce;
 
+    // ---------- 悬停实时预览（Task 13）----------
+    // _preview 惰性创建（首次悬停到窗口条目），随 Dock 关闭 Dispose（内部注销缩略图句柄 + 销毁宿主窗口）。
+    // _previewDwell 是 ~350ms 的一次性驻留计时器：悬停满 350ms 才弹预览，离开/点击即停。
+    // _previewPending 记录正在等待弹出的条目，用于"移动到新条目重置驻留""点击取消""tick 复核光标仍在该条目"。
+    private ThumbnailPreview? _preview;
+    private DispatcherTimer? _previewDwell;
+    private DockItem? _previewPending;
+
     private IntPtr _hwnd;
     private uint _appbarMsg;
     private uint _taskbarCreatedMsg;
@@ -106,13 +119,16 @@ public partial class DockWindow : AcrylicWindow
         ShowMediaPanel();
     }
 
-    /// <summary>DockSurface 接线：光标取样 + 左键激活 + 右键条目菜单。</summary>
+    /// <summary>DockSurface 接线：光标取样 + 左键激活 + 右键条目菜单 + 悬停预览（Task 13）。</summary>
     private void WireSurface()
     {
         Surface.Sigma = SigmaInPitches;
         Surface.CursorProvider = SurfaceCursorXDip;   // 真实物理光标（含 AppBar 矩形守卫），见放大场注释
         Surface.Activated = ActivateItem;
         Surface.ContextRequested = OpenItemContextMenu;
+        // 悬停预览：MouseMove 判定当前条目并起/重置 350ms 驻留；离开条目行即收起。
+        Surface.MouseMove += OnSurfaceMouseMove;
+        Surface.MouseLeave += (_, _) => CancelPreview();
     }
 
     // ---------- 生命周期 / AppBar ----------
@@ -255,6 +271,9 @@ public partial class DockWindow : AcrylicWindow
     {
         _closing = true;                             // 先于 ABM_REMOVE：作废队列中尚未执行的 BeginInvoke 重注册
         _repositionDebounce?.Stop();                 // 作废挂起的条带重排（OnClosing 后不再 ABM_SETPOS）
+        _previewDwell?.Stop();                       // 作废挂起的预览驻留
+        _preview?.Dispose();                         // 注销缩略图句柄 + 销毁宿主窗口（Task 13，必走，防句柄泄漏）
+        _preview = null;
         _mediaPanel?.Close();                        // 面板随 Dock 一起关闭（Closed 处理器会清空引用）
         Surface.Shutdown();                           // 摘掉 CompositionTarget.Rendering 钩子
         UnregisterAppBar();                           // ABM_REMOVE 必须在 hwnd 销毁前
@@ -448,6 +467,8 @@ public partial class DockWindow : AcrylicWindow
 
     private void ActivateItem(DockItem item)
     {
+        // 点击 = 取消挂起的预览弹出（brief：clicking cancels the pending show），并收起已在显示的预览。
+        CancelPreview();
         switch (item.Kind)
         {
             case DockItemKind.Window:
@@ -515,6 +536,159 @@ public partial class DockWindow : AcrylicWindow
     {
         if (_contextItem is { Kind: DockItemKind.Pinned } item)
             _vm.Unpin(item.LaunchPath);
+    }
+
+    // ---------- 悬停实时预览（Task 13）----------
+
+    private const int PreviewDwellMs = 350;
+    private const double PreviewMaxWDip = 340, PreviewMaxHDip = 240;
+
+    /// <summary>鼠标在 DockSurface 上移动：命中条目变化时重置 350ms 驻留计时；无预览目标即收起当前预览。
+    /// 开关关（PreviewEnabled=false）直接收起并不起计时——这是让设置里的预览开关真正生效的读取点。</summary>
+    private void OnSurfaceMouseMove(object sender, MouseEventArgs e)
+    {
+        if (!SettingsService.Current.PreviewEnabled)
+        {
+            if (_preview is { IsShowing: true } || _previewPending is not null) CancelPreview();
+            return;
+        }
+
+        var hit = Surface.HitTestItem(e.GetPosition(Surface));
+        // 同一目标：不重复计时（_previewPending 已置，无论"等待中"还是"已显示"都保持不动）。
+        if (hit is not null && _previewPending is not null && hit.Id == _previewPending.Id) return;
+
+        // 目标改变（含移到空白 / 回收站 / 媒体）：先收起旧的，再决定是否对新目标起驻留。
+        _previewDwell?.Stop();
+        if (_preview is { IsShowing: true }) _preview.Hide();
+        _previewPending = null;
+
+        if (hit is null || !PreviewSourceFor(hit, out _)) return;   // 无可预览窗口 → 不弹
+
+        _previewPending = hit;
+        _previewDwell ??= new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(PreviewDwellMs) };
+        _previewDwell.Stop();
+        _previewDwell.Tick -= OnPreviewDwellTick;
+        _previewDwell.Tick += OnPreviewDwellTick;
+        _previewDwell.Start();
+    }
+
+    private void OnPreviewDwellTick(object? sender, EventArgs e)
+    {
+        _previewDwell?.Stop();
+        var pending = _previewPending;
+        if (pending is null) return;
+        if (!SettingsService.Current.PreviewEnabled) { _previewPending = null; return; }
+
+        // tick 时按真实光标复核（MouseMove 事件坐标可能陈旧）：光标仍悬在同一条目才弹。
+        if (!TryItemUnderCursor(out var current) || current?.Id != pending.Id)
+        {
+            _previewPending = null;
+            return;
+        }
+        if (!PreviewSourceFor(pending, out var src)) { _previewPending = null; return; }
+        ShowPreviewFor(pending, src);   // 显示后保留 _previewPending，同条目后续 MouseMove 走上面的早退分支
+    }
+
+    /// <summary>取消驻留并收起预览（鼠标离开 / 点击 / 开关关闭 时调用）。</summary>
+    private void CancelPreview()
+    {
+        _previewDwell?.Stop();
+        _previewPending = null;
+        _preview?.Hide();
+    }
+
+    /// <summary>预览开关变更的即时生效入口（App.ApplyPreviewEnabled 调用）：
+    /// 关→立即收起正在显示的预览；开→无需动作（下次悬停按新值放行）。这让 PreviewEnabled 不再是死开关。</summary>
+    public void ApplyPreviewSetting()
+    {
+        if (!SettingsService.Current.PreviewEnabled) CancelPreview();
+    }
+
+    /// <summary>用真实物理光标复核命中的条目（与放大场同一取样口径：GetCursorPos → Surface.PointFromScreen →
+    /// HitTestItem），避免陈旧 MouseMove 把预览钉在已离开的条目上。</summary>
+    private bool TryItemUnderCursor(out DockItem? item)
+    {
+        item = null;
+        if (!NativeMethods.GetCursorPos(out var pt)) return false;
+        try { item = Surface.HitTestItem(Surface.PointFromScreen(new Point(pt.X, pt.Y))); }
+        catch (InvalidOperationException) { return false; }   // PresentationSource 尚未就绪
+        return true;
+    }
+
+    /// <summary>把预览弹在条目放大后矩形上方并水平居中、钳到工作区。坐标换算复用 <see cref="PositionMediaPanel"/>
+    /// 的同一路径：Surface 本地 DIP → PointToScreen 得物理 px → 除以本显示器 PixelsPerDip 得屏幕 DIP。</summary>
+    private void ShowPreviewFor(DockItem item, IntPtr sourceHwnd)
+    {
+        if (Surface.GetItemBounds(item) is not { } b || b.Width <= 0) { _preview?.Hide(); return; }
+        _preview ??= new ThumbnailPreview();
+
+        var dpi = VisualTreeHelper.GetDpi(Surface).PixelsPerDip;
+        if (dpi <= 0) dpi = 1;
+        _preview.DpiScale = dpi;
+        _preview.Title = item.Label;
+
+        var tl = Surface.PointToScreen(new Point(b.X, b.Y));
+        var br = Surface.PointToScreen(new Point(b.X + b.Width, b.Y + b.Height));
+        var anchorDip = new Rect(tl.X / dpi, tl.Y / dpi, (br.X - tl.X) / dpi, (br.Y - tl.Y) / dpi);
+        _preview.Show(sourceHwnd, anchorDip, PreviewMaxWDip, PreviewMaxHDip);
+    }
+
+    /// <summary>解析条目对应的可预览源窗口句柄：Window→其句柄；Pinned→该 exe 最近的一个可见非最小化窗口；
+    /// RecycleBin/Media→无（不预览）。</summary>
+    private bool PreviewSourceFor(DockItem item, out IntPtr hwnd)
+    {
+        hwnd = IntPtr.Zero;
+        switch (item.Kind)
+        {
+            case DockItemKind.Window:
+                var h = item.WindowHandle ?? IntPtr.Zero;
+                if (h != IntPtr.Zero && NativeMethods.IsWindow(h) && !NativeMethods.IsIconic(h))
+                {
+                    hwnd = h;
+                    return true;
+                }
+                return false;
+
+            case DockItemKind.Pinned:
+                hwnd = MostRecentWindowForExe(item.LaunchPath);
+                return hwnd != IntPtr.Zero;
+
+            default:   // RecycleBin / Media：不预览
+                return false;
+        }
+    }
+
+    /// <summary>查找该启动项 exe 当前最近的一个可预览窗口（逆序=最近插入优先，取首个非最小化可见者）。
+    /// .lnk 快捷方式先解析目标 exe，再按进程映像基础名比对（LaunchPath 常为 .lnk，窗口 ExePath 是真实 exe）。</summary>
+    private IntPtr MostRecentWindowForExe(string launchPath)
+    {
+        if (string.IsNullOrWhiteSpace(launchPath)) return IntPtr.Zero;
+        var target = ExeBaseName(ResolveExePath(launchPath));
+        if (target.Length == 0) return IntPtr.Zero;
+
+        var list = _tracker.Windows;
+        IntPtr fallback = IntPtr.Zero;
+        for (var i = list.Count - 1; i >= 0; i--)
+        {
+            var w = list[i];
+            if (!NativeMethods.IsWindow(w.Handle)) continue;
+            if (!string.Equals(ExeBaseName(w.ExePath), target, StringComparison.OrdinalIgnoreCase)) continue;
+            if (!NativeMethods.IsIconic(w.Handle) && NativeMethods.IsWindowVisible(w.Handle))
+                return w.Handle;
+            if (fallback == IntPtr.Zero) fallback = w.Handle;   // 只剩最小化窗口：交 Show 的 IsIconic 兜底（不弹）
+        }
+        return fallback;
+    }
+
+    private static string ResolveExePath(string launchPath)
+        => launchPath.EndsWith(".lnk", StringComparison.OrdinalIgnoreCase)
+            ? ShellLink.Resolve(launchPath).TargetPath
+            : launchPath;
+
+    private static string ExeBaseName(string path)
+    {
+        try { return Path.GetFileNameWithoutExtension(path); }
+        catch { return string.Empty; }
     }
 
     // ---------- 媒体面板（实况窗展开） ----------
