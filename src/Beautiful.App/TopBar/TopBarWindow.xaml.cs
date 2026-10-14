@@ -64,6 +64,11 @@ public partial class TopBarWindow : AcrylicWindow
     private IntPtr _lastFgHwnd;
     private string _lastAppName = "";
     private readonly uint _ownPid = (uint)Environment.ProcessId;
+    // 最近一次读到的**非本进程**前台句柄：本进程窗口（顶栏自身/弹层）从不覆盖它，
+    // 因此它是"用户真正在用的窗口"的可信来源，供 ForegroundSnapshotForMenu 在抢焦前兜底。
+    private IntPtr _lastForeignFgHwnd;
+    // 菜单构造时使用的前台快照（PreviewMouseDown 取得），见 ForegroundHandle 注释。
+    private IntPtr _menuFgSnapshot;
 
     // Task 9：状态项
     private DispatcherTimer? _statusTimer;   // 每分钟：时钟/网络/电量对账
@@ -75,16 +80,26 @@ public partial class TopBarWindow : AcrylicWindow
     private TextBlock? _batteryText;
     private MediaViewModel? _subscribedMedia;
 
-    /// <summary>弹出前记录的真实前台句柄（"窗口"菜单勾选/最小化/关闭的目标；弹层显示后前台变弹层，故取此快照）。</summary>
-    public IntPtr ForegroundHandle => _lastFgHwnd;
+    /// <summary>
+    /// "窗口"菜单的前台句柄快照：<b>只读 <see cref="_menuFgSnapshot"/>，绝不读 <see cref="_lastFgHwnd"/></b>。
+    /// 评审发现（Task 9）：点顶栏按钮会让顶栏自身成为前台，<see cref="ShowMenuUnder"/> 之后的
+    /// <see cref="RefreshForegroundApp"/> 又会把 <see cref="_lastFgHwnd"/> 指向弹层（甚至上一个已销毁的弹层），
+    /// 于是极快连开两次"窗口"菜单时勾选项/最小化-关闭小节会指向错误句柄。快照在 <see cref="Button.PreviewMouseDown"/>
+    /// （早于 Click 构造菜单）取得，且只接受**非本进程**的窗口，因此弹层/顶栏永远无法污染它。
+    /// </summary>
+    public IntPtr ForegroundHandle => _menuFgSnapshot;
 
     public TopBarWindow(TopBarContext context)
     {
         _context = context;
         InitializeComponent();
-        ThemeManager.ThemeChanged += OnThemeChanged;
         BuildLeftRegion();
         BuildRightRegion();
+        // 静态事件订阅必须晚于 Build*：Build 抛异常时构造函数不会返回，调用方（App.EnsureTopBar）
+        // 手里的 bar 恒为 null → catch 里的 bar?.Close() 成 no-op → 静态事件永久持有半构造窗口，
+        // 之后每次换主题都对一个没有 HWND 的僵尸实例执行 ApplyTheme（与 App.xaml.cs 刚修过的同类泄漏一致）。
+        // 订阅放最后：此刻 Build 已完成，后续 OnClosed 的解绑与之一一对称。
+        ThemeManager.ThemeChanged += OnThemeChanged;
     }
 
     // ---------- 生命周期 / AppBar ----------
@@ -242,6 +257,7 @@ public partial class TopBarWindow : AcrylicWindow
         var fg = NativeMethods.GetForegroundWindow();
         if (fg == _lastFgHwnd) return;
         _lastFgHwnd = fg;
+        if (IsForeignWindow(fg)) _lastForeignFgHwnd = fg;   // 菜单快照的可信来源（本进程窗口不参与）
 
         string name;
         if (fg == IntPtr.Zero) name = "Beautiful";
@@ -273,6 +289,27 @@ public partial class TopBarWindow : AcrylicWindow
         NativeMethods.GetWindowText(hwnd, sb, sb.Capacity);
         var title = sb.ToString().Trim();
         return title.Length > 0 ? title : "Beautiful";
+    }
+
+    /// <summary>该窗口是否属于其它进程（本进程的顶栏/弹层/面板一律返回 false）。</summary>
+    private bool IsForeignWindow(IntPtr hwnd)
+    {
+        if (hwnd == IntPtr.Zero || !NativeMethods.IsWindow(hwnd)) return false;
+        var tid = NativeMethods.GetWindowThreadProcessId(hwnd, out var pid);
+        return tid != 0 && pid != _ownPid;
+    }
+
+    /// <summary>
+    /// 取"弹出前真实前台"快照：<br/>
+    /// ①当前前台属其它进程 → 顶栏/弹层还没抢到焦点，直接采用（最新）；<br/>
+    /// ②否则（点顶栏按钮后前台已是本进程的顶栏或弹层）→ 回退到最近一次外部前台。<br/>
+    /// 弹层显示后 <see cref="RefreshForegroundApp"/> 会把 <see cref="_lastFgHwnd"/> 指向弹层乃至已销毁的弹层，
+    /// 而本快照只接受外部窗口，故"窗口"菜单的勾选/最小化/关闭目标不会被污染（评审发现 2）。
+    /// </summary>
+    private void TakeForegroundSnapshot()
+    {
+        var fg = NativeMethods.GetForegroundWindow();
+        _menuFgSnapshot = IsForeignWindow(fg) ? fg : _lastForeignFgHwnd;
     }
 
     // ---------- 左区：logo + 菜单（Task 9） ----------
@@ -321,7 +358,10 @@ public partial class TopBarWindow : AcrylicWindow
     private Button MakeMenuButton(string label, Func<System.Collections.Generic.List<MenuItemView>> build)
     {
         var b = NewBarButton(new TextBlock { Text = label, FontSize = 12 });
-        b.Click += (_, _) => ShowMenuUnder(b, build());
+        // 早于 Click 构造菜单的一刻：鼠标按下即记录前台快照（评审发现 2 的修复点）。
+        b.PreviewMouseDown += (_, _) => TakeForegroundSnapshot();
+        // build() 在 FluentMenu.Show 之前求值，故此处再取一次：键盘（Enter/Space）触发时没有 PreviewMouseDown。
+        b.Click += (_, _) => { TakeForegroundSnapshot(); ShowMenuUnder(b, build()); };
         return b;
     }
 
@@ -333,7 +373,9 @@ public partial class TopBarWindow : AcrylicWindow
     {
         var p = anchor.PointToScreen(new Point(0, anchor.ActualHeight)); // 设备像素
         FluentMenu.Show(new FluentPopupHost(), new Point(p.X, p.Y), items, item => item.Invoke?.Invoke());
-        RefreshForegroundApp(); // 让"窗口"菜单前台判定等下次打开即新鲜
+        // 菜单已显示：此后前台变成弹层自身。这里仍刷新应用名（让 UI 与真实前台一致），
+        // 但**不再**是"窗口"菜单的判定来源——菜单用的是显示前的 _menuFgSnapshot（评审发现 2）。
+        RefreshForegroundApp();
     }
 
     // ---------- 右区：状态项（Task 9） ----------
