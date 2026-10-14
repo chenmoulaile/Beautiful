@@ -14,20 +14,23 @@ using Size = System.Windows.Size; // 同上，System.Drawing.Size
 namespace Beautiful.App.Controls;
 
 /// <summary>
-/// 无边框高级弹层宿主：Topmost、不进任务栏、<c>ShowActivated=false</c> + <c>WS_EX_NOACTIVATE</c>
-/// （点击/显示均不抢前台焦点）。
+/// 无边框高级弹层宿主：Topmost、不进任务栏、<c>ShowActivated=true</c> + <c>Focusable=true</c>
+/// （评审 Important#3：菜单须键盘可达 → 采用"激活式弹层"模型：窗口显示即夺取前台激活与键盘焦点）。
 /// <para>
-/// 关闭策略【刻意不用 Deactivated→Close】：NOACTIVATE 弹层从不被激活，也就没有失活事件可用；
-/// 而普通"失活即关"在托盘场景会因显示窗口引发的激活竞态秒关。改为"点击外部才关"：
-/// 40ms 定时器轮询 GetCursorPos（物理像素）——光标离开本窗口矩形（外扩容差，覆盖父子弹层间的
-/// 空隙桥接）持续 ≥2 拍（~80ms，防穿越抖动误关）即 Close。全链存活判定由 <see cref="KeepAliveProbe"/>
-/// 提供（<see cref="FluentMenu"/> 注入"光标在整条父子弹层链任一矩形内"），根宿主独揽定时器，
-/// 子宿主（<see cref="ParentHost"/> 非空）不自关、随链级联关闭。
+/// 关闭策略【Deactivated→Close 为主，光标探测看门狗为辅】：激活式窗口显示后即为前台，失去激活
+/// （点别处/Esc/选叶子）即关链——这与 v1"秒自杀"无关（v1 的病根是把 Deactivated→Close 与
+/// <c>WS_EX_NOACTIVATE</c> 并用：窗口从不激活→任何激活抖动都触发失活秒关）。本模型窗口确实激活，
+/// Deactivated 只在真正让位给链外窗口时触发。<see cref="FluentMenu"/> 负责链感知：子弹层激活导致
+/// 父层 Deactivated 时不误关（链内仍有活动窗口即保活）。看门狗（40ms GetCursorPos 轮询）保留为兜底
+/// 安全网，但当整条父子弹层链仍持有激活（键盘导航中）时它绝不因光标离开而关，二者不打架：
+/// 全链存活判定由 <see cref="KeepAliveProbe"/> 提供（<see cref="FluentMenu"/> 注入"链内有活动窗口
+/// 或光标在链任一矩形内"），根宿主独揽定时器，子宿主（<see cref="ParentHost"/> 非空）不自关、随链级联关闭。
 /// </para>
 /// <para>
 /// 定位全程物理像素：输入锚点即 <c>GetCursorPos</c>/<c>Cursor.Position</c> 的物理坐标；
-/// 尺寸取内容同步 <c>Measure</c> 的 DesiredSize×窗口 DPI（确定性，不等 SizeToContent 的异步
-/// HWND 定形），边缘翻转用锚点所在显示器的 <c>rcWork</c>（物理），再 <c>SetWindowPos</c> 落位。
+/// 尺寸取内容同步 <c>Measure</c> 的 DesiredSize×<c>锚点所在显示器的有效 DPI</c>（评审 Important#1：
+/// 混合 DPI 多显示器必须按锚点显示器取缩放，不能用刚创建未落位 hwnd 的 GetDpiForWindow），
+/// 边缘翻转用锚点所在显示器的 <c>rcWork</c>（物理），再 <c>SetWindowPos</c> 落位。
 /// 入场 120ms 淡入 + 位移（CubicEase，方向随翻转：托盘弹层从下往上滑入，子菜单自父项向右滑出）。
 /// </para>
 /// </summary>
@@ -47,7 +50,7 @@ public class FluentPopupHost : Window
     public bool KeepOpen { get; set; }
 
     /// <summary>父弹层（子菜单宿主）；null = 根弹层（自带看门狗，全链存活由 <see cref="KeepAliveProbe"/> 判定）。
-    /// 刻意不用 <c>Window.Owner</c>：拥有关系会引发激活联动，与 NOACTIVATE 模型冲突。</summary>
+    /// 不用 <c>Window.Owner</c>：链存活/级联关闭由 <see cref="FluentMenu"/> 统一编排，父子各自独立激活。</summary>
     public FluentPopupHost? ParentHost { get; init; }
 
     /// <summary>存活探测（根宿主看门狗每拍调用；返回 true=保持打开）。null = 退化为"仅本窗口矩形"判定。</summary>
@@ -60,12 +63,17 @@ public class FluentPopupHost : Window
     {
         WindowStyle = WindowStyle.None;
         ResizeMode = ResizeMode.NoResize;
-        AllowsTransparency = true;           // 逐像素 alpha：圆角轮廓 + 投影（真毛玻璃背景由 Task 4 DWM 化）
+        AllowsTransparency = true;           // 逐像素 alpha：圆角轮廓 + 投影。
+        // 【Task 4 约束】AllowsTransparency=true 会强制窗口成为分层窗口（WS_EX_LAYERED），而分层窗口
+        // 与 DWMWA_SYSTEMBACKDROP_TYPE 真毛玻璃互斥（背板不生效）。Task 4 弹层现代化（SwitcherWindow/
+        // LauncherWindow/日历等浮层）必须改 AllowsTransparency=false + DwmExtendFrameIntoClientArea(-1)
+        // + DWMWA_SYSTEMBACKDROP_TYPE + DWMWA_WINDOW_CORNER_PREFERENCE 取原生圆角——届时本类的逐像素
+        // alpha 圆角/投影路径整体退场，勿在此模型上叠加 DWM 背板。
         Background = Brushes.Transparent;
         ShowInTaskbar = false;
         Topmost = true;
-        Focusable = false;                   // 永不获焦 → 无激活/失活竞态
-        ShowActivated = false;
+        Focusable = true;                    // 激活式弹层：可获焦 → 支持键盘导航（评审 Important#3）
+        ShowActivated = true;                // 显示即夺取前台激活（失活即关，由 FluentMenu 链感知兜底）
         SizeToContent = SizeToContent.WidthAndHeight;
         WindowStartupLocation = WindowStartupLocation.Manual;
         UseLayoutRounding = true;
@@ -75,11 +83,12 @@ public class FluentPopupHost : Window
     protected override void OnSourceInitialized(EventArgs e)
     {
         base.OnSourceInitialized(e);
-        // WS_EX_NOACTIVATE：Show 与点击都不夺取前台激活（托盘菜单不闪掉前台应用）；
-        // WS_EX_TOOLWINDOW 兜底（ShowInTaskbar=false 已覆盖，防御性叠加，alt-tab 不可见）。
+        // 激活式弹层（评审 Important#3）：显示即夺取前台激活/键盘焦点，故【不加】WS_EX_NOACTIVATE
+        // （它会压制激活，与 ShowActivated=true 冲突）。仅保留 WS_EX_TOOLWINDOW：alt-tab 不可见兜底
+        // （ShowInTaskbar=false 已覆盖，防御性叠加）。
         var hwnd = new WindowInteropHelper(this).Handle;
         var ex = GetWindowLongPtr(hwnd, GwlpExStyle);
-        SetWindowLongPtr(hwnd, GwlpExStyle, ex | WsExNoactivate | WsExToolwindow);
+        SetWindowLongPtr(hwnd, GwlpExStyle, ex | WsExToolwindow);
     }
 
     /// <summary>
@@ -98,13 +107,14 @@ public class FluentPopupHost : Window
         // 尺寸确定性来源 = 同步 Measure 的 DesiredSize（DIP），不依赖任何 dispatcher 冲刷时机：
         // Show 后 SizeToContent 对 HWND 的真实尺寸调整发生在低于 Render 的派发优先级里，
         // GetWindowRect 即时读数会拿到未定形旧尺寸 → 翻转计算错误（曾致托盘弹层落位偏 150px）。
+        // 缩放基准取【锚点所在显示器的有效 DPI】（评审 Important#1）：hwnd 刚 EnsureHandle 尚未落位，
+        // PerMonitorV2 下 GetDpiForWindow 返回初置/主屏 DPI，副屏 150% 时会让 230DIP 测成 230px
+        // 而 WPF 随后按目标屏重排成 345px → 翻转判定/底边计算差 ~1.5 倍。
         double wPx = 0, hPx = 0;
         if (Content is FrameworkElement fe)
         {
             fe.Measure(new Size(double.PositiveInfinity, double.PositiveInfinity));
-            double scale = GetDpiForWindow(hwnd);
-            if (scale <= 0) scale = 96;
-            scale /= 96.0;
+            double scale = ScaleOfAnchor(primary, hwnd);
             wPx = fe.DesiredSize.Width * scale;
             hPx = fe.DesiredSize.Height * scale;
         }
@@ -128,8 +138,31 @@ public class FluentPopupHost : Window
         SetWindowPos(hwnd, IntPtr.Zero, ix, iy, 0, 0, SwpNosize | SwpNozorder | SwpNoactivate);
         PlacedPhysicalRect = new Rect(ix, iy, wPx, hPx);
 
+        // 激活式弹层：落位后强制夺取前台激活/键盘焦点。托盘右键经 NotifyIcon 消息进来时本进程未必是
+        // 前台，系统前台锁会压制 ShowActivated/Activate → 菜单收不到键盘（评审 Important#3 键盘可达的
+        // 前提）。用 AttachThreadInput+SetForegroundWindow 可靠夺焦（原生菜单显示时同样短暂抢焦点）。
+        ForceForeground();
+
         PlayEntrance();
         if (ParentHost is null) StartWatchdog(); // 子宿主不自律：随根链级联关闭
+    }
+
+    /// <summary>
+    /// 强制把本窗口置为前台活动窗口（临时挂接当前前台线程解除系统前台锁），确保键盘可达。
+    /// 已是前台时退化为普通 <see cref="Window.Activate"/>（父↔子弹层间切换无需挂接）。
+    /// </summary>
+    internal void ForceForeground()
+    {
+        var hwnd = new WindowInteropHelper(this).Handle;
+        if (hwnd == IntPtr.Zero) { Activate(); return; }
+        var fore = GetForegroundWindow();
+        uint foreTid = fore != IntPtr.Zero ? GetWindowThreadProcessId(fore, out _) : 0u;
+        uint curTid = GetCurrentThreadId();
+        bool attached = foreTid != 0 && foreTid != curTid && AttachThreadInput(curTid, foreTid, true);
+        BringWindowToTop(hwnd);
+        SetForegroundWindow(hwnd);
+        Activate();
+        if (attached) AttachThreadInput(curTid, foreTid, false);
     }
 
     /// <summary>光标是否在本弹层物理矩形外扩 <paramref name="inflate"/>px 范围内（桥接父子弹层间隙）。</summary>
@@ -153,6 +186,24 @@ public class FluentPopupHost : Window
             return new Rect(mi.rcWork.Left, mi.rcWork.Top,
                             mi.rcWork.Right - mi.rcWork.Left, mi.rcWork.Bottom - mi.rcWork.Top);
         return new Rect(0, 0, GetSystemMetrics(0), GetSystemMetrics(1)); // SM_CXSCREEN/SM_CYSCREEN 兜底
+    }
+
+    /// <summary>
+    /// 锚点所在显示器的有效 DPI 缩放（DIP→物理像素倍率，评审 Important#1）。
+    /// MonitorFromPoint(TONEAREST)+GetDpiForMonitor(MDT_EFFECTIVE_DPI)；shcore 不可用或异常时
+    /// 回退 <c>GetDpiForWindow</c>（单屏主 DPI 场景等价），再兜底 1.0。
+    /// </summary>
+    private static double ScaleOfAnchor(Point anchorPhysicalPx, IntPtr fallbackHwnd)
+    {
+        var pt = new POINT { X = (int)Math.Round(anchorPhysicalPx.X), Y = (int)Math.Round(anchorPhysicalPx.Y) };
+        var mon = MonitorFromPoint(pt, MonitorDefaultToNearest);
+        if (mon != IntPtr.Zero &&
+            GetDpiForMonitor(mon, MdtEffectiveDpi, out uint dpiX, out _) == 0 && // 0 = S_OK
+            dpiX > 0)
+            return dpiX / 96.0;
+        // 兜底路径极少命中（多屏 shcore 恒可用）：退回窗口 DPI，无则 1.0。
+        // 注意此 hwnd 尚未落位，可能取到初置屏 DPI——仅为降级，不追求精确。
+        return fallbackHwnd != IntPtr.Zero ? GetDpiForWindow(fallbackHwnd) / 96.0 : 1.0;
     }
 
     private void StartWatchdog()

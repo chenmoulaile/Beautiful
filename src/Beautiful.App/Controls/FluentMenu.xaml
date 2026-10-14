@@ -35,7 +35,8 @@
                 </Border>
                 <ListBox x:Name="Rows" Margin="5,7,5,7" Focusable="False" Background="Transparent"
                          BorderThickness="0" ScrollViewer.HorizontalScrollBarVisibility="Disabled"
-                         ScrollViewer.VerticalScrollBarVisibility="Disabled">
+                         ScrollViewer.VerticalScrollBarVisibility="Disabled"
+                         VirtualizingPanel.IsVirtualizing="False">
                     <ListBox.ItemContainerStyle>
                         <!-- 容器纯平铺（无选中/悬停 chrome，悬停高亮在行模板内自绘）；
                              HorizontalContentAlignment=Stretch 让行贯穿卡宽（单趟布局即定形，
@@ -101,6 +102,10 @@
                                 <Border x:Name="Sep" Height="1" Margin="13,7" Background="#1AFFFFFF"
                                         Visibility="Collapsed" IsHitTestVisible="False"/>
                             </Grid>
+                            <!-- 高亮单一来源＝容器 IsSelected（评审 Important#3）：鼠标悬停经 Row_MouseEnter
+                                 把选中项同步为该 Item，键盘 ↑↓/Home/End/Type-ahead 改 SelectedIndex —— 两者走
+                                 同一条 Enter/ExitActions，观感完全一致（60ms 淡入 + 0.92→1 缩放滑入）。
+                                 IsSelected 用 RelativeSource 取外层 ListBoxItem 容器（DataTemplate 内可达祖先）。 -->
                             <DataTemplate.Triggers>
                                 <DataTrigger Binding="{Binding IsSeparator}" Value="True">
                                     <Setter TargetName="Row" Property="Visibility" Value="Collapsed"/>
@@ -112,8 +117,8 @@
                                 <DataTrigger Binding="{Binding HasChildren}" Value="True">
                                     <Setter TargetName="Arrow" Property="Visibility" Value="Visible"/>
                                 </DataTrigger>
-                                <Trigger Property="UIElement.IsMouseOver" SourceName="Row" Value="True">
-                                    <Trigger.EnterActions>
+                                <DataTrigger Binding="{Binding IsSelected, RelativeSource={RelativeSource AncestorType=ListBoxItem}}" Value="True">
+                                    <DataTrigger.EnterActions>
                                         <BeginStoryboard>
                                             <Storyboard>
                                                 <DoubleAnimation Storyboard.TargetName="Glow"
@@ -139,8 +144,8 @@
                                                 </DoubleAnimation>
                                             </Storyboard>
                                         </BeginStoryboard>
-                                    </Trigger.EnterActions>
-                                    <Trigger.ExitActions>
+                                    </DataTrigger.EnterActions>
+                                    <DataTrigger.ExitActions>
                                         <BeginStoryboard>
                                             <Storyboard>
                                                 <DoubleAnimation Storyboard.TargetName="Glow"
@@ -154,8 +159,8 @@
                                                                  To="0.92" Duration="0:0:0.12"/>
                                             </Storyboard>
                                         </BeginStoryboard>
-                                    </Trigger.ExitActions>
-                                </Trigger>
+                                    </DataTrigger.ExitActions>
+                                </DataTrigger>
                             </DataTemplate.Triggers>
                         </DataTemplate>
                     </ListBox.ItemTemplate>

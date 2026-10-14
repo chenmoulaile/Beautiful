@@ -124,6 +124,13 @@ internal static partial class NativeMethods
     [DllImport("user32.dll")] public static extern bool GetWindowRect(IntPtr hWnd, out RECT rect);
     [DllImport("user32.dll")] public static extern bool MoveWindow(IntPtr hWnd, int x, int y, int w, int h, bool repaint);
 
+    // 激活式弹层夺焦（评审 Important#3）：托盘右键/定时器显示时本进程未必是前台，系统前台锁会
+    // 压制 SetForegroundWindow/Activate → 菜单拿不到键盘焦点。经典解法：临时 AttachThreadInput 到
+    // 当前前台线程再 SetForegroundWindow + BringWindowToTop，随后解绑。
+    [DllImport("user32.dll")] public static extern bool AttachThreadInput(uint idAttach, uint idAttachTo, bool fAttach);
+    [DllImport("user32.dll")] public static extern bool BringWindowToTop(IntPtr hWnd);
+    [DllImport("kernel32.dll")] public static extern uint GetCurrentThreadId();
+
     public const uint SwpNozorder = 0x0004, SwpNoactivate = 0x0010, SwpShowWindow = 0x0040, SwpNoSendChanging = 0x0400;
     public const int SwHide = 0, SwShowna = 8; // SW_SHOWNA：恢复可见但不激活
     [DllImport("user32.dll")]
@@ -158,6 +165,14 @@ internal static partial class NativeMethods
     [DllImport("user32.dll")] public static extern IntPtr MonitorFromPoint(POINT pt, uint flags);
 
     [DllImport("user32.dll")] public static extern bool GetMonitorInfo(IntPtr hMonitor, ref MONITORINFO lpmi);
+
+    // 混合 DPI 多显示器：弹层尺寸/翻转必须用【锚点所在显示器】的有效 DPI，而非刚创建未落位
+    // hwnd 的 GetDpiForWindow（PerMonitorV2 下那返回初置/主屏 DPI → 副屏 150% 时测量差 1.5 倍）。
+    // shcore.GetDpiForMonitor 返回 HRESULT；MDT_EFFECTIVE_DPI(0) 即 WPF 布局所用的缩放基准。
+    public const int MdtEffectiveDpi = 0;
+
+    [DllImport("shcore.dll")]
+    public static extern int GetDpiForMonitor(IntPtr hMonitor, int dpiType, out uint dpiX, out uint dpiY);
 
     [DllImport("user32.dll")]
     public static extern uint GetWindowThreadProcessId(IntPtr hWnd, out uint processId);
