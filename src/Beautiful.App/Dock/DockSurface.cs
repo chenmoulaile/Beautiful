@@ -12,6 +12,10 @@ using Beautiful.Core.Dock;
 using Point = System.Windows.Point;
 using Size = System.Windows.Size;
 using Rect = System.Windows.Rect;
+using Brush = System.Windows.Media.Brush;   // 同上消歧（倒影遮罩字段类型），System.Drawing.Brush 全局歧义
+using Color = System.Windows.Media.Color;
+using Panel = System.Windows.Controls.Panel;
+using Image = System.Windows.Controls.Image;
 
 namespace Beautiful.App.Dock;
 
@@ -63,6 +67,23 @@ public sealed class DockSurface : Canvas
     /// </summary>
     private const double RowInsetDip = 20;
 
+    /// <summary>倒影带间隙（DIP）：镜像顶边与图标底边的距离（macOS Dock 倒影留一道细缝）。</summary>
+    private const double ReflectionGapDip = 2;
+
+    /// <summary>倒影高度占图标尺寸比例。</summary>
+    private const double ReflectionHeightRatio = 0.4;
+
+    /// <summary>启动弹跳时长（秒）与纵向峰值幅度（占图标尺寸比例）。</summary>
+    private const double BounceDurationSeconds = 0.6;
+    private const double BounceAmplitudeRatio = 0.5;
+
+    /// <summary>
+    /// 弹跳幅度上限（DIP）：BounceOffset 峰值 ≈1.194A（见 Core 注释），A=20 时峰值上移 23.9 DIP，
+    /// 小于最小条带顶部余量场景的可用高度（MinStripHeadroomDip 22 + Surface 上边距 6 + 行内居中余量 ≥10），
+    /// 大图标（72）按比例会顶出窗口，故按比例 + 绝对值双限。
+    /// </summary>
+    private const double BounceMaxAmplitudeDip = 20;
+
     /// <summary>可见性判定的最小宽度（DIP）：媒体胶囊收起（Width=0）时整槽不参与排布，不留空隙。</summary>
     private const double MinVisibleWidthDip = 0.5;
 
@@ -79,6 +100,26 @@ public sealed class DockSurface : Canvas
     private readonly List<FrameworkElement?> _containers = new();
     private readonly List<DockItem?> _items = new();
 
+    /// <summary>倒影元素（与 _containers 同下标；null = 该项无倒影：媒体槽/无图标回退项/倒影关闭）。</summary>
+    private readonly List<FrameworkElement?> _reflections = new();
+
+    /// <summary>
+    /// 倒影垂直遮罩（冻结共享）：渐变**在镜像变换后的局部坐标**里定义——倒影元素的 RenderTransform
+    /// ScaleY=-1 把画布上下翻转，故"局部底=最终顶（贴近图标）"取 45% 不透明、"局部顶=最终底"取全透明，
+    /// 得到 macOS 式"上实下虚"的垂直渐隐。冻结后跨条目/跨线程（渲染线程）安全共享，零逐帧分配。
+    /// </summary>
+    private static readonly Brush ReflectionMask = CreateReflectionMask();
+
+    private static Brush CreateReflectionMask()
+    {
+        var brush = new LinearGradientBrush(
+            Color.FromArgb(0x00, 0xFF, 0xFF, 0xFF),   // 局部顶 → 翻转后是倒影底缘：全透明
+            Color.FromArgb(0x73, 0xFF, 0xFF, 0xFF),   // 局部底 → 翻转后贴图标：45% 不透明
+            new Point(0.5, 0), new Point(0.5, 1));
+        brush.Freeze();
+        return brush;
+    }
+
     // 逐帧几何状态（下标 = 条目下标，与 _containers 对齐）
     private double[] _cur = Array.Empty<double>();     // 当前（阻尼后）scale
     private double[] _tgt = Array.Empty<double>();     // 目标 scale（来自放大场）
@@ -87,6 +128,8 @@ public sealed class DockSurface : Canvas
     private double[] _layoutLefts = Array.Empty<double>(); // 本帧写给 Canvas.Left 的布局左缘（= drawn + extra/2）
     private double[] _widths = Array.Empty<double>();  // 未放大宽（模板 DesiredSize，胶囊 124 / 图标 44）
     private double[] _heights = Array.Empty<double>();
+    private double[] _bounceRemaining = Array.Empty<double>(); // 启动弹跳剩余时长（秒；0=空闲）
+    private double[] _bounceY = Array.Empty<double>();         // 本帧弹跳纵向偏移（DIP，负=上移）
 
     // 放大场输入：仅**可见**项参与（隐藏胶囊不占位也不产生"幽灵鼓包"）
     private double[] _fieldCenters = Array.Empty<double>();
@@ -166,12 +209,15 @@ public sealed class DockSurface : Canvas
         new FrameworkPropertyMetadata(true, FrameworkPropertyMetadataOptions.AffectsMeasure));
 
     /// <summary>
-    /// 图标倒影开关（brief 接口位）。本任务不绘制倒影——镜像副本会让可视树翻倍、直接吃帧时间预算，
-    /// 倒影效果由后续任务（高级特性）在帧时间允许的前提下实现。
+    /// 图标倒影开关（Task 15 起**有渲染器**）：开 = 每个带图标的条目下方挂一条镜像渐隐倒影
+    /// （VisualBrush 实时引用图标 + 冻结垂直透明遮罩），行高随之加长（见 <see cref="RowHeightDip"/>）；
+    /// 关 = 摘除倒影元素、行高复原。刷树时 <see cref="SyncReflections"/> 一次性建/删元素，
+    /// 动画循环逐帧零新增分配（倒影随容器 ScaleTransform 一起缩放，不需要独立逐帧写入）。
     /// </summary>
     public static readonly DependencyProperty ReflectionEnabledProperty = DependencyProperty.Register(
         nameof(ReflectionEnabled), typeof(bool), typeof(DockSurface),
-        new PropertyMetadata(false));
+        new FrameworkPropertyMetadata(false, FrameworkPropertyMetadataOptions.AffectsMeasure,
+            OnReflectionEnabledChanged));
 
     public IList? ItemsSource
     {
@@ -221,6 +267,25 @@ public sealed class DockSurface : Canvas
         set => SetValue(ReflectionEnabledProperty, value);
     }
 
+    /// <summary>
+    /// 条目行高（DIP）= IconSize + 行内余量 20 + 倒影余量（仅 ReflectionEnabled 时非零）。
+    /// 【DockWindow 条带几何的唯一来源】可见面板高 = 本值 + Surface 上下 Margin(6+6)，
+    /// 倒影开启时条带随之一致加高，AppBar 协商仍贴底无缝。
+    /// </summary>
+    public double RowHeightDip => IconSize + RowInsetDip + ReflectionExtraDip();
+
+    /// <summary>倒影几何在行底需要的额外高度：静止态"间隙 + 倒影高"完整落入行内（推导见注释）。</summary>
+    private double ReflectionExtraDip()
+    {
+        if (!ReflectionEnabled) return 0;
+        // 图标在加高后的行里仍垂直居中：倒影底缘 = containerBottom + 间隙 + 倒影高，其中
+        // containerBottom = (IconSize + 20 + X + IconSize)/2 = IconSize + (20+X)/2。要求
+        // IconSize + (20+X)/2 + gap + 0.4·IconSize ≤ IconSize + 20 + X  →  X ≥ 2·gap + 0.8·IconSize − 20。
+        // 取等号 = 倒影恰好填满行底，不多占条带一个像素。（评审自查修正：初版多减了一个 IconSize，
+        // X 恒 0 → 静止倒影下探行底 9.6 DIP，被条带下缘裁掉大半。）
+        return Math.Max(0.0, 2.0 * ReflectionGapDip + 0.8 * IconSize - RowInsetDip);
+    }
+
     // ---------- 外部协作点（由 DockWindow 注入） ----------
 
     /// <summary>条目模板选择器（复用 DockWindow 的 DefaultItemTemplate / MediaItemTemplate，主题化不受影响）。</summary>
@@ -257,6 +322,7 @@ public sealed class DockSurface : Canvas
     private static void OnGeometryParameterChanged(DependencyObject d, DependencyPropertyChangedEventArgs e)
     {
         var s = (DockSurface)d;
+        s.UpdateReflectionGeometry();   // 倒影高度/下探量随 IconSize 走（RowHeightDip 自动含新倒影余量）
         s._layoutDirty = true;
         s.InvalidateMeasure();
         s.Wake();
@@ -264,6 +330,15 @@ public sealed class DockSurface : Canvas
 
     private static void OnFieldParameterChanged(DependencyObject d, DependencyPropertyChangedEventArgs e)
         => ((DockSurface)d).Wake();
+
+    private static void OnReflectionEnabledChanged(DependencyObject d, DependencyPropertyChangedEventArgs e)
+    {
+        var s = (DockSurface)d;
+        s.SyncReflections();          // 增删倒影元素（一次性，非逐帧路径）
+        s._layoutDirty = true;        // 行高/倒影几何随开关变化重排；DockWindow 侧由调用方触发条带重排
+        s.InvalidateMeasure();
+        s.Wake();
+    }
 
     private void OnCollectionChanged(object? sender, NotifyCollectionChangedEventArgs e)
     {
@@ -294,6 +369,7 @@ public sealed class DockSurface : Canvas
         Children.Clear();
         _containers.Clear();
         _items.Clear();
+        _reflections.Clear();
 
         var items = ItemsSource;
         if (items is not null)
@@ -318,10 +394,73 @@ public sealed class DockSurface : Canvas
             }
         }
 
+        // 倒影元素随树重建重挂（容器是新对象，旧倒影已随 Children.Clear 消失，_reflections 已清空为占位）
+        SyncReflections();
+
         _structureDirty = true;   // 条目增删/换源：整树重建 → 场状态一并重置
         _layoutDirty = true;
         InvalidateMeasure();
         Wake();
+    }
+
+    /// <summary>
+    /// 按开关与当前容器同步倒影元素（Task 15）：每个"模板根为 Grid + 含 Image + 条目有图标"的项，
+    /// 在其 Grid 里挂一条底边对齐、负 Margin 探出图标下方的镜像 Border（VisualBrush 实时引用该 Image，
+    /// 图标换源自动跟随；ScaleY=-1 镜像 + 冻结垂直渐隐遮罩）。媒体胶囊/回退字形项（Icon=null）不挂。
+    /// 只在开关变更/树重建时调用——VisualBrush/遮罩每元素建一次，动画循环零新增分配。
+    /// </summary>
+    private void SyncReflections()
+    {
+        var n = _containers.Count;
+        for (var i = 0; i < _reflections.Count; i++)
+            if (_reflections[i]?.Parent is Panel host) host.Children.Remove(_reflections[i]!);
+        _reflections.Clear();
+
+        if (!ReflectionEnabled)
+        {
+            for (var i = 0; i < n; i++) _reflections.Add(null);
+            return;
+        }
+        for (var i = 0; i < n; i++)
+        {
+            _reflections.Add(null);
+            if (_containers[i] is not Grid grid || _items[i] is not { } item || item.Icon is null) continue;
+            Image? icon = null;
+            foreach (var child in grid.Children)
+                if (child is Image im) { icon = im; break; }
+            if (icon is null) continue;
+
+            var h = IconSize * ReflectionHeightRatio;
+            var reflection = new Border
+            {
+                Height = h,
+                HorizontalAlignment = System.Windows.HorizontalAlignment.Stretch,
+                VerticalAlignment = VerticalAlignment.Bottom,
+                // 负下 Margin 让倒影探出容器底边（容器不裁剪：Canvas ClipToBounds=false、Grid 默认不裁），
+                // 探出部分由加长后的行高（RowHeightDip）容纳，指示点在图标内下方仍压在图标上、不被倒影遮断。
+                Margin = new Thickness(0, 0, 0, -(h + ReflectionGapDip)),
+                Background = new VisualBrush { Visual = icon, Stretch = Stretch.Fill },
+                OpacityMask = ReflectionMask,
+                RenderTransform = new ScaleTransform(1.0, -1.0),   // 垂直镜像
+                RenderTransformOrigin = new Point(0.5, 0.5),
+                IsHitTestVisible = false,                          // 不参与命中：点击热区仍是图标本体
+            };
+            grid.Children.Add(reflection);
+            _reflections[i] = reflection;
+        }
+    }
+
+    /// <summary>图标尺寸变更后刷新已挂倒影的高度/下探量（低频路径：滑杆/主题切换）。</summary>
+    private void UpdateReflectionGeometry()
+    {
+        if (!ReflectionEnabled) return;
+        var h = IconSize * ReflectionHeightRatio;
+        for (var i = 0; i < _reflections.Count; i++)
+            if (_reflections[i] is Border b)
+            {
+                b.Height = h;
+                b.Margin = new Thickness(0, 0, 0, -(h + ReflectionGapDip));
+            }
     }
 
     /// <summary>模板内宽度变化（媒体胶囊有/无会话切换 Width=0↔124）→ 基准排布重算，不留空隙、不重置缩放状态。</summary>
@@ -341,7 +480,7 @@ public sealed class DockSurface : Canvas
 
         if (_layoutDirty || _widths.Length != n) RecomputeBaseLayout();
 
-        _rowHeight = IconSize + RowInsetDip;
+        _rowHeight = RowHeightDip;   // 倒影开启时自动加长（ReflectionExtraDip），DockWindow 条带读同一来源
         // AutoWidth：期望尺寸 = 当前放大总宽（逐帧由 ApplyGeometry 触发 InvalidateMeasure）；
         // 否则恒为未放大总宽 → 放大过程完全不触发布局。
         var width = AutoWidth ? _naturalWidth + CurrentExtraWidth() : _naturalWidth;
@@ -367,6 +506,7 @@ public sealed class DockSurface : Canvas
             _cur = new double[n]; _tgt = new double[n];
             _baseLefts = new double[n]; _widths = new double[n];
             _heights = new double[n]; _lefts = new double[n]; _layoutLefts = new double[n];
+            _bounceRemaining = new double[n]; _bounceY = new double[n];   // 弹跳随树作废（下标映射已失效）
             Array.Fill(_cur, 1.0);
             Array.Fill(_tgt, 1.0);
         }
@@ -379,6 +519,8 @@ public sealed class DockSurface : Canvas
             _heights = EnsureLength(_heights, n, 0.0);
             _lefts = EnsureLength(_lefts, n, 0.0);
             _layoutLefts = EnsureLength(_layoutLefts, n, 0.0);
+            _bounceRemaining = EnsureLength(_bounceRemaining, n, 0.0);
+            _bounceY = EnsureLength(_bounceY, n, 0.0);
         }
         _structureDirty = false;
 
@@ -455,6 +597,49 @@ public sealed class DockSurface : Canvas
     /// <summary>外部（窗口关闭/隐藏）停驱：空闲时必须彻底摘掉 Rendering 钩子。</summary>
     public void Shutdown() => StopLoop();
 
+    /// <summary>
+    /// 启动该条目的纵向弹跳（Task 15，BounceEnabled 的渲染入口，由 DockWindow 启动固定应用时调用）。
+    /// 复用现有 CompositionTarget.Rendering 循环驱动（不加第二个计时器）；
+    /// 弹跳进行中重复点击 = **重置**进度重跳一次，绝不叠加（剩余时长直接置回满值）。
+    /// </summary>
+    public void StartBounce(DockItem item)
+    {
+        var i = _items.IndexOf(item);
+        if (i < 0 || i >= _bounceRemaining.Length) return;
+        _bounceRemaining[i] = BounceDurationSeconds;
+        Wake();
+    }
+
+    /// <summary>
+    /// 逐帧推进弹跳：剩余时长减 dt，偏移取 <see cref="AnimationMath.BounceOffset"/>（负=上移）。
+    /// 返回"全部弹跳是否已了结"——了结者偏移归零，未了结者令本帧不得判为收敛（钩子不许提前摘除）。
+    /// 只在有活动弹跳的 ~600ms 内每帧多跑一趟 O(n) 标量循环，零分配。
+    /// </summary>
+    private bool AdvanceBounces(double dt)
+    {
+        var idle = true;
+        for (var i = 0; i < _bounceRemaining.Length; i++)
+        {
+            if (_bounceRemaining[i] <= 0.0)
+            {
+                if (_bounceY[i] != 0.0) _bounceY[i] = 0.0;
+                continue;
+            }
+            var remaining = _bounceRemaining[i] - dt;
+            if (remaining <= 0.0)
+            {
+                _bounceRemaining[i] = 0.0;
+                _bounceY[i] = 0.0;
+                continue;
+            }
+            _bounceRemaining[i] = remaining;
+            _bounceY[i] = AnimationMath.BounceOffset(1.0 - remaining / BounceDurationSeconds,
+                                                     Math.Min(IconSize * BounceAmplitudeRatio, BounceMaxAmplitudeDip));
+            idle = false;
+        }
+        return idle;
+    }
+
     private void OnRendering(object? sender, EventArgs e)
     {
         var now = Stopwatch.GetTimestamp();
@@ -510,6 +695,9 @@ public sealed class DockSurface : Canvas
         _lastCursorX = cursorX ?? double.NaN;
         var dampEnd = Stopwatch.GetTimestamp();
 
+        // 启动弹跳与放大场共用这条 vsync 循环：未了结的弹跳强制本帧不算收敛（钩子不许提前摘）。
+        if (!AdvanceBounces(dt)) _settled = false;
+
         ApplyGeometry();
 
         if (FrameLogEnabled)
@@ -523,7 +711,8 @@ public sealed class DockSurface : Canvas
             Logger.Info(FormattableString.Invariant($"BEAUTIFUL_FRAME {now} damp_us={(dampEnd - now) * 1000000.0 / Stopwatch.Frequency:F0} geom_us={(end - dampEnd) * 1000000.0 / Stopwatch.Frequency:F0} cursor={(cursorX ?? double.NaN):F1} tgt_max={tgtMax:F3}"));
         }
 
-        if (settled && !active) StopLoop();
+        // 摘钩判定用 _settled（含弹跳未了结的强制唤醒），不是仅看缩放收敛的局部 settled
+        if (_settled && !active) StopLoop();
     }
 
     /// <summary>
@@ -602,7 +791,8 @@ public sealed class DockSurface : Canvas
             // 行内垂直居中（底边在 drawn 行底 = (_rowHeight + h)/2）：缩放原点 0.5,1 → 底边不动、向上生长。
             // 旧写法 SetTop(_rowHeight - h) 把底边贴到 surface 下沿，而 surface 下沿比底板 Border 的
             // 内描边还低 1 DIP → 图标压线、运行指示点几乎贴着描边（v1 有约 9 DIP 余量，评审发现 #3）。
-            SetTop(fe, (_rowHeight - _heights[i]) / 2.0);
+            // 叠加启动弹跳偏移（负=上移；无弹跳时恒 0，只多一次数组读，零分配）。
+            SetTop(fe, (_rowHeight - _heights[i]) / 2.0 + (i < _bounceY.Length ? _bounceY[i] : 0.0));
             if (fe.RenderTransform is ScaleTransform st)
             {
                 var s = _cur[i];

@@ -1,3 +1,4 @@
+using System.Collections.Generic;
 using System.Diagnostics;
 using System.ComponentModel;
 using System.IO;
@@ -8,6 +9,7 @@ using System.Windows.Input;
 using System.Windows.Interop;
 using System.Windows.Media;
 using System.Windows.Threading;
+using Beautiful.App.Controls;
 using Beautiful.App.Interop;
 using Beautiful.App.MediaWidget;
 using Beautiful.App.Preview;
@@ -36,11 +38,10 @@ public partial class DockWindow : AcrylicWindow
 {
     // 面板可见高度与条带顶部透明余量随 DockIconSize / 放大强度动态计算（见 VisiblePanelDip / StripHeadroomDip），
     // 不再是固定常量——图标尺寸是设置项（32..72），macOS 放大后图标会向上生长，条带必须容得下。
-    // 下列常量把原 v1 实测几何（面板 76、余量 22）拆成可推导的组成部分：
-    //   行高 = IconSize + RowInsetDip（DockSurface 内部同值 20）；可见面板 = 行高 + 上下边距（Surface.Margin 6+6）。
-    // 主题默认 IconSize=44 时 VisiblePanelDip()=76，与原 DockHeightDip 完全一致；无放大时余量取 MinStripHeadroomDip=22，
+    // 行高几何（IconSize + 固定行内余量 + 倒影余量）唯一来源在 DockSurface.RowHeightDip（Task 15 起开启
+    // 倒影后行高再加一截，供镜像渐变倒影占据图标下方空间）。主题默认 IconSize=44 且无倒影时行高=64、
+    // VisiblePanelDip()=76，与原 DockHeightDip 完全一致；无放大时余量取 MinStripHeadroomDip=22，
     // 与原 StripHeadroomDip 一致 → 未动设置时条带几何零变化（保住"贴底无缝"的实测结论）。
-    private const double RowInsetDip = 20;
     private const double PanelMarginDip = 12;
     private const double MinStripHeadroomDip = 22;
     private const double SigmaInPitches = 2.0;  // 高斯 σ（单位 = 一个图标间距；控制器裁定：不随主题变化）
@@ -59,8 +60,6 @@ public partial class DockWindow : AcrylicWindow
     private readonly MediaViewModel _mediaVm;
     private readonly TaskbarManager? _taskbar; // App 注入：TaskbarCreated（explorer 重建）后重放策略
     private MediaPanel? _mediaPanel;
-    private ContextMenu? _itemContextMenu;     // 条目右键菜单（Resources 取用；代码后置手动开关）
-    private DockItem? _contextItem;            // 右键菜单打开时的目标条目（固定/取消固定用）
     private DateTime? _panelAutoHiddenAtUtc; // 面板最近一次"失焦自动收起"时刻（胶囊点击的 toggle 语义用）
     // 图标尺寸/放大强度滑杆拖动时会连续触发排布刷新；条带重排（AppBar 协商 + SetWindowPos）成本较高，
     // 用一次性防抖把拖动期间的多次请求合并成落定后的一次重排（排布参数本身每帧即时写入，图标视觉跟手）。
@@ -91,7 +90,6 @@ public partial class DockWindow : AcrylicWindow
         InitializeComponent();
         _vm = new DockViewModel(_tracker);
         DataContext = _vm;
-        _itemContextMenu = (ContextMenu)Resources["ItemContextMenu"];
         WireSurface();
         ThemeManager.ThemeChanged += OnThemeChanged;
         // 任务栏策略切换/explorer 重启重放（TaskbarManager.Apply/Restore → PolicyApplied）后，
@@ -193,14 +191,17 @@ public partial class DockWindow : AcrylicWindow
         Surface.Spacing = theme.ItemSpacing;
         Surface.ShowMagnification = theme.ShowMagnification;
         Surface.MaxScale = theme.ShowMagnification ? s.MagnificationStrength : 1.0;
-        Surface.ReflectionEnabled = s.ReflectionEnabled;   // 接口位：倒影渲染器由后续任务消费，此处仅落旗标
+        // 倒影开关（Task 15 起有渲染器）：DockSurface 订阅本 DP 变更即时增删倒影并加长条目行，
+        // 行高变化会体现在 VisiblePanelDip → 条带重排由本方法调用方（RefreshLayoutFromSettings）负责触发。
+        Surface.ReflectionEnabled = s.ReflectionEnabled;
         ThemeManager.ApplyIconSize(icon, Application.Current);
     }
 
     // ---------- 条带几何（随图标尺寸/放大强度动态） ----------
 
-    /// <summary>可见面板高 = 行高(IconSize+20) + 上下边距(6+6)。主题默认 IconSize=44 时 = 76。</summary>
-    private double VisiblePanelDip() => Surface.IconSize + RowInsetDip + PanelMarginDip;
+    /// <summary>可见面板高 = 行高（IconSize+20，开启倒影时另加倒影余量，见 DockSurface.RowHeightDip）+ 上下边距(6+6)。
+    /// 主题默认 IconSize=44 且无倒影时 = 76。</summary>
+    private double VisiblePanelDip() => Surface.RowHeightDip + PanelMarginDip;
 
     /// <summary>
     /// 条带在面板之上的透明余量，供放大后的图标向上生长不被窗口上沿裁切。
@@ -491,6 +492,9 @@ public partial class DockWindow : AcrylicWindow
                 try
                 {
                     Process.Start(new ProcessStartInfo(item.LaunchPath) { UseShellExecute = true });
+                    // 启动弹跳（Task 15）：BounceEnabled 时该项在 DockSurface 现有 vsync 循环里跑
+                    // ~600ms 的 ElasticOut 纵向弹跳；重复点击不叠加（StartBounce 重置进度）。
+                    if (SettingsService.Current.BounceEnabled) Surface.StartBounce(item);
                 }
                 catch (Exception ex) { Logger.Warn($"启动 {item.LaunchPath} 失败: {ex.Message}"); }
                 break;
@@ -501,41 +505,39 @@ public partial class DockWindow : AcrylicWindow
         }
     }
 
-    // ---------- 右键菜单：固定 / 取消固定 ----------
+    // ---------- 右键菜单：固定 / 取消固定（FluentMenu，Task 15） ----------
 
     /// <summary>
-    /// 右键条目弹出固定菜单（媒体/回收站无固定语义不弹）。仍走"代码后置手动开关"而非容器 ContextMenu：
-    /// 实测 ItemContainerStyle 挂 ContextMenu 时 ContextMenuService 在本窗口把事件路由到
-    /// ItemsControl 层（Source=ItemsControl），容器菜单永远不打开。
-    /// 条目命中改由 DockSurface 用放大后矩形给出（HitTestItem），v1 的"最近基准中心"权宜法已删除。
-    /// 该菜单迁移到 FluentMenu 属另一个任务，这里保持原生 ContextMenu 可用。
+    /// 右键条目在光标处弹 <see cref="FluentMenu"/>（自绘高级弹层，观感与托盘/顶栏菜单一致；
+    /// v2 Task 15 前这里是原生 ContextMenu——"菜单无高级感"不满的残留路径，已随本次迁移删除）。
+    /// 语义不变：Window 项可"固定到 Dock"（写其 exe LaunchPath），Pinned 项可"取消固定"，
+    /// 均经 <see cref="DockViewModel"/> 写回 dock.json；媒体/回收站无固定语义不弹。
+    /// 仍走"代码后置手动开关"而非 ContextMenuService：实测后者在本 AppBar 窗口把事件路由到
+    /// ItemsControl 层（Source=Surface），容器菜单永远不打开。条目命中由 DockSurface.HitTestItem
+    /// 用放大后矩形给出；锚点 Surface.PointToScreen 返回物理像素（FluentMenu.Show 口径一致）。
     /// </summary>
     private void OpenItemContextMenu(DockItem item, Point anchorInSurface)
     {
-        if (_itemContextMenu is null) return;
-        if (item.Kind is DockItemKind.Media or DockItemKind.RecycleBin) return;
-        _contextItem = item;
-        if (_itemContextMenu.Items[0] is MenuItem pin)
-            pin.Visibility = item is { Kind: DockItemKind.Window, LaunchPath.Length: > 0 }
-                ? Visibility.Visible
-                : Visibility.Collapsed;
-        if (_itemContextMenu.Items[1] is MenuItem unpin)
-            unpin.Visibility = item.Kind == DockItemKind.Pinned ? Visibility.Visible : Visibility.Collapsed;
-        _itemContextMenu.PlacementTarget = Surface;
-        _itemContextMenu.Placement = System.Windows.Controls.Primitives.PlacementMode.MousePoint;
-        _itemContextMenu.IsOpen = true;
-    }
+        var canPin = item is { Kind: DockItemKind.Window, LaunchPath.Length: > 0 };
+        var canUnpin = item.Kind == DockItemKind.Pinned;
+        if (!canPin && !canUnpin) return;
 
-    private void PinItem_Click(object sender, RoutedEventArgs e)
-    {
-        if (_contextItem is { Kind: DockItemKind.Window, LaunchPath.Length: > 0 } item)
-            _vm.PinExecutable(item.LaunchPath); // 固定当前窗口的 exe 路径（去重，写回 dock.json）
-    }
+        var items = new List<MenuItemView>();
+        if (canPin)
+            items.Add(new MenuItemView
+            {
+                Id = "pin", Label = "固定到 Dock", Glyph = "",
+                Invoke = () => _vm.PinExecutable(item.LaunchPath), // 固定当前窗口的 exe 路径（去重，写回 dock.json）
+            });
+        if (canUnpin)
+            items.Add(new MenuItemView
+            {
+                Id = "unpin", Label = "取消固定", Glyph = "",
+                Invoke = () => _vm.Unpin(item.LaunchPath),
+            });
 
-    private void UnpinItem_Click(object sender, RoutedEventArgs e)
-    {
-        if (_contextItem is { Kind: DockItemKind.Pinned } item)
-            _vm.Unpin(item.LaunchPath);
+        var p = Surface.PointToScreen(anchorInSurface);
+        FluentMenu.Show(new FluentPopupHost(), new Point(p.X, p.Y), items, i => i.Invoke?.Invoke());
     }
 
     // ---------- 悬停实时预览（Task 13）----------

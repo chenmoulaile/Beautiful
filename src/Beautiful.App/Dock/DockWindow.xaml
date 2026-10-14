@@ -120,13 +120,10 @@
         <dock:DockItemTemplateSelector x:Key="ItemSelector"
                                        DefaultTemplate="{StaticResource DefaultItemTemplate}"
                                        MediaTemplate="{StaticResource MediaItemTemplate}"/>
-        <!-- 条目右键菜单（固定/取消固定，写回 dock.json）：由代码后置按 DockSurface.HitTestItem 命中的条目
-             手动开关。不走容器 ContextMenu 链路——实测 ContextMenuService 会把事件路由到条目宿主层
-             （v2 里宿主就是 DockSurface 本身，Source=Surface），容器挂菜单时菜单永远不打开。 -->
-        <ContextMenu x:Key="ItemContextMenu">
-            <MenuItem Header="固定到 Dock" Click="PinItem_Click"/>
-            <MenuItem Header="取消固定" Click="UnpinItem_Click"/>
-        </ContextMenu>
+        <!-- 条目右键菜单（固定/取消固定）v2 Task 15 起改走 FluentMenu（自绘高级弹层，观感同托盘菜单）：
+             代码后置按 DockSurface.HitTestItem 命中的条目在光标处 FluentMenu.Show，不再用原生 ContextMenu。
+             历史注记：容器挂 ContextMenuService 的 ContextMenu 在本 AppBar 窗口会把事件路由到
+             ItemsControl 层（Source=Surface），容器菜单永远不打开——手动开关语义保留，仅换了菜单实现。 -->
     </services:AcrylicWindow.Resources>
     <!-- v2 Task 6：条目由自绘 DockSurface（Canvas 派生）承载，替代 v1 的 ItemsControl+StackPanel。
          两层叠放在同一个 Grid 单元里：底板 Border 无内容、随 Grid 尺寸拉伸，Grid 尺寸 = Surface 的

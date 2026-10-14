@@ -84,4 +84,37 @@ public class AnimationMathTests
         Assert.True(AnimationMath.CloseEnough(2.0, 1.0, eps: 1.0));
         Assert.False(AnimationMath.CloseEnough(2.0, 1.0, eps: 0.5));
     }
+
+    [Fact]
+    public void BounceOffset_端点精确归零且幅值线性()
+    {
+        // 起于静止、终于静止：t<=0 与 t>=1 恒 0（动画循环可直接摘钩，无需淡出收尾）
+        Assert.Equal(0.0, AnimationMath.BounceOffset(0, 20));
+        Assert.Equal(0.0, AnimationMath.BounceOffset(1, 20));
+        Assert.Equal(0.0, AnimationMath.BounceOffset(-0.3, 20));
+        Assert.Equal(0.0, AnimationMath.BounceOffset(1.4, 20));
+        // 幅度对 A 线性：同一进度下 A=10 的偏移恰为 A=20 的一半
+        Assert.Equal(AnimationMath.BounceOffset(0.2, 10) * 2,
+                     AnimationMath.BounceOffset(0.2, 20), 10);
+    }
+
+    [Fact]
+    public void BounceOffset_全程只上跳不坠底且峰值前部出现()
+    {
+        // 偏移约定负=上移：全程 (0,1) 内必须 <0（图标绝不向下扎进条带底缘之下）
+        var peak = 0.0;
+        var peakT = 0.0;
+        for (var t = 0.001; t < 1.0; t += 0.001)
+        {
+            var v = AnimationMath.BounceOffset(t, 1.0);
+            Assert.True(v < 0.0, $"t={t:F3} 处偏移应严格为负（只上跳），实际 {v}");
+            if (v < peak) { peak = v; peakT = t; }
+        }
+        // 峰值 ≈1.194A、出现在前 15% 时长内（一次干脆的 hop，随后弹性余振被 (1-t) 压平归零）
+        Assert.InRange(peak, -1.25, -1.15);
+        Assert.InRange(peakT, 0.05, 0.15);
+        // 尾段收敛：最后 10% 的偏移绝对值不再超过峰值的一半（波纹足够细密，肉眼即静止）
+        for (var t = 0.9; t < 1.0; t += 0.01)
+            Assert.InRange(AnimationMath.BounceOffset(t, 1.0), -0.6, 0.0);
+    }
 }
