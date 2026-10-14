@@ -122,6 +122,21 @@ public class AppSettingsTests
         }.Normalized();
         Assert.Equal(once, once.Normalized());
     }
+
+    [Fact]
+    public void 写入即规范化_滑杆合法值原样_越界值即时钳回()
+    {
+        // SettingsService.Update/UpdateAndSave 现内部过 Normalized()（Task 1 评审遗留修复）：
+        // 内存态 Current 与落盘态同源，滑杆写出的越界值须**立即**钳回，而不是等重启 Load 才改。
+        // 合法区间值不得被改写（滑杆拖动逐帧 Update，若合法值也被规范化扰动会破坏实时预览）。
+        var ok = new AppSettings { DockIconSize = 60, MagnificationStrength = 2.0, LyricsOffsetMs = 800 };
+        Assert.Equal(ok, ok.Normalized());
+
+        var bad = new AppSettings { DockIconSize = 200, MagnificationStrength = 9, LyricsOffsetMs = 5000 }.Normalized();
+        Assert.Equal(72, bad.DockIconSize);         // 图标尺寸上限
+        Assert.Equal(2.5, bad.MagnificationStrength); // 放大强度上限
+        Assert.Equal(2000, bad.LyricsOffsetMs);     // 歌词偏移上限
+    }
 }
 
 public class AppSettingsStoreTests : IDisposable

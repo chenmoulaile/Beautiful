@@ -21,13 +21,17 @@ public static class SettingsService
 
     public static void Save() => new AppSettingsStore().Save(Current);
 
-    /// <summary>替换当前设置（不落盘；配合防抖 Save 使用）。</summary>
-    public static void Update(AppSettings settings) => Current = settings;
+    /// <summary>
+    /// 替换当前设置（不落盘；配合防抖 Save 使用）。写入值统一过 <see cref="AppSettings.Normalized"/>：
+    /// 内存态 Current 与落盘态从此同源，滑杆等控件即便写出越界值（如 DockIconSize=200）也即时钳制，
+    /// 不会出现"当前渲染用 200、重启后变 72"的不一致（Task 1 评审遗留，本任务一并修复）。
+    /// </summary>
+    public static void Update(AppSettings settings) => Current = settings.Normalized();
 
-    /// <summary>替换当前设置并立即落盘（离散控件用）。</summary>
+    /// <summary>替换当前设置并立即落盘（离散控件用）。同样先规范化再存，读写一致。</summary>
     public static void UpdateAndSave(AppSettings settings)
     {
-        Current = settings;
+        Current = settings.Normalized();
         Save();
     }
 

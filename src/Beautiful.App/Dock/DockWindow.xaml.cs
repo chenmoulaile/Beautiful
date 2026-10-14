@@ -29,11 +29,15 @@ namespace Beautiful.App.Dock;
 /// </summary>
 public partial class DockWindow : AcrylicWindow
 {
-    private const double DockHeightDip = 76;   // 可见面板高度：三套内置主题 Dock 高度均为 76（设置化时随主题重定位，Task 16/17）
-    // 条带在面板之上的透明余量：条目在行内垂直居中（图标底边距面板内描边约 9 DIP，与 v1 一致），
-    // MaxScale 1.8 时图标最高 44×1.8=79.2DIP，其底边在面板内 60DIP 处 → 顶点越出面板上沿 19.2DIP，
-    // 故余量必须 > 19.2（取 22 留 DPI 取整余量），否则最大倍率时图标上沿会被窗口裁切。
-    private const double StripHeadroomDip = 22;
+    // 面板可见高度与条带顶部透明余量随 DockIconSize / 放大强度动态计算（见 VisiblePanelDip / StripHeadroomDip），
+    // 不再是固定常量——图标尺寸是设置项（32..72），macOS 放大后图标会向上生长，条带必须容得下。
+    // 下列常量把原 v1 实测几何（面板 76、余量 22）拆成可推导的组成部分：
+    //   行高 = IconSize + RowInsetDip（DockSurface 内部同值 20）；可见面板 = 行高 + 上下边距（Surface.Margin 6+6）。
+    // 主题默认 IconSize=44 时 VisiblePanelDip()=76，与原 DockHeightDip 完全一致；无放大时余量取 MinStripHeadroomDip=22，
+    // 与原 StripHeadroomDip 一致 → 未动设置时条带几何零变化（保住"贴底无缝"的实测结论）。
+    private const double RowInsetDip = 20;
+    private const double PanelMarginDip = 12;
+    private const double MinStripHeadroomDip = 22;
     private const double SigmaInPitches = 2.0;  // 高斯 σ（单位 = 一个图标间距；控制器裁定：不随主题变化）
         // 尺度说明（评审发现：旧注释撒谎）：Core 的场是标准差形式 exp(-d²/(2σ²))，v1 的 Magnifier 是
         // exp(-(d/σ)²)，同写 2.0 时本实现的实际影响半径比 v1 宽 √2 倍（底板鼓包约宽 26%）。
@@ -53,6 +57,9 @@ public partial class DockWindow : AcrylicWindow
     private ContextMenu? _itemContextMenu;     // 条目右键菜单（Resources 取用；代码后置手动开关）
     private DockItem? _contextItem;            // 右键菜单打开时的目标条目（固定/取消固定用）
     private DateTime? _panelAutoHiddenAtUtc; // 面板最近一次"失焦自动收起"时刻（胶囊点击的 toggle 语义用）
+    // 图标尺寸/放大强度滑杆拖动时会连续触发排布刷新；条带重排（AppBar 协商 + SetWindowPos）成本较高，
+    // 用一次性防抖把拖动期间的多次请求合并成落定后的一次重排（排布参数本身每帧即时写入，图标视觉跟手）。
+    private DispatcherTimer? _repositionDebounce;
 
     private IntPtr _hwnd;
     private uint _appbarMsg;
@@ -146,13 +153,89 @@ public partial class DockWindow : AcrylicWindow
                                         theme.AcrylicTint.G, theme.AcrylicTint.B));
         else
             DisableAcrylic();
-        // 放大场与排布参数写入 DockSurface（尺寸参数变了要整树重排，Refresh 负责）
-        Surface.IconSize = theme.IconSize;
-        Surface.Spacing = theme.ItemSpacing;
-        Surface.MaxScale = theme.MaxScale;
-        Surface.ShowMagnification = theme.ShowMagnification;
+        // 排布参数：底色/圆角/字体走 DynamicResource，尺寸/间距/放大写入 DockSurface。
+        // IconSize/MaxScale 由设置项驱动（DockIconSize / MagnificationStrength），主题只提供"是否放大"与间距，
+        // 见 ApplySurfaceLayoutParams。尺寸变化会改条带高度 → 顺带重排 AppBar（若尚未注册则 no-op，
+        // OnSourceInitialized 的 RegisterAndPositionAppBar 会用同一套几何完成首帧定位）。
+        ApplySurfaceLayoutParams();
         Surface.Refresh();
+        ScheduleReposition();
     }
+
+    /// <summary>
+    /// 把当前设置（已规范化）落到 DockSurface 与主题字典：图标尺寸、放大强度、倒影开关。
+    /// 主题只决定"是否放大"（macOS 才有放大）与间距；强度与尺寸是用户配置。放大关闭时 MaxScale 归 1、
+    /// DockSurface 场恒回落 1（仍走阻尼，不冻结）。图标宽高 + 遮罩几何经 <see cref="ThemeManager.ApplyIconSize"/>
+    /// 覆盖主题字典的 ThemeIconSize/ThemeIconClip，使条目模板的图片随 DockIconSize 即时缩放。
+    /// </summary>
+    private void ApplySurfaceLayoutParams()
+    {
+        var s = SettingsService.Current;
+        var theme = ThemeManager.Current;
+        var icon = (double)s.DockIconSize;
+        Surface.IconSize = icon;
+        Surface.Spacing = theme.ItemSpacing;
+        Surface.ShowMagnification = theme.ShowMagnification;
+        Surface.MaxScale = theme.ShowMagnification ? s.MagnificationStrength : 1.0;
+        Surface.ReflectionEnabled = s.ReflectionEnabled;   // 接口位：倒影渲染器由后续任务消费，此处仅落旗标
+        ThemeManager.ApplyIconSize(icon, Application.Current);
+    }
+
+    // ---------- 条带几何（随图标尺寸/放大强度动态） ----------
+
+    /// <summary>可见面板高 = 行高(IconSize+20) + 上下边距(6+6)。主题默认 IconSize=44 时 = 76。</summary>
+    private double VisiblePanelDip() => Surface.IconSize + RowInsetDip + PanelMarginDip;
+
+    /// <summary>
+    /// 条带在面板之上的透明余量，供放大后的图标向上生长不被窗口上沿裁切。
+    /// 无放大主题恒取 <see cref="MinStripHeadroomDip"/>（=22，与 v1 实测一致）；macOS 下按
+    /// 图标尺寸与当前倍率算越出量（图标底边在面板内，放大后顶边越出 ≈ IconSize·(MaxScale−1)−16），
+    /// 至少 22（IconSize=44/MaxScale=1.8 时越出 19.2 → 取 22，复现原几何）。
+    /// </summary>
+    private double StripHeadroomDip()
+    {
+        if (!ThemeManager.Current.ShowMagnification) return MinStripHeadroomDip;
+        var overflow = Surface.IconSize * (Surface.MaxScale - 1.0) - 16.0;
+        return Math.Max(MinStripHeadroomDip, Math.Ceiling(overflow));
+    }
+
+    private double StripHeightDip() => VisiblePanelDip() + StripHeadroomDip();
+
+    /// <summary>
+    /// 设置页改动 DockIconSize/MagnificationStrength 后的即时生效入口（App.ApplyDockLayout 调用）：
+    /// 重落排布参数 + 重排条带（图标尺寸变了面板/条带要跟着长，否则大图标被窗口上沿裁切）。
+    /// </summary>
+    public void RefreshLayoutFromSettings()
+    {
+        ApplySurfaceLayoutParams();
+        Surface.Refresh();
+        ScheduleReposition();
+    }
+
+    /// <summary>
+    /// 请求重排条带：立即返回，真正的 <see cref="PositionAsAppBar"/> 延后到防抖到期执行。
+    /// AppBar 尚未注册（构造早期）时到期重排也无害——OnSourceInitialized 的首帧定位已用同一套几何。
+    /// 惰性建计时器（DockWindow 未必走到滑杆路径，避免构造期多分配一个计时器）。
+    /// </summary>
+    private void ScheduleReposition()
+    {
+        _repositionDebounce ??= new DispatcherTimer(DispatcherPriority.Background)
+        {
+            Interval = TimeSpan.FromMilliseconds(120)
+        };
+        _repositionDebounce.Stop();
+        _repositionDebounce.Tick -= OnRepositionDebounceTick;
+        _repositionDebounce.Tick += OnRepositionDebounceTick;
+        _repositionDebounce.Start();
+    }
+
+    private void OnRepositionDebounceTick(object? sender, EventArgs e)
+    {
+        _repositionDebounce?.Stop();
+        if (_closing) return;
+        PositionAsAppBar();
+    }
+
 
     private void OnWindowLoaded(object sender, RoutedEventArgs e)
     {
@@ -171,6 +254,7 @@ public partial class DockWindow : AcrylicWindow
     protected override void OnClosing(CancelEventArgs e)
     {
         _closing = true;                             // 先于 ABM_REMOVE：作废队列中尚未执行的 BeginInvoke 重注册
+        _repositionDebounce?.Stop();                 // 作废挂起的条带重排（OnClosing 后不再 ABM_SETPOS）
         _mediaPanel?.Close();                        // 面板随 Dock 一起关闭（Closed 处理器会清空引用）
         Surface.Shutdown();                           // 摘掉 CompositionTarget.Rendering 钩子
         UnregisterAppBar();                           // ABM_REMOVE 必须在 hwnd 销毁前
@@ -261,9 +345,10 @@ public partial class DockWindow : AcrylicWindow
         if (!_appbarRegistered) return;
         var dpiScale = NativeMethods.GetDpiForWindow(_hwnd) / 96.0;
         if (dpiScale <= 0) dpiScale = 1.0;
-        // 条带 = 可见面板高 + 放大余量：面板 Grid  VerticalAlignment=Bottom 贴条带底，
-        // 多出的顶部透明带（Background={x:Null} 分层窗口不参与命中 → 仍点击穿透）供放大后的图标向上生长。
-        var stripH = (int)Math.Round((DockHeightDip + StripHeadroomDip) * dpiScale);
+        // 条带 = 可见面板高 + 放大余量（均随图标尺寸/放大强度动态，见 StripHeightDip）：面板 Grid
+        // VerticalAlignment=Bottom 贴条带底，多出的顶部透明带（Background={x:Null} 分层窗口不参与命中 →
+        // 仍点击穿透）供放大后的图标向上生长。
+        var stripH = (int)Math.Round(StripHeightDip() * dpiScale);
         var screenW = NativeMethods.GetSystemMetrics(0);  // SM_CXSCREEN
         var screenH = NativeMethods.GetSystemMetrics(1);  // SM_CYSCREEN
 
@@ -510,9 +595,9 @@ public partial class DockWindow : AcrylicWindow
 
         var screenW = NativeMethods.GetSystemMetrics(0) / dpi; // SM_CXSCREEN
         var left = Math.Clamp(centerDipX - panelW / 2, edgeMargin, Math.Max(edgeMargin, screenW - panelW - edgeMargin));
-        // 条带顶部有 StripHeadroomDip 的透明余量（供放大图标生长），面板真正的上沿在 Top + StripHeadroomDip：
+        // 条带顶部有动态的放大余量（供放大图标生长），面板真正的上沿在 Top + StripHeadroomDip()：
         // 用它算间距，余量尺寸变化时面板与 Dock 的视觉间隙保持一致。
-        var top = Math.Max(edgeMargin, Top + StripHeadroomDip - panelH - gap);
+        var top = Math.Max(edgeMargin, Top + StripHeadroomDip() - panelH - gap);
         panel.Left = left;
         panel.Top = top;
     }

@@ -22,7 +22,7 @@ public static class ThemeManager
         Current = theme;
         var uri = new Uri($"/Themes/{theme.Id}.xaml", UriKind.Relative);
         var dict = new ResourceDictionary { Source = uri };
-        var clip = CreateIconClip(theme);
+        var clip = CreateIconClip(theme, theme.IconSize);
         if (clip is not null) dict["ThemeIconClip"] = clip; // 键缺省 → DynamicResource 不解析 → Clip=null（macOS 不遮罩）
         // 先移除旧主题字典再合并，避免叠加（旧 clip 几何随旧字典一并清理）
         for (var i = app.Resources.MergedDictionaries.Count - 1; i >= 0; i--)
@@ -33,15 +33,39 @@ public static class ThemeManager
     }
 
     /// <summary>
-    /// 图标遮罩策略（spec 4.2 表）：ratio=0 不遮罩（macOS 原样）；ratio=0.25 鸿蒙 squircle
-    /// （Superellipse nExp=4.4，|x/22|^4.4+|y/22|^4.4=1）；其余 = 圆角方形（半径 = ratio·IconSize，Linux 取 8）。
+    /// 运行时图标尺寸覆盖（设置项 DockIconSize，Task 16）。主题字典把 <c>ThemeIconSize</c> 写成静态值
+    /// （各主题 44），条目模板的图片宽高与遮罩几何都 DynamicResource 引用它；这里把当前主题字典里的该键
+    /// 覆盖为用户尺寸，并按新尺寸重建遮罩（squircle/圆角方形几何随尺寸缩放），DynamicResource 即刻重解析
+    /// → Dock 图标即时变大变小。macOS（ratio=0 无遮罩）不注入 clip 键；若旧字典曾注入则一并移除，避免
+    /// 遗留 44×44 的遮罩把放大后的图标裁掉。
     /// </summary>
-    private static Geometry? CreateIconClip(ThemeDefinition theme)
+    public static void ApplyIconSize(double iconSize, Application app)
+    {
+        var dict = null as ResourceDictionary;
+        for (var i = app.Resources.MergedDictionaries.Count - 1; i >= 0; i--)
+            if (app.Resources.MergedDictionaries[i].Source?.OriginalString.Contains("/Themes/") == true)
+            {
+                dict = app.Resources.MergedDictionaries[i];
+                break;
+            }
+        if (dict is null) return; // 主题字典尚未合并（构造早期）：Apply 时已按主题默认尺寸注入，无需覆盖
+        dict["ThemeIconSize"] = iconSize;
+        var clip = CreateIconClip(Current, iconSize);
+        if (clip is not null) dict["ThemeIconClip"] = clip;
+        else dict.Remove("ThemeIconClip");
+    }
+
+    /// <summary>
+    /// 图标遮罩策略（spec 4.2 表）：ratio=0 不遮罩（macOS 原样）；ratio=0.25 鸿蒙 squircle
+    /// （Superellipse nExp=4.4，|x/22|^4.4+|y/22|^4.4=1）；其余 = 圆角方形（半径 = ratio·size，Linux 取 8）。
+    /// 遮罩几何按传入 size 构建（与图片宽高同源），使尺寸覆盖后遮罩仍严丝合缝。
+    /// </summary>
+    private static Geometry? CreateIconClip(ThemeDefinition theme, double size)
     {
         if (theme.IconCornerRadiusRatio <= 0) return null;
-        if (theme.IconCornerRadiusRatio == 0.25) return CreateSquircleClip(theme.IconSize);
-        var radius = theme.IconCornerRadiusRatio * theme.IconSize;
-        var rect = new RectangleGeometry(new Rect(0, 0, theme.IconSize, theme.IconSize), radius, radius);
+        if (theme.IconCornerRadiusRatio == 0.25) return CreateSquircleClip(size);
+        var radius = theme.IconCornerRadiusRatio * size;
+        var rect = new RectangleGeometry(new Rect(0, 0, size, size), radius, radius);
         rect.Freeze();
         return rect;
     }

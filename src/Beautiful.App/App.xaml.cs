@@ -269,6 +269,15 @@ public partial class App : Application
         (Current as App)?.ApplyTopBarEnabled();
     }
 
+    /// <summary>
+    /// 设置页改动 DockIconSize / MagnificationStrength / ReflectionEnabled 后的即时生效入口（Task 16）。
+    /// 值的写入与规范化由调用方（SettingsService.Update / UpdateAndSave）负责，本方法只把当前设置
+    /// 重新落到运行中的 Dock（重排条目几何 + 覆盖图标尺寸遮罩 + 按需重排条带），无需重启。
+    /// Dock 尚未创建时静默跳过（下次创建时 ApplyTheme 会读取同一设置）。
+    /// </summary>
+    public static void ApplyDockLayout() => (Current as App)?._dock?.RefreshLayoutFromSettings();
+
+
     // ---------- 切换器生命周期（Task 11） ----------
 
     /// <summary>
