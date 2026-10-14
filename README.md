@@ -37,7 +37,7 @@ Beautiful 在屏幕底部提供一个 macOS 风格的悬浮 Dock，替代/接管
 ## 构建
 
 ```bash
-git clone <repository-url>   # GitHub 仓库地址待发布后回填（见下"仓库结构"）
+git clone https://github.com/chenmoulaile/Beautiful.git
 cd Beautiful
 ```
 
