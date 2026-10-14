@@ -30,8 +30,16 @@ namespace Beautiful.App.Dock;
 public partial class DockWindow : AcrylicWindow
 {
     private const double DockHeightDip = 76;   // 可见面板高度：三套内置主题 Dock 高度均为 76（设置化时随主题重定位，Task 16/17）
-    private const double StripHeadroomDip = 18; // 条带在面板之上的透明余量：MaxScale 1.8 时图标最高 79DIP，需要这段空间才不被窗口裁切
+    // 条带在面板之上的透明余量：条目在行内垂直居中（图标底边距面板内描边约 9 DIP，与 v1 一致），
+    // MaxScale 1.8 时图标最高 44×1.8=79.2DIP，其底边在面板内 60DIP 处 → 顶点越出面板上沿 19.2DIP，
+    // 故余量必须 > 19.2（取 22 留 DPI 取整余量），否则最大倍率时图标上沿会被窗口裁切。
+    private const double StripHeadroomDip = 22;
     private const double SigmaInPitches = 2.0;  // 高斯 σ（单位 = 一个图标间距；控制器裁定：不随主题变化）
+        // 尺度说明（评审发现：旧注释撒谎）：Core 的场是标准差形式 exp(-d²/(2σ²))，v1 的 Magnifier 是
+        // exp(-(d/σ)²)，同写 2.0 时本实现的实际影响半径比 v1 宽 √2 倍（底板鼓包约宽 26%）。
+        // 刻意保留 2.0：半径更宽 → 相邻项倍率差更小、斜率更缓，正是"放大别看起来粗糙"要的方向；
+        // 若要 1:1 复刻 v1 视觉尺度，把本常量改成 2.0/√2 ≈ 1.4142 即可（DockSurface.Sigma 同一口径）。
+
 
     private readonly WindowTracker _tracker = new();
     private readonly DockViewModel _vm;
@@ -140,9 +148,12 @@ public partial class DockWindow : AcrylicWindow
         _tracker.Start();
         // 动画驱动态（CompositionTarget.Rendering 钩子）由 DockSurface 自管：光标进入面板即 Wake，
         // 全部收敛且无悬停目标时自行摘钩——此处不再有 15ms DispatcherTimer。
-        // 渲染层级一次性入日志：tier=0 表示 WPF 走软件渲染（VM/无 D3D 加速的常见情形），
-        // 帧间隔上限由合成器决定，排查"掉帧是代码还是环境"时先看这一行。
-        Logger.Info($"Dock 就绪：WPF 渲染 tier={RenderCapability.Tier >> 16}（0=软件渲染）" +
+        // 渲染层级一次性入日志：tier 0=软件渲染、1=部分加速、2=硬件加速。
+        // 本机实测 tier=2（硬件加速），所以 frametime.ps1 里 ~30ms 的帧节奏**不是**软件渲染造成的：
+        // 它来自 AllowsTransparency 分层窗口的呈现路径（WPF 光栅到内存位图 → DWM 逐帧合成）在这台 VM
+        // 上的下限。排查"掉帧是代码还是环境"时先看这一行，别把 tier=2 误读成降级。
+        var tier = RenderCapability.Tier >> 16;
+        Logger.Info($"Dock 就绪：WPF 渲染 tier={tier}（0=软件渲染，2=硬件加速）" +
                     $" magnification={ThemeManager.Current.ShowMagnification} maxScale={ThemeManager.Current.MaxScale}");
     }
 
@@ -283,15 +294,19 @@ public partial class DockWindow : AcrylicWindow
     // ---------- 放大场光标取样 ----------
 
     /// <summary>
-    /// 物理光标（GetCursorPos）是否已不在本窗口矩形内；AppBar 未就绪时视为在窗内。
+    /// 物理光标是否已不在本窗口矩形内；AppBar 未就绪 / GetCursorPos 失败时视为"在窗内"（交由取样继续判断）。
     /// 保留 v1 守卫：WPF 会在布局变化后按"最后已知位置"合成 MouseMove，若以事件坐标为准，
     /// 光标跳跃离窗后这些陈旧事件会把放大状态钉住。v2 更进一步——动画每帧直接取真实光标，
     /// 事件只作"唤醒"信号，因此陈旧事件连唤醒语义都没有（离场即在下一帧回落）。
+    /// <para>
+    /// 注意这里**不**收紧到可见面板矩形：光标越出面板上沿（在顶部透明余量里、停在已放大的图标上）时
+    /// 必须继续跟踪，否则场一回落图标就缩回去、光标又落回面板 → 反复"放大/回落"自激振荡。
+    /// 空闲摘钩改由 <see cref="DockSurface"/> 按条目行的水平影响范围判定（评审发现 #1）。
+    /// </para>
     /// </summary>
-    private bool IsCursorOutsideWindow()
+    private bool IsCursorOutsideWindow(NativeMethods.POINT pt)
     {
         if (!_appbarRegistered) return false;
-        if (!NativeMethods.GetCursorPos(out var pt)) return false;
         return pt.X < _screenRect.Left || pt.X >= _screenRect.Right
             || pt.Y < _screenRect.Top || pt.Y >= _screenRect.Bottom;
     }
@@ -301,11 +316,12 @@ public partial class DockWindow : AcrylicWindow
     /// → surface 本地 DIP（TranslatePoint）。不在窗口内 / 源未就绪时返回 null = 无悬停目标（场回落 1）。
     /// 连续 X 交给 <see cref="MagnificationField"/>，scale 因而随光标平滑变化，
     /// 不再出现 v1"悬停索引切换 → 整排图标一起跳"的卡顿。
+    /// 每帧只调一次 GetCursorPos（评审发现 #1 的伴随浪费：旧写法守卫与取样各调一次）。
     /// </summary>
     private double? SurfaceCursorXDip()
     {
-        if (IsCursorOutsideWindow()) return null;
         if (!NativeMethods.GetCursorPos(out var pt)) return null;
+        if (IsCursorOutsideWindow(pt)) return null;
         try
         {
             var inWindow = PointFromScreen(new Point(pt.X, pt.Y)); // 物理 px → 窗口 DIP
@@ -466,7 +482,9 @@ public partial class DockWindow : AcrylicWindow
 
         var screenW = NativeMethods.GetSystemMetrics(0) / dpi; // SM_CXSCREEN
         var left = Math.Clamp(centerDipX - panelW / 2, edgeMargin, Math.Max(edgeMargin, screenW - panelW - edgeMargin));
-        var top = Math.Max(edgeMargin, Top - panelH - gap);
+        // 条带顶部有 StripHeadroomDip 的透明余量（供放大图标生长），面板真正的上沿在 Top + StripHeadroomDip：
+        // 用它算间距，余量尺寸变化时面板与 Dock 的视觉间隙保持一致。
+        var top = Math.Max(edgeMargin, Top + StripHeadroomDip - panelH - gap);
         panel.Left = left;
         panel.Top = top;
     }

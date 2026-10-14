@@ -116,4 +116,52 @@ public class MagnificationFieldTests
             Assert.Equal(plain.Offsets[i] - centered.Offsets[i], shift, 10);
         Assert.Equal(plain.TotalWidth, centered.TotalWidth, 10);
     }
+
+    // ---------- 调用方缓冲区重载（Task 6 评审发现 #4：动画循环每帧零分配） ----------
+
+    [Fact]
+    public void 缓冲区重载与主入口的scale逐位一致()
+    {
+        var buffer = new double[Centers.Length];
+        MagnificationField.ComputeScalesInto(136, Centers, MaxScale, SigmaDip, buffer);
+        var expected = Compute(136);
+        Assert.Equal(expected.Scales.Length, buffer.Length);
+        for (var i = 0; i < buffer.Length; i++) Assert.Equal(expected.Scales[i], buffer[i], 12);
+    }
+
+    [Fact]
+    public void 缓冲区可复用且超长部分不被触碰()
+    {
+        var buffer = new double[Centers.Length + 2];
+        for (var i = 0; i < buffer.Length; i++) buffer[i] = -1.0;
+
+        MagnificationField.ComputeScalesInto(136, Centers, MaxScale, SigmaDip, buffer);
+        MagnificationField.ComputeScalesInto(24, Centers, MaxScale, SigmaDip, buffer);   // 第二帧复用同一块
+
+        Assert.Equal(MaxScale, buffer[0], 10);                                            // 光标在首项中心
+        Assert.True(buffer[Centers.Length] < 0 && buffer[Centers.Length + 1] < 0, "越界尾部不应被写入");
+    }
+
+    [Fact]
+    public void 缓冲区重载对非法输入抛出异常()
+    {
+        var buffer = new double[Centers.Length];
+        Assert.Throws<ArgumentOutOfRangeException>(() =>
+            MagnificationField.ComputeScalesInto(0, Centers, MaxScale, 0, buffer));
+        Assert.Throws<ArgumentException>(() =>
+            MagnificationField.ComputeScalesInto(0, Centers, MaxScale, SigmaDip, new double[Centers.Length - 1]));
+        Assert.Throws<ArgumentNullException>(() =>
+            MagnificationField.ComputeScalesInto(0, null!, MaxScale, SigmaDip, buffer));
+        Assert.Throws<ArgumentNullException>(() =>
+            MagnificationField.ComputeScalesInto(0, Centers, MaxScale, SigmaDip, null!));
+    }
+
+    [Fact]
+    public void 缓冲区重载空输入不写不抛()
+    {
+        var buffer = new double[1];
+        buffer[0] = 7;
+        MagnificationField.ComputeScalesInto(0, Array.Empty<double>(), MaxScale, SigmaDip, buffer);
+        Assert.Equal(7.0, buffer[0]);
+    }
 }

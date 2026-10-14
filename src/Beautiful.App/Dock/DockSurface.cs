@@ -25,13 +25,18 @@ namespace Beautiful.App.Dock;
 /// 不再是"哪个条目被悬停"的离散索引 → 悬停边界切换时整排图标不会突跳。</description></item>
 /// <item><description>每帧只写 <see cref="Canvas.SetLeft"/> / <see cref="Canvas.SetTop"/> 与
 /// <see cref="UIElement.RenderTransform"/>（ScaleTransform，原点 0.5,1），
-/// 绝不改 Margin / LayoutTransform → 无逐项布局重排。</description></item>
+/// 绝不改 Margin / LayoutTransform → 无逐项布局重排。左右两缘由 <see cref="MagnificationGeometry"/>
+/// 一次算清：**绘制**左缘保证相邻像素间距恒为 Spacing，<c>Canvas.Left</c> 写的是绕自身中心放大前的布局左缘。</description></item>
 /// <item><description>逐帧步长 <c>dt = (now-last)/Frequency</c> 交给
 /// <see cref="AnimationMath.Damp"/>（指数阻尼，帧率无关），而非固定 0.35 系数 lerp。</description></item>
 /// <item><description>容器由 <see cref="DataTemplateSelector"/> 一次性生成并缓存在
-/// <see cref="_containers"/>，逐帧按引用直接取用，不再调 ItemContainerGenerator。</description></item>
+/// <see cref="_containers"/>，逐帧按引用直接取用，不再调 ItemContainerGenerator；
+/// 场计算与行几何都写进复用缓冲区（<see cref="MagnificationField.ComputeScalesInto"/> /
+/// <see cref="MagnificationGeometry.ComputeRowLefts"/>），动画循环每帧零分配。</description></item>
 /// </list>
-/// 全部条目收敛到目标**且**光标已离开（无悬停目标）时摘掉 Rendering 钩子，空闲零开销。
+/// 空闲判定看的是**条目行**而非窗口矩形：承载窗口是 AppBar 全宽条带（含两侧透明区与顶部余量），
+/// 光标只有在行的水平影响范围（行左右各一个图标间距）内才算"有悬停目标"；
+/// 范围外一律回落，全部条目收敛到目标后立刻摘掉 Rendering 钩子 → 光标停在任务栏/托盘一带不空转。
 /// </para>
 /// <para>
 /// 【面板宽度跟随】<see cref="AutoWidth"/>（默认开）时，底板宽度随放大后的总宽生长——实现方式是
@@ -50,7 +55,12 @@ public sealed class DockSurface : Canvas
     /// <summary>底板宽度跟随场变化时的最小失效阈值（DIP），避免亚像素抖动引发无谓 measure。</summary>
     private const double WidthFollowStepDip = 0.25;
 
-    /// <summary>条目行高在图标尺寸之上的余量（DIP）：44+20=64，与 v1 面板内容区（76-2×6）一致。</summary>
+    /// <summary>
+    /// 条目行高在图标尺寸之上的余量（DIP）：44+20=64，加上 XAML 的 <c>Margin="10,6"</c> 正好等于
+    /// 可见面板高 76（= DockHeightDip）。行内条目**垂直居中**放置（<see cref="ApplyGeometry"/>），
+    /// 于是图标底边落在底板内容区内、与内描边留出约 9 DIP，运行指示点不再压线（与 v1 一致）；
+    /// 顶部余量则供放大后的图标向上生长（配合 DockWindow 的 StripHeadroomDip）。
+    /// </summary>
     private const double RowInsetDip = 20;
 
     /// <summary>可见性判定的最小宽度（DIP）：媒体胶囊收起（Width=0）时整槽不参与排布，不留空隙。</summary>
@@ -73,14 +83,15 @@ public sealed class DockSurface : Canvas
     private double[] _cur = Array.Empty<double>();     // 当前（阻尼后）scale
     private double[] _tgt = Array.Empty<double>();     // 目标 scale（来自放大场）
     private double[] _baseLefts = Array.Empty<double>(); // 未放大左缘
-    private double[] _lefts = Array.Empty<double>();     // 本帧实际写下的左缘（命中测试/媒体面板定位读它）
+    private double[] _lefts = Array.Empty<double>();     // 本帧**绘制**（像素）左缘：命中测试/媒体面板定位读它
+    private double[] _layoutLefts = Array.Empty<double>(); // 本帧写给 Canvas.Left 的布局左缘（= drawn + extra/2）
     private double[] _widths = Array.Empty<double>();  // 未放大宽（模板 DesiredSize，胶囊 124 / 图标 44）
     private double[] _heights = Array.Empty<double>();
-    private double[] _extra = Array.Empty<double>();   // 本帧 (scale-1)·width 累加用暂存
 
     // 放大场输入：仅**可见**项参与（隐藏胶囊不占位也不产生"幽灵鼓包"）
     private double[] _fieldCenters = Array.Empty<double>();
     private int[] _fieldToItem = EmptyInts;
+    private double[] _fieldScales = Array.Empty<double>();   // 场输出缓冲区（逐帧零分配，见 MagnificationField.ComputeScalesInto）
 
     private double _naturalWidth;    // 未放大总宽
     private double _rowHeight = RowInsetDip;
@@ -129,7 +140,14 @@ public sealed class DockSurface : Canvas
         nameof(MaxScale), typeof(double), typeof(DockSurface),
         new FrameworkPropertyMetadata(1.0, OnFieldParameterChanged));
 
-    /// <summary>高斯衰减半径，单位 = "一个图标间距"（IconSize+Spacing）；2.0 与 v1 的视觉尺度等效。</summary>
+    /// <summary>
+    /// 高斯衰减半径，单位 = "一个图标间距"（IconSize+Spacing）。
+    /// 【与 v1 的关系（评审发现：注释撒谎）】v1 的 <c>Magnifier</c> 用的是 <c>exp(-(d/σ)²)</c>，
+    /// Core 的 <see cref="MagnificationField"/> 是标准差形式 <c>exp(-d²/(2σ²))</c>：同一个数值 2.0，
+    /// 本实现的实际影响半径比 v1 **宽 √2 倍（约 41%）**，落到面板上就是底板鼓包（AutoWidth 生长）
+    /// 约宽 26%。这里刻意保留 2.0：半径更宽 → 相邻项倍率差更小 → 斜率更缓，正好服务于"别看起来粗糙"；
+    /// 若日后要 1:1 复刻 v1 视觉尺度，把 DockWindow 的 SigmaInPitches 改成 2.0/√2 ≈ 1.4142 即可。
+    /// </summary>
     public static readonly DependencyProperty SigmaProperty = DependencyProperty.Register(
         nameof(Sigma), typeof(double), typeof(DockSurface),
         new FrameworkPropertyMetadata(2.0, OnFieldParameterChanged));
@@ -348,7 +366,7 @@ public sealed class DockSurface : Canvas
             // 整树重建：条目与下标的对应关系可能整体平移，旧缩放状态一律作废（brief 要求）
             _cur = new double[n]; _tgt = new double[n];
             _baseLefts = new double[n]; _widths = new double[n];
-            _heights = new double[n]; _extra = new double[n]; _lefts = new double[n];
+            _heights = new double[n]; _lefts = new double[n]; _layoutLefts = new double[n];
             Array.Fill(_cur, 1.0);
             Array.Fill(_tgt, 1.0);
         }
@@ -359,8 +377,8 @@ public sealed class DockSurface : Canvas
             _baseLefts = EnsureLength(_baseLefts, n, 0.0);
             _widths = EnsureLength(_widths, n, 0.0);
             _heights = EnsureLength(_heights, n, 0.0);
-            _extra = EnsureLength(_extra, n, 0.0);
             _lefts = EnsureLength(_lefts, n, 0.0);
+            _layoutLefts = EnsureLength(_layoutLefts, n, 0.0);
         }
         _structureDirty = false;
 
@@ -390,6 +408,7 @@ public sealed class DockSurface : Canvas
         _naturalWidth = Math.Max(0, acc - (centers.Count > 0 ? Spacing : 0));
         _fieldCenters = centers.ToArray();
         _fieldToItem = map.ToArray();
+        if (_fieldScales.Length != centers.Count) _fieldScales = new double[Math.Max(1, centers.Count)];
         _layoutDirty = false;
         _settled = false;
         if (structural)
@@ -447,8 +466,23 @@ public sealed class DockSurface : Canvas
         if (dt < 0) dt = 0;
         var stalled = dt > MaxFrameStepSeconds;
 
+        // 光标取样 → 未放大基准坐标（见 ToBaseCoordinate），并按**条目行的水平影响范围**判活：
+        // 承载窗口是 AppBar 全宽条带（含两侧透明区与顶部余量），只按窗口矩形判活的话，
+        // 光标停在条带任意位置（任务栏/托盘一带）钩子就永不摘除——GetCursorPos/TranslatePoint/场计算
+        // 每帧白跑（评审发现 #1，违反"收敛后停止渲染钩子（不空转）"）。
+        // 行外一律视为无悬停目标：走回落→收敛→摘钩的正常路径，光标重新进入行范围时由
+        // MouseMove/MouseEnter（或本钩子在摘钩前的一帧）重新唤醒；"光标瞬移出条带没有 MouseLeave"
+        // 的老场景同样在这条路径上自我了断。
         var cursorX = CursorProvider?.Invoke();
-        var active = cursorX.HasValue && ShowMagnification && MaxScale > 1.0 && _fieldCenters.Length > 0;
+        var baseX = double.NaN;
+        var active = false;
+        if (cursorX is { } x && ShowMagnification && MaxScale > 1.0 && _fieldCenters.Length > 0)
+        {
+            baseX = ToBaseCoordinate(x);
+            // NaN 守卫：WPF 布局期间 visual offset 未就绪时 TranslatePoint 可能返回 NaN，
+            // 而 CloseEnough(NaN, x) == false → 会把 NaN 永久钉进 _cur（几何全废），故只在有限值时判活。
+            active = !double.IsNaN(baseX) && WithinRowExtent(baseX);
+        }
 
         // 无悬停目标且已全部收敛 → 摘钩（空闲零开销）
         if (!active && _settled && !_layoutDirty)
@@ -459,7 +493,7 @@ public sealed class DockSurface : Canvas
         // 光标没动 + 已收敛 + 结构不脏 → 本帧无事可做（仍挂着钩子，以便光标一离开立刻回落）
         if (active && _settled && !_layoutDirty && cursorX == _lastCursorX) return;
 
-        ComputeTargets(cursorX, active);
+        ComputeTargets(baseX, active);
 
         var settled = true;
         for (var i = 0; i < _cur.Length; i++)
@@ -492,10 +526,31 @@ public sealed class DockSurface : Canvas
         if (settled && !active) StopLoop();
     }
 
-    /// <summary>目标 scale：连续高斯场（Core 纯函数）；无悬停目标时全 1。</summary>
-    private void ComputeTargets(double? cursorX, bool active)
+    /// <summary>
+    /// 光标（surface 本地 X）→ **未放大基准坐标系** X：AutoWidth 下面板随总宽生长、其左缘随之左移，
+    /// 若直接用本地坐标，静止光标的本地 X 会自己漂移 → 放大峰值偏离光标，且每帧目标都在变（永不收敛）。
+    /// 面板恒被父级居中，故 (本地 X − 当前宽/2 + 基准宽/2) 与生长量无关，静止光标即静止目标。
+    /// </summary>
+    private double ToBaseCoordinate(double localX)
     {
-        if (!active || cursorX is not { } x)
+        var currentWidth = AutoWidth ? _naturalWidth + CurrentExtraWidth() : _naturalWidth;
+        return localX - currentWidth / 2.0 + _naturalWidth / 2.0;
+    }
+
+    /// <summary>
+    /// 基准坐标是否落在条目行的影响范围内：行左右各留一个"图标间距"的余量（高斯尾部 +
+    /// 首末项半格宽度），再远就无可放大项 → 判为不活跃，让钩子收敛后摘除。
+    /// </summary>
+    private bool WithinRowExtent(double baseX)
+    {
+        var pitch = IconSize + Spacing;
+        return baseX >= -pitch && baseX <= _naturalWidth + pitch;
+    }
+
+    /// <summary>目标 scale：连续高斯场（Core 纯函数，写入复用缓冲区）；无悬停目标时全 1。</summary>
+    private void ComputeTargets(double baseX, bool active)
+    {
+        if (!active || double.IsNaN(baseX))
         {
             Array.Fill(_tgt, 1.0);
             return;
@@ -503,19 +558,14 @@ public sealed class DockSurface : Canvas
 
         // sigmaDip：把"以图标间距为单位"的 σ 换算成场函数要的真实 DIP 半径
         var sigmaDip = Math.Max(1.0, Sigma * (IconSize + Spacing));
-        // 光标 X 必须换算到**未放大基准坐标系**再喂给场函数：AutoWidth 下面板随总宽生长、
-        // 其左缘随之左移，若直接用 surface 本地坐标，静止光标的本地 X 会自己漂移 →
-        // 放大峰值偏离光标，且每帧目标都在变（循环永不收敛）。
-        // 面板恒被父级居中，故 (本地 X − 当前宽/2 + 基准宽/2) 与生长量无关，静止光标即静止目标。
-        var currentWidth = AutoWidth ? _naturalWidth + CurrentExtraWidth() : _naturalWidth;
-        var baseX = x - currentWidth / 2.0 + _naturalWidth / 2.0;
-        // 只取 Scales：Offsets/TotalWidth 由本控件按**阻尼后**的 scale 重新前缀和（见 ApplyGeometry），
-        // 这样几何永远与当前帧的 scale 自洽（不会出现"目标已移位、图标还在缩放"的错位/重叠）。
-        // centered 参数只作用于返回值 Offsets，故此处取值不影响几何。
-        var field = MagnificationField.Compute(baseX, _fieldCenters, IconSize, Spacing, MaxScale, sigmaDip, true);
+        // 只要 Scales：场函数用 MagnificationField.ComputeScalesInto 写进复用的 _fieldScales，
+        // 逐帧零分配（旧写法每帧 new 两个数组 + 跑一轮用不到的 centered 平移，评审发现 #4）。
+        // 几何由本控件按**阻尼后**的 scale 重新前缀和（见 ApplyGeometry），
+        // 这样像素永远与当前帧的 scale 自洽（不会出现"目标已移位、图标还在缩放"的错位/重叠）。
+        MagnificationField.ComputeScalesInto(baseX, _fieldCenters, MaxScale, sigmaDip, _fieldScales);
         Array.Fill(_tgt, 1.0);
-        for (var k = 0; k < _fieldToItem.Length && k < field.Scales.Length; k++)
-            _tgt[_fieldToItem[k]] = field.Scales[k];
+        for (var k = 0; k < _fieldToItem.Length && k < _fieldScales.Length; k++)
+            _tgt[_fieldToItem[k]] = _fieldScales[k];
     }
 
     /// <summary>
@@ -526,19 +576,17 @@ public sealed class DockSurface : Canvas
     {
         var n = _containers.Count;
         if (n == 0) return;
+        // 缓冲区与条目数必须一致（MeasureOverride 通常已保证）：否则 Core 侧会因长度不足抛异常，
+        // 逐帧路径抛异常 = 整排图标冻结，宁可多跑一次基准排布。
+        if (_widths.Length != n || _lefts.Length != n || _layoutLefts.Length != n) RecomputeBaseLayout();
 
-        var totalExtra = 0.0;
-        for (var i = 0; i < n; i++)
-        {
-            var e = (_cur[i] - 1.0) * _widths[i];
-            _extra[i] = e;
-            totalExtra += e;
-        }
+        // 绘制左缘 drawn = base + Σ_{k<i} extra_k - shift（相邻像素间距恒为 Spacing）；
+        // 写给 Canvas.Left 的是 layout = drawn + extra_i/2，因为缩放原点是 (0.5, 1)：
+        // 容器绕自身中心放大 extra_i/2，像素才正好落回 drawn（旧实现漏掉这一项 → 上升沿挤压、
+        // 下降沿撑开、首项溢出底板、整行在背板里偏心，命中区也随之偏移，评审发现 #2）。
+        var totalExtra = MagnificationGeometry.ComputeRowLefts(
+            _baseLefts, _widths, _cur, !AutoWidth, _lefts, _layoutLefts);
 
-        // AutoWidth：面板随总宽生长，条目从 0 起排（左对齐即整体居中，因为父级把面板居中摆放）；
-        // 固定宽：以未放大中心为轴对称外扩（会越出面板，供 AutoWidth=false 的对比方案使用）。
-        var shift = AutoWidth ? 0.0 : totalExtra / 2.0;
-        var prefix = 0.0;
         for (var i = 0; i < n; i++)
         {
             var fe = _containers[i];
@@ -550,16 +598,16 @@ public sealed class DockSurface : Canvas
             }
             if (fe.Visibility != Visibility.Visible) fe.Visibility = Visibility.Visible;
 
-            var left = _baseLefts[i] + prefix - shift;
-            _lefts[i] = left;                                // 命中测试与媒体面板定位读的就是这一帧的真值
-            SetLeft(fe, left);
-            SetTop(fe, _rowHeight - _heights[i]);            // 底部对齐：缩放原点 0.5,1 → 底边不动、向上生长
+            SetLeft(fe, _layoutLefts[i]);
+            // 行内垂直居中（底边在 drawn 行底 = (_rowHeight + h)/2）：缩放原点 0.5,1 → 底边不动、向上生长。
+            // 旧写法 SetTop(_rowHeight - h) 把底边贴到 surface 下沿，而 surface 下沿比底板 Border 的
+            // 内描边还低 1 DIP → 图标压线、运行指示点几乎贴着描边（v1 有约 9 DIP 余量，评审发现 #3）。
+            SetTop(fe, (_rowHeight - _heights[i]) / 2.0);
             if (fe.RenderTransform is ScaleTransform st)
             {
                 var s = _cur[i];
                 if (!AnimationMath.CloseEnough(st.ScaleX, s)) st.ScaleX = st.ScaleY = s;  // 原地改值，不新建 Freezable
             }
-            prefix += _extra[i];
         }
 
         // 底板宽度跟随：只失效本控件的 measure（父级 Grid/Border 随之重排一次），
@@ -575,15 +623,19 @@ public sealed class DockSurface : Canvas
         }
     }
 
+    /// <summary>条目底边所在 Y（surface 本地）：与 ApplyGeometry 的居中放置严格一致，命中测试/边界共用。</summary>
+    private double RowBottomOf(int i) => (_rowHeight + _heights[i]) / 2.0;
+
     // ---------- 命中 / 交互 ----------
 
     /// <summary>
-    /// 用**放大后**的矩形做命中（左缘/宽度按当前 scale 展开，纵向自底边向上），
+    /// 用**放大后**的绘制矩形做命中（drawn 左缘 + width·scale，纵向自条目底边向上），
     /// 取代 v1"最近基准中心"权宜法——连续场没有离散索引可抖，无需绕。
+    /// 读的必须是 drawn（像素）左缘而非槽位左缘，否则放大态下 1.8× 图标左半会被判给邻居（评审发现 #2）。
     /// </summary>
     public DockItem? HitTestItem(Point p)
     {
-        for (var i = 0; i < _items.Count; i++)
+        for (var i = 0; i < _items.Count && i < _widths.Length; i++)
         {
             var item = _items[i];
             if (item is null || _widths[i] <= MinVisibleWidthDip) continue;
@@ -591,19 +643,21 @@ public sealed class DockSurface : Canvas
             var left = _lefts[i];
             if (p.X < left || p.X >= left + w) continue;
             var h = _heights[i] * _cur[i];
-            if (p.Y > _rowHeight || p.Y < _rowHeight - h) continue;
+            var bottom = RowBottomOf(i);
+            if (p.Y > bottom || p.Y < bottom - h) continue;
             return item;
         }
         return null;
     }
 
-    /// <summary>条目当前（放大后）在面板坐标系中的矩形；条目不存在/已收起返回 null（媒体面板定位用）。</summary>
+    /// <summary>条目当前（放大后）**绘制**矩形（surface 本地坐标）；条目不存在/已收起返回 null（媒体面板定位用）。</summary>
     public Rect? GetItemBounds(DockItem item)
     {
         var i = _items.IndexOf(item);
-        if (i < 0 || _widths[i] <= MinVisibleWidthDip) return null;
-        return new Rect(_lefts[i], _rowHeight - _heights[i] * _cur[i],
-                        _widths[i] * _cur[i], _heights[i] * _cur[i]);
+        if (i < 0 || i >= _widths.Length || _widths[i] <= MinVisibleWidthDip) return null;
+        var h = _heights[i] * _cur[i];
+        var bottom = RowBottomOf(i);
+        return new Rect(_lefts[i], bottom - h, _widths[i] * _cur[i], h);
     }
 
     private void OnMouseLeftButtonUp(object sender, MouseButtonEventArgs e)

@@ -14,7 +14,7 @@
         Topmost="True"
         SizeToContent="Manual"
         ResizeMode="NoResize"
-        Height="94">
+        Height="98">
 
     <!-- 窗口 Background={x:Null}：未绘制区域不参与命中测试，两侧点击穿透；
          可见面板 Border 自带背景。主题值统一走 ThemeManager 合并字典的 DynamicResource
@@ -120,8 +120,9 @@
         <dock:DockItemTemplateSelector x:Key="ItemSelector"
                                        DefaultTemplate="{StaticResource DefaultItemTemplate}"
                                        MediaTemplate="{StaticResource MediaItemTemplate}"/>
-        <!-- 条目右键菜单（固定/取消固定，写回 dock.json）：由代码后置按命中条目手动开关
-             （ItemsControl 生成容器的 ContextMenuService 链路在 AppBar 窗口下不稳定，绕开） -->
+        <!-- 条目右键菜单（固定/取消固定，写回 dock.json）：由代码后置按 DockSurface.HitTestItem 命中的条目
+             手动开关。不走容器 ContextMenu 链路——实测 ContextMenuService 会把事件路由到条目宿主层
+             （v2 里宿主就是 DockSurface 本身，Source=Surface），容器挂菜单时菜单永远不打开。 -->
         <ContextMenu x:Key="ItemContextMenu">
             <MenuItem Header="固定到 Dock" Click="PinItem_Click"/>
             <MenuItem Header="取消固定" Click="UnpinItem_Click"/>

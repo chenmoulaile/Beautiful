@@ -41,17 +41,12 @@ public static class MagnificationField
 
         var n = baseCenters.Count;
         var scales = new double[n];
-        var offsets = new double[n];
         if (n == 0)
-            return new MagnificationResult(scales, offsets, 0.0);
+            return new MagnificationResult(scales, new double[0], 0.0);
 
-        var twoSigmaSq = 2.0 * sigmaDip * sigmaDip;
-        for (var i = 0; i < n; i++)
-        {
-            var d = cursorX - baseCenters[i];
-            scales[i] = 1.0 + (maxScale - 1.0) * Math.Exp(-(d * d) / twoSigmaSq);
-        }
+        FillScales(cursorX, baseCenters, maxScale, sigmaDip, scales);
 
+        var offsets = new double[n];
         // offset_i = Σ_{k<i} (scale_k - 1)·baseSize：单次前缀和，O(n)；额外总宽度即累加终值 acc。
         var acc = 0.0;
         for (var i = 0; i < n; i++)
@@ -71,5 +66,51 @@ public static class MagnificationField
         }
 
         return new MagnificationResult(scales, offsets, totalWidth);
+    }
+
+    /// <summary>
+    /// 只算 scale、并写进**调用方提供的缓冲区**：动画循环每帧只要 Scales（ offsets/TotalWidth 由 UI 侧
+    /// 按阻尼后的 scale 重新前缀和，见 <see cref="MagnificationGeometry"/>），
+    /// 用这个重载可免掉每次调用两个数组分配 + 一整轮 centered 平移循环（评审发现：每帧分配）。
+    /// </summary>
+    /// <param name="cursorX">光标 X（DIP，未放大基准坐标系）。</param>
+    /// <param name="baseCenters">未放大每项中心 X（升序），长度决定写入规模。</param>
+    /// <param name="maxScale">正对光标项的最大倍率。</param>
+    /// <param name="sigmaDip">高斯衰减半径（DIP），必须为正。</param>
+    /// <param name="scales">输出缓冲区，长度须 &gt;= <paramref name="baseCenters"/>.Count；只写前 Count 项。</param>
+    /// <exception cref="ArgumentOutOfRangeException">sigmaDip &lt;= 0。</exception>
+    /// <exception cref="ArgumentException">缓冲区长度不足。</exception>
+    /// <exception cref="ArgumentNullException">baseCenters 或 scales 为 null。</exception>
+    public static void ComputeScalesInto(
+        double cursorX,
+        IReadOnlyList<double> baseCenters,
+        double maxScale,
+        double sigmaDip,
+        double[] scales)
+    {
+        if (baseCenters is null) throw new ArgumentNullException(nameof(baseCenters));
+        if (scales is null) throw new ArgumentNullException(nameof(scales));
+        if (sigmaDip <= 0)
+            throw new ArgumentOutOfRangeException(nameof(sigmaDip), sigmaDip, "sigma 必须为正的 DIP 半径");
+        if (scales.Length < baseCenters.Count)
+            throw new ArgumentException($"缓冲区长度 {scales.Length} < 项数 {baseCenters.Count}", nameof(scales));
+
+        FillScales(cursorX, baseCenters, maxScale, sigmaDip, scales);
+    }
+
+    /// <summary>高斯本体：<c>scale_i = 1 + (maxScale-1)·exp(-(cursorX-center_i)²/(2σ²))</c>（不做分配，可被两条 API 复用）。</summary>
+    private static void FillScales(
+        double cursorX,
+        IReadOnlyList<double> baseCenters,
+        double maxScale,
+        double sigmaDip,
+        double[] scales)
+    {
+        var twoSigmaSq = 2.0 * sigmaDip * sigmaDip;
+        for (var i = 0; i < baseCenters.Count; i++)
+        {
+            var d = cursorX - baseCenters[i];
+            scales[i] = 1.0 + (maxScale - 1.0) * Math.Exp(-(d * d) / twoSigmaSq);
+        }
     }
 }

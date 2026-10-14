@@ -25,7 +25,7 @@ public partial class MediaCapsule : UserControl
         // 文本等宽变化时 SizeChanged 不触发：借绑定 TargetUpdated 通知后等一拍布局再评估
         MarqueeText.TargetUpdated += (_, _) => Dispatcher.BeginInvoke(UpdateMarquee, DispatcherPriority.Loaded);
         // 双保险：按钮的 MouseUp 一律标记已处理（ButtonBase 行为之外再兜底），
-        // 防止冒泡到 ItemsHost_MouseLeftButtonUp 触发"点击条目 → 展开面板"
+        // 防止冒泡到 DockSurface 的条目左键命中（OnMouseLeftButtonUp → Activated）触发"点击条目 → 展开面板"
         PlayPauseButton.AddHandler(MouseLeftButtonUpEvent,
             new MouseButtonEventHandler((_, e) => e.Handled = true), handledEventsToo: true);
     }
