@@ -347,7 +347,9 @@ internal static partial class NativeMethods
 
     // 回调委托必须由调用方长期持有（本类的 WndProc 存在静态字段里）：委托被 GC 后消息打到已回收的桩上
     // 就是随机的原生崩溃——与 WinEventDelegate 同一套纪律。
-    [DllImport("user32.dll", CharSet = CharSet.Unicode)]
+    // SetLastError=true 是调用方判定 ERROR_CLASS_ALREADY_EXISTS(1414) 的前提：没有它 Marshal.GetLastWin32Error()
+    // 读到的是陈旧值（Task 13 评审 Important）。CreateWindowExW 调用点不读错误码，故不加。
+    [DllImport("user32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
     public static extern ushort RegisterClassExW(ref WNDCLASSEXW lpwcx);
 
     [DllImport("user32.dll", CharSet = CharSet.Unicode)]

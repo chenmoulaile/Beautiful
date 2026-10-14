@@ -365,8 +365,10 @@ public sealed class ThumbnailPreview : IDisposable
         if (_classAtom == 0)
         {
             // 可能已注册（重载 Dock 复用同类名）：GetLastError==1414(ERROR_CLASS_ALREADY_EXISTS) 视为成功。
-            if (Marshal.GetLastWin32Error() != 1414)
-                Logger.Warn($"RegisterClassExW 失败 err={Marshal.GetLastWin32Error()}");
+            // err 缓存进局部变量：判定与日志必须用同一个值（二次读取之间错误码可能被其他 P/Invoke 改写）。
+            var err = Marshal.GetLastWin32Error();
+            if (err != 1414)
+                Logger.Warn($"RegisterClassExW 失败 err={err}");
             else
                 _classAtom = 1;   // 已存在，占位标记避免重复注册（类名与过程一致，安全复用）
         }

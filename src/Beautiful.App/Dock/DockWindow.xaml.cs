@@ -557,7 +557,12 @@ public partial class DockWindow : AcrylicWindow
 
         var hit = Surface.HitTestItem(e.GetPosition(Surface));
         // 同一目标：不重复计时（_previewPending 已置，无论"等待中"还是"已显示"都保持不动）。
-        if (hit is not null && _previewPending is not null && hit.Id == _previewPending.Id) return;
+        // 例外：预览已收起且驻留计时已停（如源窗口死亡被看门狗隐藏）——此时 pending 是陈旧值，
+        // 若仍早退则光标不离开该图标就永远无法再次唤出预览（Task 13 评审 Minor），清空后落入
+        // 下方流程对同一条目重新起驻留。
+        if (hit is not null && _previewPending is not null && hit.Id == _previewPending.Id
+            && (_preview is { IsShowing: true } || _previewDwell?.IsEnabled == true))
+            return;
 
         // 目标改变（含移到空白 / 回收站 / 媒体）：先收起旧的，再决定是否对新目标起驻留。
         _previewDwell?.Stop();
