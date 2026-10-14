@@ -129,10 +129,35 @@ internal static partial class NativeMethods
     [DllImport("user32.dll")]
     public static extern bool SetWindowPos(IntPtr hWnd, IntPtr after, int x, int y, int cx, int cy, uint flags);
 
+    public const uint SwpNosize = 0x0001;
+
     [DllImport("user32.dll", EntryPoint = "GetWindowLongPtrW")]
     private static extern IntPtr GetWindowLongPtr64(IntPtr hWnd, int nIndex);
     public static long GetWindowLongPtr(IntPtr hWnd, int nIndex) => GetWindowLongPtr64(hWnd, nIndex).ToInt64();
+
+    [DllImport("user32.dll", EntryPoint = "SetWindowLongPtrW")]
+    private static extern IntPtr SetWindowLongPtrW(IntPtr hWnd, int nIndex, IntPtr dwNewLong);
+    public static long SetWindowLongPtr(IntPtr hWnd, int nIndex, long value) => SetWindowLongPtrW(hWnd, nIndex, new IntPtr(value)).ToInt64();
+
+    public const int GwlpExStyle = -20;
     public const long WsExToolwindow = 0x80L;
+    public const long WsExNoactivate = 0x0800_0000L; // 点击不激活窗口（自绘弹层防抢焦点/防 Deactivated 竞态自关）
+
+    // ---------- 显示器（物理像素工作区，弹层边缘翻转定位用） ----------
+    public const uint MonitorDefaultToNearest = 2;
+
+    [StructLayout(LayoutKind.Sequential)]
+    public struct MONITORINFO
+    {
+        public int cbSize;
+        public RECT rcMonitor;
+        public RECT rcWork;
+        public uint dwFlags;
+    }
+
+    [DllImport("user32.dll")] public static extern IntPtr MonitorFromPoint(POINT pt, uint flags);
+
+    [DllImport("user32.dll")] public static extern bool GetMonitorInfo(IntPtr hMonitor, ref MONITORINFO lpmi);
 
     [DllImport("user32.dll")]
     public static extern uint GetWindowThreadProcessId(IntPtr hWnd, out uint processId);
