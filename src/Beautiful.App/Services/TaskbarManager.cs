@@ -214,6 +214,18 @@ public sealed class TaskbarManager
         var screenH = NativeMethods.GetSystemMetrics(1); // SM_CYSCREEN
         foreach (var hwnd in FindTaskbars())
         {
+            // 【终审 I-5 · 孤立隐藏态回收】上一实例在 SW_HIDE 兜底路径被强杀时，任务栏停留在
+            // SW_HIDE 态，而 _swHidden 是**进程内**集合——新实例无从得知，于是三重失灵：
+            // HideAll 见矩形仍在停靠位（top < screenH）却查不到隐藏记录；CaptureOnScreenRects
+            // 拒绝把停靠矩形当还原基准；Restore 第一步 iterate 空 _swHidden 什么都不做——
+            // 任务栏被永久隐藏，README 限制 6 的"再次启动并正常退出即清掉"只对移出屏幕变体成立。
+            // 修复：HideAll 开头先 SW_SHOWNA（显示但不抢焦点）认领孤立隐藏态窗口，让本次
+            // 正常走"截图基准 → 移出屏幕/重新 SW_HIDE 并登记 _swHidden"链路，退出即可还原。
+            if (!NativeMethods.IsWindowVisible(hwnd))
+            {
+                NativeMethods.ShowWindow(hwnd, NativeMethods.SwShowna);
+                Logger.Info($"HideAll: hwnd=0x{hwnd.ToInt64():X} 处于孤立隐藏态（先前实例遗留），已 SW_SHOWNA 认领，稍后按本进程策略重新隐藏以便退出还原");
+            }
             if (!NativeMethods.GetWindowRect(hwnd, out var rect)) continue;
             if (rect.Top >= screenH)
             {

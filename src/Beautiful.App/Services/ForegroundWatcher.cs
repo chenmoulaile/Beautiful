@@ -75,27 +75,49 @@ public static class ForegroundWatcher
         Logger.Info("ForegroundWatcher: 共享前台钩子已卸载（订阅者归零）");
     }
 
+    // 关停期派发异常只记一次：BeginInvoke 在 Dispatcher 关停后每次都会抛，退出瞬间的连续
+    // Alt+Tab 会形成日志风暴；护栏本身则必须每帧都在（见 OnWinEvent）。
+    private static bool _dispatchFaultLogged;
+
     private static void OnWinEvent(IntPtr hook, uint evt, IntPtr hwnd, int idObject, int idChild, uint thread, uint time)
     {
-        // 回调极短：只转发，且复制一份订阅者快照，避免订阅者在回调中增删集合造成遍历异常。
-        var snapshot = Handlers.Count > 0 ? Handlers.ToArray() : null;
-        if (snapshot is null) return;
-
-        void Dispatch()
+        // 【原生回调全程护栏（终审 I-3），与 Interop/LowLevelKeyboardHook.cs Invoke 的纪律一致】
+        // 本回调运行在 SetWinEventHook 安装线程的消息泵上：任何异常逃逸出去都会直接打断消息泵、
+        // 令进程在退出中途崩溃——任务栏还停在 SW_HIDE/屏幕外态无人还原。已知的必然抛出点：
+        // UI.BeginInvoke 在 Dispatcher 关停后抛 InvalidOperationException/TaskCanceledException
+        // （用户在我们退出的同时 Alt+Tab 即命中）。订阅者个体异常已由 Dispatch 内部逐一隔离，
+        // 这里兜住的是隔离层之外的投递本身。
+        try
         {
-            for (int i = 0; i < snapshot.Length; i++)
-            {
-                try { snapshot[i](hwnd); }
-                catch (Exception ex) { Logger.Warn($"ForegroundWatcher 订阅者异常（已隔离，不影响其他订阅者）: {ex.Message}"); }
-            }
-        }
+            // 回调极短：只转发，且复制一份订阅者快照，避免订阅者在回调中增删集合造成遍历异常。
+            var snapshot = Handlers.Count > 0 ? Handlers.ToArray() : null;
+            if (snapshot is null) return;
 
-        // 一律 BeginInvoke，**没有内联分支**：回调跑在安装线程（即 UI 线程）的消息泵上，
-        // CheckAccess 恒为 true，旧的"同步内联"写法把订阅者的耗时活（切换器的窗口登记/图标）
-        // 直接拖进了 WinEvent 回调栈。OUTOFCONTEXT 钩子同样受 LowLevelHooksTimeout 约束，
-        // 超时被静默摘钩，殃及顶栏前台跟踪（评审发现 I4）。延后一拍投递不改变语义（订阅者
-        // 本就应重新查询 Current 句柄），换来回调恒定极短。
-        UI.BeginInvoke(DispatcherPriority.Normal, Dispatch);
+            void Dispatch()
+            {
+                for (int i = 0; i < snapshot.Length; i++)
+                {
+                    try { snapshot[i](hwnd); }
+                    catch (Exception ex) { Logger.Warn($"ForegroundWatcher 订阅者异常（已隔离，不影响其他订阅者）: {ex.Message}"); }
+                }
+            }
+
+            // 一律 BeginInvoke，**没有内联分支**：回调跑在安装线程（即 UI 线程）的消息泵上，
+            // CheckAccess 恒为 true，旧的"同步内联"写法把订阅者的耗时活（切换器的窗口登记/图标）
+            // 直接拖进了 WinEvent 回调栈。OUTOFCONTEXT 钩子同样受 LowLevelHooksTimeout 约束，
+            // 超时被静默摘钩，殃及顶栏前台跟踪（评审发现 I4）。延后一拍投递不改变语义（订阅者
+            // 本就应重新查询 Current 句柄），换来回调恒定极短。
+            UI.BeginInvoke(DispatcherPriority.Normal, Dispatch);
+        }
+        catch (Exception ex)
+        {
+            if (!_dispatchFaultLogged)
+            {
+                _dispatchFaultLogged = true;
+                Logger.Warn($"ForegroundWatcher 派发失败（UI 线程正在关停，已忽略，后续同类不再记录）: {ex.Message}");
+            }
+            // 绝不外抛：异常进入原生回调 = 消息泵崩溃 = 带隐藏的任务栏退出。
+        }
     }
 
     private sealed class Subscription : IDisposable

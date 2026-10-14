@@ -200,11 +200,20 @@ public class FluentPopupHost : Window
         var fore = GetForegroundWindow();
         uint foreTid = fore != IntPtr.Zero ? GetWindowThreadProcessId(fore, out _) : 0u;
         uint curTid = GetCurrentThreadId();
-        bool attached = foreTid != 0 && foreTid != curTid && AttachThreadInput(curTid, foreTid, true);
-        BringWindowToTop(hwnd);
-        SetForegroundWindow(hwnd);
-        Activate();
-        if (attached) AttachThreadInput(curTid, foreTid, false);
+        var attached = foreTid != 0 && foreTid != curTid && AttachThreadInput(curTid, foreTid, true);
+        try
+        {
+            BringWindowToTop(hwnd);
+            SetForegroundWindow(hwnd);
+            Activate();
+        }
+        finally
+        {
+            // 【终审 I-4】附着必须在 finally 配对解除：中途抛异常若遗留附着，本 UI 线程会与
+            // **前台应用**的输入队列持久耦合（焦点/激活互相牵制，且每次开菜单累积一次附着）。
+            // 与 Switcher/SwitcherService.cs 激活链路同型。
+            if (attached) AttachThreadInput(curTid, foreTid, false);
+        }
     }
 
     /// <summary>光标是否在本弹层物理矩形外扩 <paramref name="inflate"/>px 范围内（桥接父子弹层间隙）。</summary>

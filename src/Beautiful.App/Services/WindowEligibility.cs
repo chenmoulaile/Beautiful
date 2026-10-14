@@ -21,6 +21,14 @@ internal static class WindowEligibility
     public static bool IsEligibleWindow(IntPtr h, uint ownProcessId)
     {
         if (!NativeMethods.IsWindowVisible(h)) return false;
+        // 【终审 I-7 · 键盘钩子的承重墙，勿删】IsHungAppWindow 必须早于任何窗口文本查询：
+        // GetWindowTextLength/GetWindowText 是 **SEND** 消息——同步发送到窗口所属线程，对方挂死
+        // 时调用线程一并被挂住。本判定运行在三条 2s UI 线程定时器驱动的 EnumWindows 遍历中
+        // （WindowTracker、SwitcherService、TopBarWindow），一次挂死的第三方窗口即可冻死我们的
+        // UI 线程；而 WH_KEYBOARD_LL 回调同样在这条线程的消息泵上——超时后系统会给**全机每一次
+        // 按键**都加上 LowLevelHooksTimeout 延迟并静默摘掉我们的钩子（v1 有遍历无钩子，未暴露）。
+        // 挂死窗口本也不该出现在列表里：早退既是过滤，更是对键盘钩子的保护。
+        if (NativeMethods.IsHungAppWindow(h)) return false;
         if (NativeMethods.GetWindowTextLength(h) == 0) return false;
         if (NativeMethods.GetWindowThreadProcessId(h, out var pid) == 0) return false;
         if (pid == ownProcessId) return false;

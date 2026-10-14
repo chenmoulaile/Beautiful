@@ -134,6 +134,9 @@ internal static partial class NativeMethods
     [DllImport("user32.dll")] public static extern bool IsWindow(IntPtr hWnd);
     [DllImport("user32.dll")] public static extern bool IsIconic(IntPtr hWnd);
     [DllImport("user32.dll")] public static extern bool IsZoomed(IntPtr hWnd);
+    // IsHungAppWindow：查询窗口所属线程是否停止处理消息（"未响应"）。判据本身不发消息、不阻塞，
+    // 专供 EnumWindows 遍历在 GetWindowText 这类 SEND 消息之前早退挂死窗口（终审 I-7，见 WindowEligibility）。
+    [DllImport("user32.dll")] public static extern bool IsHungAppWindow(IntPtr hWnd);
     [DllImport("user32.dll")] public static extern bool ShowWindow(IntPtr hWnd, int nCmdShow); // SW_RESTORE=9 SW_MINIMIZE=6
     [DllImport("user32.dll")] public static extern IntPtr SetForegroundWindow(IntPtr hWnd);
     [DllImport("user32.dll")] public static extern IntPtr GetForegroundWindow();
