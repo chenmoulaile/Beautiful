@@ -205,10 +205,34 @@ public partial class App : Application
         var old = _dock;
         _dock = null;
         old.Close(); // 同步走完 OnClosing（ABM_REMOVE）/ OnClosed（tracker/smtc 释放）
-        _dock = new DockWindow(_taskbar);
-        _dock.Show();
-        if (SettingsService.Current.TopBarEnabled) EnsureTopBar();
-        EnsureSwitcherWindow();
+        DockWindow? dock = null; // 提升出 try：Show() 半途抛时 catch 需 Close 半构造实例走 OnClosed 解绑（同 EnsureTopBar 纪律）
+        try
+        {
+            // 【终审 I-6】重建必须有就地兜底：此刻旧 Dock/顶栏/面板都已销毁，若 new DockWindow
+            // 抛异常且无人接住，异常落进 DispatcherUnhandledException（Handled=true）后 _dock 恒为
+            // null——常驻进程只剩托盘图标，而"重载"（本方法 return）与"设置"（依赖 _dock 的 VM）
+            // 全部静默 no-op，用户没有任何恢复手段。catch 后至少恢复顶栏与切换面板这两个不依赖
+            // Dock 的表面，保证屏幕上有可用入口。
+            dock = new DockWindow(_taskbar);
+            dock.Show();
+            _dock = dock;
+            if (SettingsService.Current.TopBarEnabled) EnsureTopBar();
+            EnsureSwitcherWindow();
+        }
+        catch (Exception ex)
+        {
+            _dock = null;
+            // Show() 已走完 OnSourceInitialized（AppBar 已注册、ThemeChanged 已订阅）而其后抛异常时，
+            // 引用即将丢弃——必须 Close 走 OnClosing/OnClosed（ABM_REMOVE + 解绑），否则条带与静态订阅泄漏。
+            try { dock?.Close(); } catch { /* 自愈路径：Close 失败不掩盖原始异常 */ }
+            Logger.Error("重载 Dock 失败：新实例创建异常，旧 Dock 已释放。正在恢复顶栏/切换面板以保留可用界面（可再次重载或退出）", ex);
+            try { if (SettingsService.Current.TopBarEnabled) EnsureTopBar(); } catch { /* 逐表面尽力恢复，单点失败不再连坐 */ }
+            try { EnsureSwitcherWindow(); } catch { /* 同上 */ }
+            if (_topBar is null && _switcherWindow is null)
+                MessageBox.Show("Beautiful 重载界面失败，屏幕已无可操作窗口。\n请从系统托盘图标再次“重载”或“退出”，详情见 logs 日志。",
+                    "Beautiful", MessageBoxButton.OK, MessageBoxImage.Warning);
+            return;
+        }
         Logger.Info("重载 Dock：完成");
     }
 
@@ -370,7 +394,7 @@ public partial class App : Application
         _switcher?.SetHookEnabled(false);
         // 钩子被摘时若面板正显示着，就再不会有人发 Commit/Cancel —— 必须就地收起（不提交，不切窗口）
         _switcherWindow?.ForceClose();
-        Logger.Warn("切换器已应急停用：如需重新启用，请在设置中打开“窗口切换器”开关后重启或重载");
+        Logger.Warn("切换器已应急停用：如需重新启用，请在设置中把“窗口切换器”开关**关一次再开**（重载 Dock 不会重挂钩子），或重启程序");
     }
 
     /// <summary>

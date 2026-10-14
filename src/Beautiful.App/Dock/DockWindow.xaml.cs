@@ -31,8 +31,8 @@ namespace Beautiful.App.Dock;
 /// （真实物理光标坐标，非离散悬停索引）+ CompositionTarget.Rendering（vsync）驱动的指数阻尼，
 /// 逐帧只写 Canvas.Left/Top 与 RenderTransform，面板内零 Margin/LayoutTransform 改写。
 /// 条带比可见面板高 <see cref="StripHeadroomDip"/>（透明、点击穿透），放大后的图标才不被窗口上沿裁掉。
-/// 主题由 ThemeManager 驱动（Task 13）：构造期 Apply(HarmonyOs)，订阅 ThemeChanged 重设
-/// 亚克力/间距/放大参数（IconSize、Spacing、MaxScale、ShowMagnification 写入 DockSurface）。
+/// 主题由 ThemeManager 驱动（Task 13，订阅时序见终审 I-6 注释）：OnSourceInitialized 显式 ApplyTheme(当前)
+/// 起步并订阅 ThemeChanged 重设亚克力/间距/放大参数（IconSize、Spacing、MaxScale、ShowMagnification 写入 DockSurface）。
 /// </summary>
 public partial class DockWindow : AcrylicWindow
 {
@@ -91,7 +91,10 @@ public partial class DockWindow : AcrylicWindow
         _vm = new DockViewModel(_tracker);
         DataContext = _vm;
         WireSurface();
-        ThemeManager.ThemeChanged += OnThemeChanged;
+        // 【终审 I-6】ThemeChanged 静态订阅移出构造函数（原 :94）：构造期任何一步抛异常都会留下
+        // 一个半构造、无 HWND 却永久挂在静态事件上的僵尸实例——与 TopBarWindow/EnsureTopBar、
+        // SwitcherService 已修过的同类泄漏一致。订阅移到 OnSourceInitialized（Show/Handle 生成时），
+        // 初值主题在那里显式 ApplyTheme(ThemeManager.Current)；解绑在 OnClosed，两者对称。
         // 任务栏策略切换/explorer 重启重放（TaskbarManager.Apply/Restore → PolicyApplied）后，
         // AppBar 条带需重新协商：Hide 释放了底部条带预留 → Dock 贴真底；Keep → 让位在任务栏上方。
         if (_taskbar is not null) _taskbar.PolicyApplied += OnTaskbarPolicyApplied;
@@ -140,7 +143,10 @@ public partial class DockWindow : AcrylicWindow
         _appbarMsg = NativeMethods.RegisterWindowMessage("AppBarMessage");
         _taskbarCreatedMsg = NativeMethods.RegisterWindowMessage("TaskbarCreated");
         RegisterAndPositionAppBar();
-        // 亚克力由主题驱动（构造期 ThemeManager.Apply → OnThemeChanged → ApplyTheme），此处不再硬编码
+        // 主题初值显式落地 + 静态订阅放最后（终审 I-6，与 OnClosed 解绑对称）：构造期 ThemeManager.Apply
+        // 只更新全局资源字典，本窗口的亚克力/间距/放大参数从这里开始由 ThemeChanged 驱动，不再硬编码。
+        ApplyTheme(ThemeManager.Current);
+        ThemeManager.ThemeChanged += OnThemeChanged;
     }
 
     // ---------- 主题引擎（Task 13） ----------
