@@ -12,7 +12,7 @@ namespace Beautiful.App.Interop;
 /// 【为什么必须"即刻返回"】低级钩子的回调安装在**当前线程的消息泵**上，系统等待回调返回的时间受
 /// <c>LowLevelHooksTimeout</c>（默认约 300ms）限制：超时后 Windows 会**静默摘掉钩子**——表现为
 /// "Alt+Tab 有时又变回系统样式"这种极难复现的故障。因此本类的回调路径坚持三条纪律：
-/// ①零堆分配（手工按偏移读 <see cref="NativeMethods.KBDLLHOOKSTRUCT"/>，不做结构体封送）；
+/// ①零堆分配（手工按偏移读 KBDLLHOOKSTRUCT 字段，不做结构体封送）；
 /// ②不做任何 UI/磁盘/阻塞调用（耗时告警也只在超时后**投递**到 Dispatcher 稍后写日志）；
 /// ③每次回调都测耗时，超过阈值立即改为"直通放行"（CallNextHookEx），宁可丢一次接管也不拖慢输入链。
 ///

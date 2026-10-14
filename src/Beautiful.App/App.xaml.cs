@@ -272,7 +272,10 @@ public partial class App : Application
     // ---------- 切换器生命周期（Task 11） ----------
 
     /// <summary>
-    /// 确保切换器服务与可见面板存在（幂等）。服务本身始终启动（MRU 跟踪供"窗口"菜单等复用），
+    /// 确保切换器服务与可见面板存在（幂等）。服务始终启动以预热 MRU 列表与图标缓存——运行中
+    /// 打开接管开关即刻有完整列表，不必在按键路径上冷启动 EnumWindows/磁盘 IO。
+    /// 如实说明：顶栏"窗口"菜单用的是 Dock 的 WindowTracker，**并不复用**本服务的 MRU，
+    /// 因此进程内存在两条各 2s 的 EnumWindows 对账（形态相同、快照独立，暂未合并）。
     /// 是否吞 Alt+Tab 由 <c>SwitcherEnabled</c> 决定；钩子装不上仅记日志（退回原生行为）。
     /// 面板（Task 12）只在开关打开时装配：关掉接管就没有事件源，面板自然不显示，
     /// 但**不创建**更干净——少一个常驻 HWND，也不会因异常路径留下可见残留。
@@ -280,9 +283,10 @@ public partial class App : Application
     private void EnsureSwitcher()
     {
         if (_switcher is not null || _exiting) return;
+        Switcher.SwitcherService? svc = null; // 提升出 try：catch 必须能 Dispose 半启动实例（见下）
         try
         {
-            var svc = new Switcher.SwitcherService();
+            svc = new Switcher.SwitcherService();
             svc.Hook.EmergencyDisabled += OnSwitcherEmergencyDisabled;
             _switcher = svc;
             svc.Start(SettingsService.Current.SwitcherEnabled);
@@ -291,6 +295,10 @@ public partial class App : Application
         catch (Exception ex)
         {
             _switcher = null;
+            // Start() 半途而废时 svc 已注册进静态 ForegroundWatcher.Handlers、2s 定时器已被 Dispatcher
+            // 持根，且若异常发生在 Hook.Start() 之后还挂着一条无主的 WH_KEYBOARD_LL（继续吞 Alt+Tab）。
+            // 只把字段置 null 等于制造一个永远无人 Dispose 的僵尸——必须先释放再丢弃（评审发现 I3）。
+            try { svc?.Dispose(); } catch { /* 释放失败不掩盖原始异常 */ }
             Logger.Warn($"切换器启动失败（Alt+Tab 保持系统原生行为）: {ex.Message}");
         }
     }

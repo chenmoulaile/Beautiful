@@ -23,8 +23,14 @@ namespace Beautiful.App.Switcher;
 /// （吞掉 Alt 抬起会让系统认为 Alt 一直按住 → 应用菜单聚焦、后续快捷键错乱）。原生切换器需要
 /// "Alt 按住 + Tab"才触发，Tab 被吞即足以压制它。
 ///
-/// 【自愈】Tab 按下时同时校验 KBDLLHOOKSTRUCT 的 <c>LLKHF_ALTDOWN</c> 位：若系统认为 Alt 已松开
-/// （我们的状态位因漏收 key-up 而卡住），立即收束会话并放行，避免"Alt 卡住 → Tab 被永久吞掉"。
+/// 【注入键一律放行】回调首行检查 <c>LLKHF_INJECTED</c>：凡 keybd_event/SendInput 合成的按键
+/// （我们自己的 TapAlt 兜底、密码管理器自动填充、屏幕键盘、远程输入）既不参与状态位跟踪也不被吞掉。
+/// 否则注入的 Alt 会开出幽灵会话（提交后到下一次真按键之间吞掉一切），注入的 Alt+Tab 则被吞后
+/// 目标应用永远收不到（评审发现 I2）。应急组合 Win+Alt+K 因此只认真实体键——注入键无法解除接管。
+///
+/// 【自愈】会话的开启与收束以 **OS 报告的修饰键状态**（<c>LLKHF_ALTDOWN</c> / GetAsyncKeyState）
+/// 为权威，不信任缓存位：漏收一个 key-up 边缘最多错过一次接管，绝不会"陈旧位永久吞掉普通 Tab"
+/// （评审发现 I1；<see cref="Start"/> 装钩时亦清零全部状态位）。
 ///
 /// 【应急停用】硬编码 Win+Alt+K：无论其它状态如何，立即在进程内关闭接管并卸载钩子，
 /// 原生 Alt+Tab 当场恢复。用户被自己的设置卡住时这是唯一出口，因此不读取任何设置项、不可配置。
@@ -126,8 +132,24 @@ public sealed class AltTabHook : IDisposable
         Interlocked.Exchange(ref _needWin, win ? 1 : 0);
     }
 
-    /// <summary>安装钩子（须在 UI 线程）。失败返回 false，调用方据此降级为"不接管"。</summary>
-    public bool Start() => _keyboard.Install();
+    /// <summary>
+    /// 安装钩子（须在 UI 线程）。失败返回 false，调用方据此降级为"不接管"。
+    /// 装钩前先清零全部修饰键/会话状态位：钩子看不见安装之前发生的按下/抬起边缘，
+    /// 带着陈旧位上线会让"改热键重装"（App.ApplySwitcherHotkey 的注释承诺）变成空话（评审发现 I1）。
+    /// </summary>
+    public bool Start()
+    {
+        ResetTriggerState();
+        return _keyboard.Install();
+    }
+
+    /// <summary>清零左右修饰键与会话标志（真实按键状态以 OS 侧为准，后续边沿会自行重建这些位）。</summary>
+    private void ResetTriggerState()
+    {
+        _altLeft = _altRight = _ctrlLeft = _ctrlRight = _winLeft = _winRight = _shiftLeft = _shiftRight = false;
+        _switching = false;
+        _nativeSession = false;
+    }
 
     /// <summary>卸载钩子（幂等；转回安装线程）。应急停用与关开关走这里，Dispose 亦复用。</summary>
     public void Stop() => _keyboard.Uninstall();
@@ -151,6 +173,11 @@ public sealed class AltTabHook : IDisposable
 
     private bool OnKey(int msg, uint vk, uint flags)
     {
+        // ⓪ 注入键（LLKHF_INJECTED）一律原样放行，且不碰任何状态位：我们自己的 TapAlt 兜底、
+        // 密码管理器/屏幕键盘/远程输入合成的 Alt+Tab 若被当作真实输入，前者会开出幽灵 Alt 会话、
+        // 后者会被吞掉导致目标应用收不到（评审发现 I2）。
+        if ((flags & NativeMethods.LlkhfInjected) != 0) return false;
+
         var isDown = msg is NativeMethods.WmKeyDown or NativeMethods.WmSysKeyDown;
         var isUp = msg is NativeMethods.WmKeyUp or NativeMethods.WmSysKeyUp;
         if (!isDown && !isUp) return false; // WM_SYSCHAR 等字符消息：放行
@@ -173,14 +200,16 @@ public sealed class AltTabHook : IDisposable
             if (!isDown) return _switching; // 会话中的 Tab 抬起一并吞掉，非会话放行
 
             if (_nativeSession) return false; // 本会话已交原生，后续 Tab 不再插手
-            // OS 的 Alt 状态位是权威：据此自愈"漏收 Alt key-up 导致状态卡住"
+            // OS 的修饰键状态是权威（缓存位可能因漏收 key-up 永久卡住）：会话开启与自愈都只看它。
+            // 漏收一个边缘的代价仅是"这一次不接管"（安全方向），而不是"以后永远吞 Tab"（评审发现 I1）。
             var altHeldPerOs = (flags & NativeMethods.LlkhfAltDown) != 0;
-            if (_switching && !altHeldPerOs && !AltDown)
+            var heldPerOs = TriggerHeldPerOs(altHeldPerOs);
+            if (_switching && !heldPerOs)
             {
-                _switching = false; // 系统说 Alt 已松开 → 收束会话，本次放行
+                _switching = false; // 系统说触发键已松开 → 收束会话，本次放行（陈旧位死锁就此打破）
                 return false;
             }
-            if (!_switching && !TriggerHeld(altHeldPerOs)) return false; // 普通制表键
+            if (!_switching && !heldPerOs) return false; // 普通制表键
 
             if (!_switching)
             {
@@ -263,6 +292,18 @@ public sealed class AltTabHook : IDisposable
          && (_needWin == 0 || _winLeft || _winRight);
 
     /// <summary>
+    /// 触发键是否按住的 **OS 权威版**（评审发现 I1）：Alt 用 KBDLLHOOKSTRUCT 的 LLKHF_ALTDOWN 位，
+    /// Ctrl/Win 用 GetAsyncKeyState（同为纯读操作，回调预算内），完全不读缓存位——缓存位漏收边沿后
+    /// 永久为真，OS 状态不会。默认 alt+tab 配置下短路求值，不产生任何额外 P/Invoke。
+    /// </summary>
+    private bool TriggerHeldPerOs(bool altHeldPerOs)
+        => (_needAlt == 0 || altHeldPerOs)
+         && (_needCtrl == 0 || IsDownOs(NativeMethods.VkLControl) || IsDownOs(NativeMethods.VkRControl))
+         && (_needWin == 0 || IsDownOs(NativeMethods.VkLWin) || IsDownOs(NativeMethods.VkRWin));
+
+    private static bool IsDownOs(int vk) => (NativeMethods.GetAsyncKeyState(vk) & 0x8000) != 0;
+
+    /// <summary>
     /// Enabled=false 时会话标志必须收束，否则"关闭后按 Alt+Tab、再松开 Alt"会补发一个陈旧的 Commit。
     /// </summary>
     private void CloseSessionIfTriggerReleased()
@@ -326,9 +367,7 @@ public sealed class AltTabHook : IDisposable
     private void EmergencyDisableInProcess()
     {
         Enabled = false;
-        _switching = false;
-        _nativeSession = false;
-        _altLeft = _altRight = _ctrlLeft = _ctrlRight = _winLeft = _winRight = _shiftLeft = _shiftRight = false;
+        ResetTriggerState(); // 状态位/会话标志全清（与装钩同一套收束）
         Interlocked.Add(ref _pendingEmergency, 1);
         ScheduleDrain();
     }

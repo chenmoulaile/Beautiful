@@ -90,8 +90,12 @@ public static class ForegroundWatcher
             }
         }
 
-        if (UI.CheckAccess()) Dispatch();
-        else UI.BeginInvoke(DispatcherPriority.Normal, Dispatch);
+        // 一律 BeginInvoke，**没有内联分支**：回调跑在安装线程（即 UI 线程）的消息泵上，
+        // CheckAccess 恒为 true，旧的"同步内联"写法把订阅者的耗时活（切换器的窗口登记/图标）
+        // 直接拖进了 WinEvent 回调栈。OUTOFCONTEXT 钩子同样受 LowLevelHooksTimeout 约束，
+        // 超时被静默摘钩，殃及顶栏前台跟踪（评审发现 I4）。延后一拍投递不改变语义（订阅者
+        // 本就应重新查询 Current 句柄），换来回调恒定极短。
+        UI.BeginInvoke(DispatcherPriority.Normal, Dispatch);
     }
 
     private sealed class Subscription : IDisposable

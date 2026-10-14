@@ -198,17 +198,9 @@ internal static partial class NativeMethods
     public const int VkLControl = 0xA2, VkRControl = 0xA3;
     public const int VkLMenu = 0xA4, VkRMenu = 0xA5; // VK_LMENU/RMENU（左右 Alt 分别跟踪）
 
-    [StructLayout(LayoutKind.Sequential)]
-    public struct KBDLLHOOKSTRUCT
-    {
-        public uint VkCode;
-        public uint ScanCode;
-        public uint Flags;
-        public uint Time;
-        public IntPtr ExtraInfo;
-    }
-
-    public const uint LlkhfInjected = 0x10, LlkhfAltDown = 0x20, LlkhfUp = 0x80;
+    // KBDLLHOOKSTRUCT 不在此声明：回调按偏移手工读字段（布局见 LowLevelKeyboardHook.Invoke 注释），
+    // 结构体封送从未启用（评审附带：删除死声明）。LlkhfUp 同理删除——抬起判定用消息号不用标志位。
+    public const uint LlkhfInjected = 0x10, LlkhfAltDown = 0x20;
 
     public delegate IntPtr LowLevelKeyboardProc(int nCode, IntPtr wParam, IntPtr lParam);
 

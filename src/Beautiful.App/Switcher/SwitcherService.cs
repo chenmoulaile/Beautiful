@@ -20,7 +20,8 @@ namespace Beautiful.App.Switcher;
 /// （与 Dock 的 WindowTracker 同一策略，两者互不依赖）。</description></item>
 /// <item><description><see cref="AltTabHook.OpenRequested"/> → 由 <see cref="_tracked"/> 生成
 /// <see cref="WindowEntry"/> 序列（已是 Z/MRU 序）→ <see cref="WindowListMerger.GroupByApp"/> 分组
-/// → 图标查缓存（缺失才提取）。**按键序列里不出现 EnumWindows 与图标提取**。</description></item>
+/// → 图标**只查缓存**（未命中给占位符，绝不在按键路径提取——磁盘 IO 全部收敛到 2s 对账预热，
+/// 评审发现 I4）。**按键序列里不出现 EnumWindows 与图标提取**。</description></item>
 /// <item><description>Tab/Shift+Tab/方向键 → <see cref="WindowListMerger.NextIndex"/> 步进；
 /// 松开触发键 → <see cref="CommitSelected"/>；Esc → <see cref="Cancel"/>。</description></item>
 /// </list>
@@ -246,6 +247,16 @@ public sealed class SwitcherService : IDisposable
                 anchor++;
             }
         }
+
+        // 图标预热（评审发现 I4）：磁盘 IO 只允许出现在这个 2s 批处理里——前台事件路径与按键
+        // 路径都不再提取。每轮限量 8 个，防一批新应用同时取图卡住 UI 线程；漏网的下一轮补齐。
+        int warmBudget = 8;
+        for (int i = 0; i < _tracked.Count && warmBudget > 0; i++)
+        {
+            if (_iconCache.ContainsKey(_tracked[i].AppId)) continue;
+            IconFor(_tracked[i].AppId);
+            warmBudget--;
+        }
     }
 
     private bool CollectEligible(IntPtr hwnd, IntPtr lParam)
@@ -275,13 +286,14 @@ public sealed class SwitcherService : IDisposable
             appId = "cls:" + NativeMethods.GetWindowClassName(hwnd);
             appName = NativeMethods.GetWindowClassName(hwnd);
         }
-        IconFor(appId); // 图标在跟踪路径预热，不在按键路径提取
+        // 此处**不**取图标：CreateTracked 也在前台事件路径上（见 OnForegroundChanged），
+        // 图标提取统一挪到 Reconcile 的批量预热（评审发现 I4：键路径/事件路径零磁盘）。
         return new TrackedWindow(hwnd, appId, appName, title, NativeMethods.IsIconic(hwnd));
     }
 
     /// <summary>
-    /// 按 exe 路径缓存图标。<b>只在跟踪/对账路径调用</b>（EnumWindows 之后、面板打开之前），
-    /// 按键序列命中缓存即零成本；未命中时才现场提取一次（首次遇到新应用，代价可控）。
+    /// 按 exe 路径缓存图标。<b>唯一调用点是 <see cref="Reconcile"/> 的批量预热</b>（每轮限量），
+    /// 前台事件路径与按键路径都不再触盘（评审发现 I4）。
     /// </summary>
     private BitmapSource? IconFor(string appId)
     {
@@ -291,12 +303,18 @@ public sealed class SwitcherService : IDisposable
         return icon;
     }
 
-    /// <summary>面板用：取某 App 的图标（已在跟踪路径预热）。</summary>
+    /// <summary>
+    /// 面板用：图标只查缓存，未命中返回 null（面板画占位符，最迟下一轮 2s 对账预热补齐）。
+    /// 这里刻意<b>不</b>回源提取——"键路径零磁盘 IO"必须由结构保证，而不是靠"预热通常已完成"
+    /// 的时序巧合（评审发现 I4 附带项）。
+    /// </summary>
     public BitmapSource? GetIcon(string appId)
     {
         EnsureUiThread();
         if (string.IsNullOrEmpty(appId)) return null;
-        return _iconCache.TryGetValue(appId, out var icon) ? icon : IconFor(appId);
+        if (_iconCache.TryGetValue(appId, out var icon)) return icon;
+        Logger.Info($"切换器：图标未预热（本轮以占位符显示，待对账补齐）: {appId}");
+        return null;
     }
 
     // ---------- 会话（打开/步进/提交/取消） ----------
