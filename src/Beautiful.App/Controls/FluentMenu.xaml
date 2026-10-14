@@ -10,10 +10,12 @@
          两种形态（由 FluentPopupHost 在背板落地后经 IBackdropAware 通知切换）：
          ① 系统背板形态（Win11 真模糊，宿主非分层）：卡铺满整个窗口，圆角/投影由 DWM 负责
             （DWMWA_WINDOW_CORNER_PREFERENCE），卡底半透明让模糊透出——这才是"高级感"的来源；
+            此形态不画自绘描边（DWM 圆角会把四角各 ~8 物理 px 裁掉，1px 高光线在角上明显断开）。
          ② 自绘形态（主题禁模糊 → 宿主仍是分层窗口）：外圈 Margin 为投影留位，卡自绘 10px 圆角 +
             DropShadow + 实底（逐像素 alpha 才允许透明留白，见 FluentPopupHost 的互斥说明）。
          行模板：勾选列 | 图标列 | 标签 | ▸ 箭头列，悬停 60ms 圆角高亮滑入（缩放+淡入）。
-         渲染语言不随主题明暗：菜单恒为深色玻璃卡 + 近白文字（主题 token 仅取强调色/字体）。 -->
+         渲染语言不随主题明暗：菜单恒为深色玻璃卡 + 近白文字（主题 token 取强调色/字体 +
+         ThemeBackdropTint：卡底上叠一层主题 tint，档 1/2 系统背板不认我们的 tint，只能靠内容层体现主题）。 -->
     <UserControl.Resources>
         <!-- 卡底：真背板可用时用半透明（背板模糊成为质感底层），否则自铺实底（绝不露黑） -->
         <LinearGradientBrush x:Key="CardFillBlur" StartPoint="0,0" EndPoint="0,1">
@@ -32,6 +34,11 @@
         <Border x:Name="Card" CornerRadius="0" BorderThickness="1" BorderBrush="#2AFFFFFF" MinWidth="230"
                 Background="{StaticResource CardFillBlur}">
             <Grid>
+                <!-- 主题 tint 覆盖层：压在卡底之上、内容与内高光之下（评审 Important#4：
+                     档 1/2 的系统背板由 DWM 自行取色，我们的 tint 只能作为内容层叠加才生效）。
+                     换主题即随 DynamicResource 变色。圆角随自绘/背板形态由代码同步。 -->
+                <Border x:Name="TintLayer" CornerRadius="0" IsHitTestVisible="False"
+                        Background="{DynamicResource ThemeBackdropTint}"/>
                 <!-- 顶部内高光：macOS 玻璃感的"light top edge" -->
                 <Border x:Name="InnerGlow" CornerRadius="0" IsHitTestVisible="False">
                     <Border.Background>

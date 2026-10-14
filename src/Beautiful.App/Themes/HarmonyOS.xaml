@@ -13,6 +13,9 @@
     <SolidColorBrush x:Key="ThemeTextPrimary" Color="#FFFFFFFF"/>
     <!-- 浮层面板（媒体胶囊）底色 -->
     <SolidColorBrush x:Key="ThemePanelBackground" Color="#26FFFFFF"/>
+    <!-- 浮层（托盘菜单/媒体面板）主题 tint 覆盖层：Win11 系统背板（Mica/Acrylic）的取色由系统决定，
+         应用写不进去 → 主题的 AcrylicTint（#61000000）改以内容层叠加体现，取 30% alpha 的叠加强度 -->
+    <SolidColorBrush x:Key="ThemeBackdropTint" Color="#4D000000"/>
     <!-- 运行指示 token：底部圆点（dot | bar | none，与 ThemeDefinition.IndicatorStyle 对应） -->
     <sys:String x:Key="ThemeIndicatorStyle">dot</sys:String>
     <!-- 字体（FontFamily 类型实例：TextElement.FontFamily 附加属性不接受 String 资源；

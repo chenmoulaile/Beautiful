@@ -9,6 +9,8 @@
     <SolidColorBrush x:Key="ThemeDockBackground" Color="#E61C1C1C"/>
     <SolidColorBrush x:Key="ThemeTextPrimary" Color="#FFFFFFFF"/>
     <SolidColorBrush x:Key="ThemePanelBackground" Color="#26FFFFFF"/>
+    <!-- 浮层主题 tint 覆盖层：本主题禁模糊（分层窗口自铺实底），tint 仍作为叠加层与另两主题区分 -->
+    <SolidColorBrush x:Key="ThemeBackdropTint" Color="#4D1C1C1C"/>
     <sys:String x:Key="ThemeIndicatorStyle">bar</sys:String>
     <FontFamily x:Key="ThemeFontFamily">Segoe UI</FontFamily>
     <CornerRadius x:Key="ThemePanelCornerRadius">12</CornerRadius>

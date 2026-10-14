@@ -91,8 +91,6 @@ public partial class FluentMenu : UserControl, IBackdropAware
     /// <summary>关闭当前显示的菜单链（应用退出/重开时调用，防弹层残留）。</summary>
     public static void CloseCurrent() => _openRootHost?.Close();
 
-    internal static FluentPopupHost? CurrentHostForDebug => _openRootHost; // TEMP(T4 诊断)
-
     // ---------- 背板协商（Task 4：FluentPopupHost 落地系统背板后回调） ----------
 
     /// <summary>
@@ -100,9 +98,15 @@ public partial class FluentMenu : UserControl, IBackdropAware
     /// <list type="bullet">
     /// <item>几何：宿主为分层窗口（主题禁模糊）时才允许逐像素透明的外圈留白 + 自绘圆角/投影；
     /// 宿主非分层（走 DWM 背板）时窗口矩形即卡片，必须铺满、圆角/阴影交还给 DWM
-    /// （<c>DWMWA_WINDOW_CORNER_PREFERENCE=ROUND</c>），否则四角只剩方形背板溢出，描边也会与裁切打架。</item>
+    /// （<c>DWMWA_WINDOW_CORNER_PREFERENCE=ROUND</c>）。背板形态下自绘 1px 描边会被 DWM 圆角
+    /// 裁掉四角各 ~8 物理 px（评审 Important#3：高光线在角上"断开"）→ 该形态一律把
+    /// <c>BorderThickness</c> 置 0，边缘由系统背板自身收边；只有自绘形态（逐像素 alpha、无裁切）
+    /// 才画描边高光。</item>
     /// <item>底色：只有真有模糊的路径（系统背板 / 未公开 Mica / 旧亚克力）才用半透明卡底让背板透出；
     /// 降级到底（无模糊）时实底自铺，保证文字可读、绝不露黑。</item>
+    /// <item>主题 tint：<c>TintLayer</c> 在卡底之上铺一层主题 <c>ThemeBackdropTint</c>（DynamicResource，
+    /// 换主题即变）——档 1/2 的系统背板只吃 DWM 自己的取色、我们传入的 tint 对其无效（评审 Important#4），
+    /// 故 tint 经内容层生效。</item>
     /// </list>
     /// </summary>
     public void OnBackdropApplied(BackdropPath path)
@@ -114,7 +118,8 @@ public partial class FluentMenu : UserControl, IBackdropAware
         Card.Background = (Brush)Resources[hasBlur ? "CardFillBlur" : "CardFillSolid"];
         Shell.Margin = selfDrawn ? SelfDrawnMargin : new Thickness(0);
         Card.CornerRadius = selfDrawn ? new CornerRadius(10) : new CornerRadius(0);
-        InnerGlow.CornerRadius = selfDrawn ? new CornerRadius(9) : new CornerRadius(0);
+        Card.BorderThickness = selfDrawn ? new Thickness(1) : new Thickness(0); // 背板形态不画会被 DWM 裁断的描边
+        InnerGlow.CornerRadius = TintLayer.CornerRadius = selfDrawn ? new CornerRadius(9) : new CornerRadius(0);
         Card.Effect = selfDrawn ? (Effect)Resources["CardShadow"] : null;
     }
 

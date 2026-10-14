@@ -6,14 +6,16 @@
         Width="420" Height="520"
         Topmost="True"
         ShowActivated="True"
-        Background="Transparent"
+        Background="{x:Null}"
         WindowStartupLocation="Manual">
 
     <!-- 歌词展开面板（实况窗大窗）：胶囊上方居中（定位由 DockWindow 计算）。
          失焦自动 Hide（Deactivated → code-behind，开关 = HidePanelOnDeactivate 设置项）。
          【Task 4】面板内容本就铺满整个窗口（无透明留白，圆角只是自绘外观）→ 按 controller 裁定
          转为"非分层窗口 + Win11 系统背板"：真模糊透出，圆角交 DWM 裁切；主题禁模糊（Linux）时
-         退回分层窗口 + 自绘 20px 圆角实底形态（逐像素 alpha 在该分支没有背板可牺牲）。 -->
+         退回分层窗口 + 自绘 20px 圆角实底形态（逐像素 alpha 在该分支没有背板可牺牲）。
+         窗口底恒为 {x:Null}（分层分支靠它让 20px 圆角缺口真正点击穿透）；非分层分支由代码在
+         OnSourceInitialized 置 Transparent，避免 XAML 里一刀切换掉分层分支的穿透语义。 -->
     <services:AcrylicWindow.Resources>
         <!-- 面板底：真背板可用时半透明（让系统模糊透出），否则实底；实底恒为不透明，兜底不露黑 -->
         <LinearGradientBrush x:Key="PanelFillBlur" StartPoint="0,0" EndPoint="0,1">
@@ -75,6 +77,13 @@
                 <RowDefinition Height="Auto"/>
                 <RowDefinition Height="*"/>
             </Grid.RowDefinitions>
+
+            <!-- 主题 tint 覆盖层（评审 Important#4）：档 1/2 的系统背板只吃 DWM 自己的取色，主题 AcrylicTint
+                 写不进去 → 以内容层叠加体现主题色。负 Margin 精确抵掉 PanelRoot 的 Padding="20,18"，
+                 使这一层铺满整张卡（含四周留白）；圆角随形态由代码同步（分层=自绘 19，背板=0）。
+                 IsHitTestVisible=False：只做着色，不抢控件命中。 -->
+            <Border x:Name="TintLayer" Grid.RowSpan="4" Margin="-20,-18" CornerRadius="0"
+                    IsHitTestVisible="False" Background="{DynamicResource ThemeBackdropTint}"/>
 
             <!-- 封面 + 标题/歌手 -->
             <Grid Grid.Row="0">

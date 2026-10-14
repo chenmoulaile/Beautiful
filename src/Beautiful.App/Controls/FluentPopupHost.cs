@@ -59,9 +59,6 @@ public class FluentPopupHost : Window
     private bool _flipX, _flipY; // 最近一次收敛落位是否左/上翻转（入场动画方向用）
     private BackdropPath _backdrop = BackdropPath.None;
 
-    /// <summary>本次显示胜出的背板路径（QA 与内容侧底色协商用；未初始化时为 <see cref="BackdropPath.None"/>）。</summary>
-    public BackdropPath Backdrop => _backdrop;
-
     /// <summary>暂停自动关闭（拖拽选择、模态确认等场景可临时置 true 抑制"光标离开即关"）。</summary>
     public bool KeepOpen { get; set; }
 

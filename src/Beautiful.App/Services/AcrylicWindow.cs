@@ -53,14 +53,20 @@ public interface IBackdropAware
 /// </summary>
 public static class SystemBackdrop
 {
-    /// <summary>最近一次胜出的路径（进程级，供窗口在内容尚未就绪时回放）。</summary>
-    public static BackdropPath LastPath { get; private set; } = BackdropPath.None;
-
     /// <summary>
     /// 应用背板。<paramref name="roundedCorners"/> = 同时请求 DWM 原生圆角（背板窗口的圆角唯一来源）；
     /// <paramref name="darkTint"/> = 请求 <c>DWMWA_USE_IMMERSIVE_DARK_MODE</c>，Win11 的 Mica/Acrylic
     /// 明暗变体由它决定（实测不设则取浅色变体：压在浅色页面上会把整张卡冲成纯白、内容直接看不见）。
     /// 返回胜出的路径；调用方（窗口/内容）据此决定底色是否可半透明。
+    /// <para>
+    /// 【<paramref name="tint"/> 的实际作用范围（评审 Important#4）】只有档 3（旧
+    /// <c>SetWindowCompositionAttribute</c> 亚克力）与"三档全败"的不透明兜底会把 tint 直接当底色用；
+    /// 档 1（<c>DWMWA_SYSTEMBACKDROP_TYPE</c>）/ 档 2（未公开 Mica）的模糊取色由系统自己决定
+    /// （桌面壁纸 + 系统强调色 + 明暗变体），应用侧写不进颜色。因此主题 tint 在档 1/2 上以内容层
+    /// 叠加的形式生效：由内容（<see cref="Controls.FluentMenu"/> / <see cref="MediaWidget.MediaPanel"/>）
+    /// 在卡底之上铺一层 <c>ThemeBackdropTint</c>（主题 DynamicResource 画刷），换主题即变色。
+    /// 调用方无需（也无法）靠本方法的返回值给档 1/2 上色。
+    /// </para>
     /// </summary>
     public static BackdropPath Apply(Window window, Color tint, BackdropKind kind,
                                      bool roundedCorners = true, bool darkTint = true)
@@ -71,11 +77,15 @@ public static class SystemBackdrop
         {
             // 防御：分层窗口上背板/玻璃层都是静默无效（画不出东西 → 黑卡）。不写任何 DWM 属性，
             // 直接用旧 SetWindowCompositionAttribute（该路径在分层窗口上有效，Dock 即此形态）。
+            // kind==None（主题禁模糊，如 Linux）时本就是"关掉玻璃"的常规分支，不是异常 → 走 Info 且
+            // 文案不得说"走旧亚克力"（实际是 AccentState.Disabled 关玻璃）。
             var layeredOk = kind == BackdropKind.None
                 ? ApplyAccentPolicy(hwnd, Colors.Transparent, AccentState.Disabled)
                 : ApplyAccentPolicy(hwnd, tint, AccentState.AcrylicBlurBehind);
-            Logger.Warn($"背板请求绕过 DWM：hwnd=0x{hwnd.ToInt64():X} 为分层窗口(AllowsTransparency=true)，" +
-                        $"走旧亚克力 {(layeredOk ? "成功" : "失败")}");
+            Logger.Info(kind == BackdropKind.None
+                ? $"分层窗口跳过 DWM 背板：hwnd=0x{hwnd.ToInt64():X}（主题禁模糊，属预期路径），已关玻璃层 {(layeredOk ? "成功" : "失败")}"
+                : $"背板请求落在分层窗口上：hwnd=0x{hwnd.ToInt64():X}（AllowsTransparency=true，DWM 不为其合成背板），" +
+                  $"退化为旧亚克力 {(layeredOk ? "成功" : "失败")}");
             return kind == BackdropKind.None ? BackdropPath.None
                  : layeredOk ? BackdropPath.CompositionAccent : BackdropPath.Failed;
         }
@@ -86,18 +96,19 @@ public static class SystemBackdrop
         var frameHr = DwmExtendFrameIntoClientArea(hwnd, ref margins);
 
         // 圆角：背板窗口不能自绘透明外边距，圆角必须由 DWM 裁切（半径 = 系统值，与资源管理器一致）
-        var cornerHr = -1;
+        int? cornerHr = null; // null = 未尝试（日志打 n/a，避免 -1 被格式化成 0xFFFFFFFF 误读成"失败"）
         if (roundedCorners)
         {
             var round = DwmwcpRound;
             cornerHr = DwmSetWindowAttribute(hwnd, DwmwaWindowCornerPreference, ref round, sizeof(int));
         }
 
-        // 深色变体须在写背板类型之前落定（顺序反了时 DWM 会先按浅色合成出一张白卡）
+        // 深色变体须在写背板类型之前落定（顺序反了时 DWM 会先按浅色合成出一张白卡）；hr 同样留证
+        int? darkHr = null;
         if (darkTint && kind != BackdropKind.None)
         {
             var dark = 1;
-            DwmSetWindowAttribute(hwnd, DwmwaUseImmersiveDarkMode, ref dark, sizeof(int));
+            darkHr = DwmSetWindowAttribute(hwnd, DwmwaUseImmersiveDarkMode, ref dark, sizeof(int));
         }
 
         var value = kind switch
@@ -109,15 +120,23 @@ public static class SystemBackdrop
         var backdropHr = DwmSetWindowAttribute(hwnd, DwmwaSystemBackdropType, ref value, sizeof(int));
 
         BackdropPath path;
+        int? micaHr = null;
         if (backdropHr == 0 && kind != BackdropKind.None)
         {
-            path = BackdropPath.SystemBackdrop; // 22H2+ 真系统背板
+            // 22H2+ 真系统背板。
+            // 【取证状态 UNVERIFIED，评审 Important#2】hr==0 只证明"属性被接受"，不证明"DWM 真的画了"：
+            // 本机（Win11 23H2 开发 VM）已实测两件事——① 卡片内部像素对"弹层后面是什么"完全不敏感
+            // （黑白条纹窗 vs 纯黑桌面：卡内均值恒 50.5）→ 至少不是"窗口自身 alpha 直接漏出桌面"；
+            // ② 但该 VM 的桌面背景图被禁用（桌面恒 #0C0C0C）、且关闭系统"透明效果"开关后卡内读数也不变
+            // → 拿不到"背板随环境变化"的正向判据。故"看到真模糊"这一条在本机 **未获判别性证据**，
+            // 需要换一台启用壁纸/可注销生效的 Win11 复测（壁纸法：同一锚点两次截屏，只换壁纸亮度）。
+            path = BackdropPath.SystemBackdrop;
         }
         else if (kind != BackdropKind.None)
         {
             // 22H2 之前的未公开 Mica 开关（BOOL=true）；只有 Mica 语义，Acrylic 请求在此档退化为 Mica
             var on = 1;
-            var micaHr = DwmSetWindowAttribute(hwnd, DwmwaMicaEffect, ref on, sizeof(int));
+            micaHr = DwmSetWindowAttribute(hwnd, DwmwaMicaEffect, ref on, sizeof(int));
             if (micaHr == 0)
             {
                 path = BackdropPath.MicaLegacy;
@@ -137,19 +156,14 @@ public static class SystemBackdrop
             path = BackdropPath.None;
         }
 
-        LastPath = path;
         Logger.Info($"背板路径={path} kind={kind} hwnd=0x{hwnd.ToInt64():X} " +
-                    $"frame_hr=0x{frameHr:X} backdrop_hr=0x{backdropHr:X} corner_hr=0x{cornerHr:X}");
+                    $"frame_hr={Hr(frameHr)} backdrop_hr={Hr(backdropHr)} corner_hr={Hr(cornerHr)} " +
+                    $"dark_hr={Hr(darkHr)} mica_hr={Hr(micaHr)}");
         return path;
     }
 
-    /// <summary>单独设/清 DWM 圆角偏好（内容与背板圆角不匹配时用于"让位"，不与自绘描边打架）。</summary>
-    public static bool SetCornerPreference(Window window, int preference)
-    {
-        var hwnd = new WindowInteropHelper(window).EnsureHandle();
-        var value = preference;
-        return DwmSetWindowAttribute(hwnd, DwmwaWindowCornerPreference, ref value, sizeof(int)) == 0;
-    }
+    /// <summary>HRESULT 日志格式：未尝试的属性打 n/a（不把哨兵 -1 打成 0xFFFFFFFF 冒充失败码）。</summary>
+    private static string Hr(int? hr) => hr is null ? "n/a" : $"0x{hr.Value:X}";
 
     /// <summary>旧 SetWindowCompositionAttribute 亚克力（ModernFlyouts/MIT 模式）。成功返回 true。</summary>
     internal static bool ApplyAccentPolicy(IntPtr hwnd, Color tint, AccentState state)
@@ -211,7 +225,13 @@ public class AcrylicWindow : Window
 
     /// <summary>
     /// Win11 系统背板（38 → 1029 → 旧亚克力三级降级）。要求窗口 <c>AllowsTransparency=false</c>，
-    /// 否则内部自动退化为旧亚克力并记 WARN（见 <see cref="SystemBackdrop"/> 的互斥说明）。
+    /// 否则内部自动退化为旧亚克力并记日志（见 <see cref="SystemBackdrop"/> 的互斥说明）。
+    /// <para>
+    /// <paramref name="tint"/>（主题 AcrylicTint）的作用范围见
+    /// <see cref="SystemBackdrop.Apply"/>：档 1/2 的模糊由系统自行取色（壁纸 + 系统强调色），
+    /// 我们的 tint 写不进去，只能由内容侧在卡底之上叠一层 <c>ThemeBackdropTint</c> 画刷体现主题；
+    /// tint 只有档 3（旧亚克力 GradientColor）与"三档全败"的不透明兜底直接消费。
+    /// </para>
     /// </summary>
     public BackdropPath ApplyBackdrop(Color tint, BackdropKind kind = BackdropKind.Acrylic,
                                       bool roundedCorners = true, bool darkTint = true)

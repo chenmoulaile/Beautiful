@@ -10,6 +10,8 @@
     <SolidColorBrush x:Key="ThemeDockBackground" Color="#B4202020"/>
     <SolidColorBrush x:Key="ThemeTextPrimary" Color="#FFFFFFFF"/>
     <SolidColorBrush x:Key="ThemePanelBackground" Color="#26FFFFFF"/>
+    <!-- 浮层主题 tint 覆盖层：系统背板取色不可写，主题 AcrylicTint(#B4202020) 以 30% 叠加体现 -->
+    <SolidColorBrush x:Key="ThemeBackdropTint" Color="#4D202020"/>
     <sys:String x:Key="ThemeIndicatorStyle">dot</sys:String>
     <FontFamily x:Key="ThemeFontFamily">Segoe UI Variable, Segoe UI</FontFamily>
     <CornerRadius x:Key="ThemePanelCornerRadius">18</CornerRadius>

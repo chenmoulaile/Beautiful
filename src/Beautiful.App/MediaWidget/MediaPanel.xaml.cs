@@ -4,8 +4,10 @@ using System.Windows.Media;
 using System.Windows.Threading;
 using Beautiful.App.Services;
 using Beautiful.App.Themes;
+using Beautiful.Core.Themes;
 using Color = System.Windows.Media.Color;
 using Brush = System.Windows.Media.Brush; // UseWindowsForms 隐式全局 using 与 System.Drawing.Brush 冲突
+using Brushes = System.Windows.Media.Brushes; // 同上，System.Drawing.Brushes
 
 namespace Beautiful.App.MediaWidget;
 
@@ -34,11 +36,15 @@ public partial class MediaPanel
         _vm.CurrentLyricIndexChanged += OnLyricIndexChanged;
         Closed += (_, _) =>
         {
+            ThemeManager.ThemeChanged -= OnThemeChangedForBackdrop; // 静态事件：实例销毁前必须解挂（防泄漏）
             _vm.CurrentLyricIndexChanged -= OnLyricIndexChanged; // 防 VM 侧泄漏
             _seekDebounce?.Stop();                               // 拖动中关闭：不再结算 seek
             _vm.CancelSeek();                                    // 恢复定时器/时间线的进度回写
         };
         Deactivated += OnDeactivatedHide;
+        // 面板是 DockWindow 的缓存实例（失焦 Hide 不 Close），而背板形态/tint/圆角只在源初始化协商一次
+        // → 换主题时直接弃掉本实例，下次展开按新主题重建（评审 minor：缓存实例会留旧几何/旧 tint）。
+        ThemeManager.ThemeChanged += OnThemeChangedForBackdrop;
 
         // 进度条交互：不挂鼠标事件（MouseLeftButton* 是 Direct 路由策略事件，Thumb 捕获并标记
         // Handled 后不可靠），改用 ValueChanged 差值检测用户 seek：与 VM 当前值偏差大的变化
@@ -87,6 +93,18 @@ public partial class MediaPanel
     /// 见 <see cref="SystemBackdrop"/>），禁模糊（Linux）走分层窗口自绘圆角。胜出的路径决定底色：
     /// 真模糊 → 半透明透出背板；无模糊 → 自铺底，非分层形态还须把窗口底铺成不透明（无逐像素 alpha，
     /// 半透明只会露黑）。
+    /// <para>
+    /// 【形态与描边】非分层（背板）形态：窗口矩形即卡片 → 圆角交 DWM 裁切、自绘 1px 描边必须撤掉
+    /// （留着会被裁掉四角各 ~8 物理 px，高光线在角上断开，评审 Important#3）；分层形态保留自绘 20px
+    /// 圆角 + 描边，且窗口底维持 XAML 的 <c>{x:Null}</c>——那 20px 圆角缺口靠它才是真透明（可点击穿透），
+    /// 换成 Transparent 会改变该分支的命中测试。
+    /// </para>
+    /// <para>
+    /// 【主题变更即弃实例】本面板由 DockWindow 缓存（失焦只 Hide 不 Close），而背板形态/tint/圆角都在
+    /// <see cref="Window.OnSourceInitialized"/> 一次性决定 → 换主题时若面板仍存活会留下旧几何与旧 tint。
+    /// 故订阅 <see cref="ThemeManager.ThemeChanged"/> 直接 <see cref="Window.Close"/>（DockWindow 的
+    /// Closed 处理器会把缓存槽置空），下次展开重新协商形态。
+    /// </para>
     /// </summary>
     protected override void OnSourceInitialized(EventArgs e)
     {
@@ -101,12 +119,25 @@ public partial class MediaPanel
         PanelRoot.Background = (Brush)Resources[hasBlur ? "PanelFillBlur" : "PanelFillSolid"];
         if (AllowsTransparency)
         {
-            PanelRoot.CornerRadius = new CornerRadius(20); // 分层窗口：逐像素 alpha 自绘圆角
+            // 分层窗口：逐像素 alpha 自绘圆角，窗口底维持 {x:Null}（四角缺口点击穿透）
+            PanelRoot.CornerRadius = new CornerRadius(20);
+            TintLayer.CornerRadius = new CornerRadius(19); // 描边内 1px：贴合卡片弧线
         }
         else
         {
-            PanelRoot.CornerRadius = new CornerRadius(0);  // 背板窗口：圆角由 DWM 裁切，卡必须铺满
+            // 背板窗口：圆角由 DWM 裁切，卡必须铺满 → 撤掉会被裁断的自绘描边
+            Background = Brushes.Transparent; // XAML 的 {x:Null} 只服务于分层分支
+            PanelRoot.CornerRadius = new CornerRadius(0);
+            PanelRoot.BorderThickness = new Thickness(0);
+            TintLayer.CornerRadius = new CornerRadius(0);
             if (!hasBlur) Background = (Brush)Resources["PanelFillOpaque"]; // 兜底：不留黑区
         }
+    }
+
+    /// <summary>换主题 → 关掉本实例（背板形态/tint/圆角只在源初始化时协商，缓存实例会留旧几何）。</summary>
+    private void OnThemeChangedForBackdrop(ThemeDefinition _)
+    {
+        Logger.Info("主题变更：关闭媒体面板实例，下次展开重新协商背板形态");
+        Close();
     }
 }

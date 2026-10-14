@@ -90,67 +90,6 @@ public partial class App : Application
                 applyTheme: ApplyThemeFromTray,
                 currentTheme: () => SettingsService.Current.Theme);
             Logger.Info("托盘就绪，启动完成");
-
-            // TEMP(T4 截屏验证，验证后整段回退本文件)：--debug-panel 反射开媒体面板（无会话也开）
-            if (e.Args.Contains("--debug-panel", StringComparer.OrdinalIgnoreCase))
-                Dispatcher.BeginInvoke(new Action(() =>
-                {
-                    var mi = typeof(DockWindow).GetMethod("ShowMediaPanel",
-                        System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic);
-                    mi?.Invoke(_dock, null);
-                    Logger.Info("DEBUG 媒体面板已开 (reflection ShowMediaPanel)");
-                }), DispatcherPriority.ApplicationIdle);
-
-            // TEMP(T4 截屏验证，验证后整段回退本文件)：--debug-menu 在固定坐标弹 FluentMenu
-            if (e.Args.Contains("--debug-menu", StringComparer.OrdinalIgnoreCase))
-                Dispatcher.BeginInvoke(new Action(() =>
-                {
-                    var items = new List<Controls.MenuItemView>
-                    {
-                        new() { Id = "settings", Label = "设置…", Glyph = "", Invoke = OpenSettings },
-                        new() { Id = "theme", Label = "主题", Glyph = "", Children = new List<Controls.MenuItemView>
-                        {
-                            new() { Id = "harmonyos", Label = "鸿蒙", IsChecked = true },
-                            new() { Id = "macos", Label = "macOS" },
-                            new() { Id = "linux", Label = "Linux" },
-                        } },
-                        new() { Id = "reload", Label = "重载 Dock", Glyph = "", Invoke = ReloadDock },
-                        new() { Id = "sep", IsSeparator = true },
-                        new() { Id = "quit", Label = "退出", Glyph = "", Invoke = ExitApp },
-                    };
-                    var ax = 520.0; var ay = 300.0; // TEMP 锚点（BEAUTIFUL_T4_ANCHOR=x,y 可覆盖）
-                    var anch = Environment.GetEnvironmentVariable("BEAUTIFUL_T4_ANCHOR");
-                    if (!string.IsNullOrEmpty(anch))
-                    {
-                        var parts = anch.Split(',');
-                        if (parts.Length == 2 && double.TryParse(parts[0], out var px) && double.TryParse(parts[1], out var py))
-                        { ax = px; ay = py; }
-                    }
-                    Controls.FluentMenu.Show(new Controls.FluentPopupHost(),
-                        new System.Windows.Point(ax, ay), items, null);
-                    Logger.Info($"DEBUG 菜单已弹出 ({ax},{ay})");
-                    // TEMP 诊断：1.5s 后回读弹层状态（内容是否入树/透明度/是否分层/底色）
-                    var dbgHost = Controls.FluentMenu.CurrentHostForDebug;
-                    if (dbgHost is not null)
-                    {
-                        var dbg = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(1500) };
-                        dbg.Tick += (_, _) =>
-                        {
-                            dbg.Stop();
-                            var h = new System.Windows.Interop.WindowInteropHelper(dbgHost);
-                            long ex = Interop.NativeMethods.GetWindowLongPtr(h.Handle, Interop.NativeMethods.GwlpExStyle);
-                            var content = dbgHost.Content as UIElement;
-                            int visualChildren = 0;
-                            try { visualChildren = System.Windows.Media.VisualTreeHelper.GetChildrenCount(dbgHost); } catch { }
-                            Logger.Info($"DEBUG host size={dbgHost.ActualWidth}x{dbgHost.ActualHeight} " +
-                                        $"visible={dbgHost.IsVisible} contentOpacity={content?.Opacity} " +
-                                        $"contentVisible={content?.IsVisible} visualChildren={visualChildren} " +
-                                        $"layered={(ex & 0x80000) != 0} backdrop={dbgHost.Backdrop} " +
-                                        $"bg={dbgHost.Background?.GetType().Name} hwnd=0x{h.Handle.ToInt64():X}");
-                        };
-                        dbg.Start();
-                    }
-                }), DispatcherPriority.ApplicationIdle);
         }
         catch (Exception ex)
         {
