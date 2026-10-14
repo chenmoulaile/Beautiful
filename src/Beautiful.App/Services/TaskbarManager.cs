@@ -24,15 +24,19 @@ public enum TaskbarPolicy { Keep, AutoHide, Hide }
 /// 让滑出不再发生（悬停底边 3.7s：visible=False 且矩形停在 (0,766)-(1024,814)）。
 /// </para>
 /// 还原凭据全程留存：<see cref="_origState"/>（改动前的 ABM_GETSTATE 原值，Restore 原样写回）
-/// + <see cref="_saved"/> 屏幕内矩形 + <see cref="_swHidden"/> 可见性。
-/// Hide 策略落地（退出/切回 Keep）时另有无条件清 autohide 位的一次兜底，用于擦掉"上一个被强杀实例"的残留
+/// + <see cref="_saved"/> 屏幕内矩形（几何复位）+ <see cref="_swHidden"/> 可见性。
+/// 两条还原各自独立：<b>可见性只认 _swHidden</b>，几何复位只认 _saved——SW_HIDE 兜底可能发生在
+/// _saved 为空时（上一个实例被强杀留下 autohide 位 → 本实例的基准捕获正确拒绝停靠位矩形），
+/// 若把可见性挂在 _saved 上就会漏还原，任务栏退出后永久不可见（评审发现）。
+/// Hide 策略落地（退出/切回 Keep）时另有一次兜底，只清 autohide 位（<c>state &amp; ~ABS_AUTOHIDE</c>，
+/// 不写其余位），用于擦掉"上一个被强杀实例"的残留
 /// （代价：用户自己的原生 autohide 偏好会被一并清掉，见 README 已知限制 5(b)）。
 /// shell 重布局（Dock AppBar 重注册、explorer 重启）可能把任务栏摆回屏幕内、或把 autohide 关掉，经 Reassert 重申。
 /// </summary>
 public sealed class TaskbarManager
 {
     private readonly Dictionary<IntPtr, RECT> _saved = new(); // 还原基准：首次隐藏时的屏幕内矩形
-    private readonly HashSet<IntPtr> _swHidden = new();       // 经 SW_HIDE 隐藏的窗口（还原需 SW_SHOWNA）
+    private readonly HashSet<IntPtr> _swHidden = new();       // 经 SW_HIDE 隐藏的窗口：Restore 第 1 步**只按这张表**SW_SHOWNA（基准缺失也要还原）
     private TaskbarPolicy _policy = TaskbarPolicy.Keep;
     private int? _origState;      // 本进程首次改 autohide 之前的 ABM_GETSTATE 原值（Restore 原样写回）
     private bool _autohideApplied; // 本进程把 autohide 从"关"改成了"开"（仅此时 Restore 才需要写回）
@@ -86,10 +90,23 @@ public sealed class TaskbarManager
 
     private void RestoreInternal()
     {
-        // 1) 先恢复可见性（SW_HIDE 过的窗口要 SW_SHOWNA 请回来，否则 shell 重布局也不会替我们 ShowWindow）
-        foreach (var (hwnd, _) in _saved)
-            if (_swHidden.Remove(hwnd))
+        // 1) 先恢复可见性：**只认 _swHidden，不能按 _saved 的键遍历**。
+        //    SW_HIDE 兜底完全可能在"没有还原基准"的情况下发生：上一个实例被强杀把 autohide 位留在"开"，
+        //    本实例启动时任务栏已停在停靠位 (0,766)-(1024,814) → CaptureOnScreenRects 正确地拒绝把它当基准
+        //    （基准若取停靠位，Restore 会把任务栏摆回屏幕外）→ HideAll 的移动又被 shell 夹回 → 走 SW_HIDE。
+        //    旧写法 `foreach (_saved) if (_swHidden.Remove(hwnd)) ShowWindow(...)` 在这种组合下**一个都不还原**
+        //    （_saved 为空 → 循环不执行），随后 IntersectWith 还把 _swHidden 的记录抹掉 → 任务栏永久不可见，
+        //    只能重启 explorer 救回；而 shell 重布局并不会替我们把 SW_HIDE 的窗口 Show 回来（见下方 2 的实测）。
+        //    死亡句柄（explorer 重启后的旧 hwnd）用 IsWindow 过滤，保持 _swHidden 不积累残留。
+        foreach (var hwnd in _swHidden.ToArray())
+        {
+            var alive = NativeMethods.IsWindow(hwnd);
+            if (alive)
                 NativeMethods.ShowWindow(hwnd, NativeMethods.SwShowna); // SW_SHOWNA：恢复可见且不抢焦点
+            Logger.Info($"Restore(1/3): hwnd=0x{hwnd.ToInt64():X} {(alive ? "SW_SHOWNA" : "跳过（句柄已失效，explorer 重启过）")}" +
+                        "（可见性还原只认 _swHidden，不依赖 _saved 基准）");
+        }
+        _swHidden.Clear();
         // 2) 再关 autohide 写回原状态：shell 在状态位变化的瞬间按"占位条带"重排任务栏，
         //    此时窗口已可见，重排结果就是正常屏幕内位置（实测落回 (0,720)-(1024,768)）。
         if (_autohideApplied) DisableAutoHide(); // 只清自己设的 autohide；Keep 策略不触碰系统开关
@@ -103,16 +120,20 @@ public sealed class TaskbarManager
                 rect.Right - rect.Left, rect.Bottom - rect.Top,
                 NativeMethods.SwpNozorder | NativeMethods.SwpNoactivate);
         }
-        _swHidden.IntersectWith(_saved.Keys); // 残留的死亡句柄（explorer 重启）清理，须在 _saved.Clear() 前：保持 _swHidden ⊆ _saved
         _saved.Clear();
-        // Hide 策略落地（退出 / 切到 Keep）时无条件清一次 autohide 位：这个位可能是"上一个被强杀的实例"
-        // 留下的（本实例启动时它已为开 → EnableAutoHide 不认领还原责任 → DisableAutoHide 是 no-op），
-        // 那样任务栏会停在半隐藏态。用户选"隐藏"的语义是"我们走了以后原生任务栏要完整回来"，
-        // 宁可覆盖用户自己的原生 autohide 偏好（可在 系统设置 > 个性化 > 任务栏 重开），也不留半隐藏态。
-        if (_policy == TaskbarPolicy.Hide && (NativeMethods.GetAppBarState() & NativeMethods.AbsAutohide) != 0)
+        // Hide 策略落地（退出 / 切到 Keep）时兜底清一次 autohide 位——不管这个位是不是本实例认领的：
+        // 它可能是"上一个被强杀的实例"留下的（本实例启动时它已为开 → EnableAutoHide 不认领还原责任
+        // → DisableAutoHide 是 no-op），那样任务栏会停在半隐藏态。用户选"隐藏"的语义是
+        // "我们走了以后原生任务栏要完整回来"，宁可覆盖用户自己的原生 autohide 偏好
+        // （可在 系统设置 > 个性化 > 任务栏 重开），也不留半隐藏态。
+        // 但**只清 autohide 这一个位**：旧写法直接写 AbsAlwaysOnTop 是"置位"而不是"清位"——
+        // 原状态=1（自动隐藏、非常置顶）时会被改成 2，多改了一个本不属于我们的位。
+        var state = NativeMethods.GetAppBarState();
+        if (_policy == TaskbarPolicy.Hide && (state & NativeMethods.AbsAutohide) != 0)
         {
-            NativeMethods.SetAppBarState(NativeMethods.AbsAlwaysOnTop);
-            Logger.Info("Restore(Hide): 无条件清除 autohide 位（可能是上一个被强杀实例的残留）");
+            var target = state & ~NativeMethods.AbsAutohide;
+            NativeMethods.SetAppBarState(target);
+            Logger.Info($"Restore(Hide): 只清 autohide 位 {state} → {target}（可能是上一个被强杀实例的残留，其余位原样保留）");
         }
     }
 
@@ -201,6 +222,12 @@ public sealed class TaskbarManager
             }
             if (!_saved.ContainsKey(hwnd) && rect.Bottom <= screenH)
                 _saved[hwnd] = rect; // 只记首次屏幕内矩形：重复 HideAll（Reassert）不覆盖还原基准
+            // 【多显示器已知缺陷（本机单屏无法实测，README 已知限制 5(d)）】
+            // 这里的 screenH 取的是 SM_CYSCREEN = **主屏**底边，没有按窗口所在显示器调 MonitorFromWindow
+            // 取该屏自己的底边。后果：副屏的 Shell_SecondaryTrayWnd（例如副屏在 1920,0 起、高 1080）
+            // 会被摆到 (0,768)-(1920,816) 这类**主屏那一行**上——任务栏跑到错误的显示器上，
+            // 副屏底部反而露出壁纸/或主屏底部多出一条不该在的东西，而副屏自己的条带预留仍需 autohide 释放。
+            // 还原不受这个缺陷影响：_saved 按句柄各自存屏幕内基准矩形，Restore 第 3 步用它复位回原显示器。
             // 尝试 1：SWP_NOSENDCHANGING 绕过任务栏的 WM_WINDOWPOSCHANGING 回夹直接落位
             var ok = NativeMethods.SetWindowPos(hwnd, IntPtr.Zero, rect.Left, screenH,
                 rect.Right - rect.Left, rect.Bottom - rect.Top,
