@@ -1,7 +1,6 @@
 using System.Collections.ObjectModel;
 using System.ComponentModel;
 using System.Runtime.CompilerServices;
-using System.Text;
 using System.Windows;
 using System.Windows.Interop;
 using System.Windows.Media;
@@ -61,7 +60,7 @@ public sealed class WindowItem : INotifyPropertyChanged
 /// </summary>
 public sealed class WindowTracker : IDisposable
 {
-    private const int GwlExStyle = -20;                    // GetWindowLongPtr 的 GWL_EXSTYLE
+    // 可见性过滤规则已抽到 WindowEligibility（Dock 与切换器共用同一实现，避免两份规则漂移）
     private const long HshellRudeAppActivated = 0x8004;    // HSHELL_ACTIVATED(4) | HSHELL_HIGHBIT
     private const int SwMinimize = 6, SwRestore = 9;
 
@@ -177,7 +176,7 @@ public sealed class WindowTracker : IDisposable
 
     private void AddWindow(IntPtr hwnd)
     {
-        if (!IsEligibleWindow(hwnd, _ownPid)) return;
+        if (!WindowEligibility.IsEligibleWindow(hwnd, _ownPid)) return;
         if (IndexOf(hwnd) >= 0) return;
         var item = CreateItem(hwnd);
         if (item is null) return;
@@ -215,7 +214,7 @@ public sealed class WindowTracker : IDisposable
         var eligible = new List<IntPtr>();
         NativeMethods.EnumWindows((h, _) =>
         {
-            if (IsEligibleWindow(h, _ownPid)) eligible.Add(h);
+            if (WindowEligibility.IsEligibleWindow(h, _ownPid)) eligible.Add(h);
             return true;
         }, IntPtr.Zero);
         var eligibleSet = new HashSet<IntPtr>(eligible);
@@ -247,7 +246,7 @@ public sealed class WindowTracker : IDisposable
     {
         item.IsMinimized = NativeMethods.IsIconic(item.Handle);
         // 标题会变（浏览器切标签等）：仅用非空标题覆盖，避免瞬时空标题闪断
-        var title = GetWindowTitle(item.Handle);
+        var title = WindowEligibility.GetWindowTitle(item.Handle);
         if (title.Length > 0) item.Title = title;
     }
 
@@ -255,40 +254,10 @@ public sealed class WindowTracker : IDisposable
 
     private WindowItem? CreateItem(IntPtr hwnd)
     {
-        var title = GetWindowTitle(hwnd);
+        var title = WindowEligibility.GetWindowTitle(hwnd);
         if (title.Length == 0) return null; // 创建初期标题尚空的窗口：跳过，等下一次对账补入
-        NativeMethods.GetWindowThreadProcessId(hwnd, out var pid);
-        var exePath = NativeMethods.GetProcessPath(pid) ?? string.Empty;
+        var exePath = WindowEligibility.GetWindowExePath(hwnd);
         return new WindowItem(hwnd, title, exePath, GetIconCached(exePath), NativeMethods.IsIconic(hwnd));
-    }
-
-    // 过滤规则与 brief 完全一致
-    private static bool IsEligibleWindow(IntPtr h, uint ownProcessId)
-    {
-        if (!NativeMethods.IsWindowVisible(h)) return false;
-        if (NativeMethods.GetWindowTextLength(h) == 0) return false;
-        if (NativeMethods.GetWindowThreadProcessId(h, out var pid) == 0) return false;
-        if (pid == ownProcessId) return false;
-        // 过滤 UWP 幽灵与浏览器 cloak 窗口
-        if (NativeMethods.DwmGetWindowAttribute(h, NativeMethods.DwmwaCloaked, out var cloaked, 4) == 0 && cloaked != 0)
-            return false;
-        // 过滤工具窗口（WS_EX_TOOLWINDOW）
-        var ex = NativeMethods.GetWindowLongPtr(h, GwlExStyle);
-        if ((ex & NativeMethods.WsExToolwindow) != 0) return false;
-        // 排除任务栏自身与桌面/UWP 宿主类窗口
-        var cls = NativeMethods.GetWindowClassName(h);
-        if (cls is "Shell_TrayWnd" or "Shell_SecondaryTrayWnd" or "WorkerW" or "Progman" or "Windows.UI.Core.CoreWindow")
-            return false;
-        return true;
-    }
-
-    private static string GetWindowTitle(IntPtr hwnd)
-    {
-        var len = NativeMethods.GetWindowTextLength(hwnd);
-        if (len <= 0) return string.Empty;
-        var sb = new StringBuilder(len + 1);
-        NativeMethods.GetWindowText(hwnd, sb, sb.Capacity);
-        return sb.ToString();
     }
 
     private BitmapSource? GetIconCached(string exePath)

@@ -58,9 +58,8 @@ public partial class TopBarWindow : AcrylicWindow
     private bool _closing;
     private HwndSource? _source;
 
-    // 前台应用名跟踪（Task 8）
-    private NativeMethods.WinEventDelegate? _winEventProc;
-    private IntPtr _winEventHook;
+    // 前台应用名跟踪（Task 8；Task 11 起改用进程内共享的 ForegroundWatcher，不再自建第二条同款钩子）
+    private IDisposable? _foregroundSubscription;
     private DispatcherTimer? _fallbackTimer;
     private IntPtr _lastFgHwnd;
     private string _lastAppName = "";
@@ -218,10 +217,8 @@ public partial class TopBarWindow : AcrylicWindow
 
     private void StartForegroundTracking()
     {
-        _winEventProc = OnWinEvent;
-        _winEventHook = NativeMethods.SetWinEventHook(
-            NativeMethods.EventSystemForeground, NativeMethods.EventSystemForeground,
-            IntPtr.Zero, _winEventProc, 0, 0, NativeMethods.WineventOutOfContext);
+        // 共享钩子（ForegroundWatcher）+ 2s 兜底对账：钩子漏报（如跨桌面/权限窗口）时定时器仍能纠正。
+        _foregroundSubscription = ForegroundWatcher.Subscribe(_ => RefreshForegroundApp());
         _fallbackTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(2) };
         _fallbackTimer.Tick += (_, _) => RefreshForegroundApp();
         _fallbackTimer.Start();
@@ -235,19 +232,8 @@ public partial class TopBarWindow : AcrylicWindow
             _fallbackTimer.Stop();
             _fallbackTimer = null;
         }
-        if (_winEventHook != IntPtr.Zero)
-        {
-            NativeMethods.UnwinEventHook(_winEventHook);
-            _winEventHook = IntPtr.Zero;
-        }
-        _winEventProc = null;
-    }
-
-    private void OnWinEvent(IntPtr hook, uint evt, IntPtr hwnd, int idObject, int idChild, uint thread, uint time)
-    {
-        if (NativeMethods.GetForegroundWindow() != hwnd) return;
-        if (Dispatcher.CheckAccess()) RefreshForegroundApp();
-        else Dispatcher.BeginInvoke(RefreshForegroundApp);
+        _foregroundSubscription?.Dispose(); // 退订（最后一个订阅者退订时共享钩子才卸载）
+        _foregroundSubscription = null;
     }
 
     public void RefreshForegroundApp()

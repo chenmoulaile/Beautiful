@@ -36,6 +36,7 @@ public partial class App : Application
     private TaskbarManager? _taskbar;
     private DockWindow? _dock;
     private TopBarWindow? _topBar;
+    private Switcher.SwitcherService? _switcher;
     private Settings.SettingsWindow? _settingsWindow;
     private TrayIconManager? _tray;
     private bool _exiting;
@@ -86,6 +87,10 @@ public partial class App : Application
             // 创建异常仅记日志降级为"无顶栏运行"，不得连坐 Dock/任务栏策略整体退出。
             if (SettingsService.Current.TopBarEnabled) EnsureTopBar();
 
+            // 6.6 切换器（Task 11）：Alt+Tab 接管。同样按"附属能力"处理——钩子装不上只是退回原生
+            // Alt+Tab，绝不能连坐主 UI；但退出时必须先卸钩（见 ExitApp/OnExit）。
+            EnsureSwitcher();
+
             // 7. --settings：设置窗口命令行入口（与托盘"设置"等效；窗口为单例）
             if (e.Args.Contains("--settings", StringComparer.OrdinalIgnoreCase))
                 OpenSettings();
@@ -118,6 +123,8 @@ public partial class App : Application
         // 兜底路径（系统会话结束、显式 Shutdown 等）也要清理；与 ExitApp 重复调用均幂等
         _tray?.Dispose();
         _tray = null;
+        DestroySwitcher(); // 键盘钩子必须卸载（幂等）：残留的 WH_KEYBOARD_LL 会在进程退出时由系统回收，
+                           // 但显式 Shutdown 而未走 ExitApp 的路径若卡在非 UI 线程，卸载会失败 → 这里至少留日志
         _taskbar?.Restore(); // Hide/AutoHide 策略下退出必须还原系统任务栏（T16 起保留）
         ReleaseMutex();
         Logger.Info($"退出完成 (ExitCode={e.ApplicationExitCode})");
@@ -256,6 +263,78 @@ public partial class App : Application
         (Current as App)?.ApplyTopBarEnabled();
     }
 
+    // ---------- 切换器生命周期（Task 11） ----------
+
+    /// <summary>
+    /// 确保切换器服务存在（幂等）。服务本身始终启动（MRU 跟踪供"窗口"菜单等复用），
+    /// 是否吞 Alt+Tab 由 <c>SwitcherEnabled</c> 决定；钩子装不上仅记日志（退回原生行为）。
+    /// </summary>
+    private void EnsureSwitcher()
+    {
+        if (_switcher is not null || _exiting) return;
+        try
+        {
+            var svc = new Switcher.SwitcherService();
+            svc.Hook.EmergencyDisabled += OnSwitcherEmergencyDisabled;
+            _switcher = svc;
+            svc.Start(SettingsService.Current.SwitcherEnabled);
+        }
+        catch (Exception ex)
+        {
+            _switcher = null;
+            Logger.Warn($"切换器启动失败（Alt+Tab 保持系统原生行为）: {ex.Message}");
+        }
+    }
+
+    /// <summary>销毁切换器：卸钩 + 停跟踪（幂等）。必须在窗口关闭链路里最先执行，
+    /// 保证进程退出后不再有任何键盘拦截残留。</summary>
+    private void DestroySwitcher()
+    {
+        if (_switcher is null) return;
+        var old = _switcher;
+        _switcher = null;
+        try { old.Hook.EmergencyDisabled -= OnSwitcherEmergencyDisabled; } catch { }
+        old.Dispose();
+        Logger.Info("切换器已销毁（键盘钩子已卸载）");
+    }
+
+    /// <summary>
+    /// 应急停用（Win+Alt+K）落地：只关运行态、**不改用户设置**——
+    /// 把磁盘上的开关顺手写死会让用户以为"设置里明明开着却不生效"，排查更难。
+    /// 钩子已由 AltTabHook 自行请求卸载，这里只做状态同步与指引日志。
+    /// </summary>
+    private void OnSwitcherEmergencyDisabled()
+    {
+        _switcher?.SetHookEnabled(false);
+        Logger.Warn("切换器已应急停用：如需重新启用，请在设置中打开“窗口切换器”开关后重启或重载");
+    }
+
+    /// <summary>
+    /// 设置页切换器开关的即时生效入口（Task 16 接线用）：落盘 + 装/摘钩，无需重启。
+    /// </summary>
+    public static void SetSwitcherEnabled(bool enabled)
+    {
+        SettingsService.UpdateAndSave(SettingsService.Current with { SwitcherEnabled = enabled });
+        (Current as App)?._switcher?.SetHookEnabled(enabled);
+    }
+
+    /// <summary>
+    /// 设置页热键/全屏直通变更的即时生效入口（Task 16 接线用）：落盘 + 重注册触发组合。
+    /// 钩子在线时按新热键重装（改的是回调内的修饰键要求，不重装钩子本身也能生效，
+    /// 但重装可顺带清掉左右键状态位，避免改键瞬间的会话残留）。
+    /// </summary>
+    public static void ApplySwitcherHotkey(string hotkey, bool fullscreenPassthrough)
+    {
+        SettingsService.UpdateAndSave(SettingsService.Current with
+        {
+            SwitcherHotkey = hotkey,
+            FullscreenPassthrough = fullscreenPassthrough
+        });
+        var app = Current as App;
+        app?._switcher?.StopHook();
+        app?._switcher?.SetHookEnabled(SettingsService.Current.SwitcherEnabled);
+    }
+
     /// <summary>把 SettingsService.Current.TopBarEnabled 应用到运行中的实例（创建/销毁，均幂等）。</summary>
     private void ApplyTopBarEnabled()
     {
@@ -274,7 +353,8 @@ public partial class App : Application
         try
         {
             _settingsWindow?.Close();
-            DestroyTopBar();         // 顶栏 OnClosing：ABE_TOP ABM_REMOVE（hwnd 销毁前）
+            DestroySwitcher();         // 先卸键盘钩子：退出过程中任何一次 Alt+Tab 都不该被吞，也不留残留拦截
+            DestroyTopBar();           // 顶栏 OnClosing：ABE_TOP ABM_REMOVE（hwnd 销毁前）
             _dock?.Close();          // DockWindow.OnClosing：AppBar ABM_REMOVE（hwnd 销毁前）
             _taskbar?.Restore();     // Hide/AutoHide 还原系统任务栏
             _tray?.Dispose();        // 移除托盘图标（防幽灵图标）

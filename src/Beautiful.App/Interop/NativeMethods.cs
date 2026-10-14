@@ -163,8 +163,52 @@ internal static partial class NativeMethods
     public static long SetWindowLongPtr(IntPtr hWnd, int nIndex, long value) => SetWindowLongPtrW(hWnd, nIndex, new IntPtr(value)).ToInt64();
 
     public const int GwlpExStyle = -20;
+    public const int GwlpStyle = -16;
     public const long WsExToolwindow = 0x80L;
     public const long WsExNoactivate = 0x0800_0000L; // 点击不激活窗口（自绘弹层防抢焦点/防 Deactivated 竞态自关）
+    public const long WsCaption = 0x00C0_0000L;     // WS_CAPTION：有标题栏（全屏判定的反向条件）
+
+    // ---------- 低级键盘钩子（Alt+Tab 接管，Task 11） ----------
+    // WH_KEYBOARD_LL=13：dwThreadId=0 → 全局系统范围钩子；hMod 对 LL 钩子被系统忽略，传 0 即可。
+    // 回调在安装钩子的线程消息循环上被调用，故安装必须发生在 WPF UI 线程（有消息泵）。
+    public const int WhKeyboardLl = 13;
+    public const int WmKeyDown = 0x0100, WmKeyUp = 0x0101, WmSysKeyDown = 0x0104, WmSysKeyUp = 0x0105;
+
+    public const int VkTab = 0x09, VkEscape = 0x1B;
+    public const int VkLeft = 0x25, VkUp = 0x26, VkRight = 0x27, VkDown = 0x28;
+    public const int VkLWin = 0x5B, VkRWin = 0x5C;
+    public const int VkLShift = 0xA0, VkRShift = 0xA1;
+    public const int VkLControl = 0xA2, VkRControl = 0xA3;
+    public const int VkLMenu = 0xA4, VkRMenu = 0xA5; // VK_LMENU/RMENU（左右 Alt 分别跟踪）
+
+    [StructLayout(LayoutKind.Sequential)]
+    public struct KBDLLHOOKSTRUCT
+    {
+        public uint VkCode;
+        public uint ScanCode;
+        public uint Flags;
+        public uint Time;
+        public IntPtr ExtraInfo;
+    }
+
+    public const uint LlkhfInjected = 0x10, LlkhfAltDown = 0x20, LlkhfUp = 0x80;
+
+    public delegate IntPtr LowLevelKeyboardProc(int nCode, IntPtr wParam, IntPtr lParam);
+
+    [DllImport("user32.dll", SetLastError = true)]
+    public static extern IntPtr SetWindowsHookEx(int idHook, LowLevelKeyboardProc lpfn, IntPtr hMod, uint dwThreadId);
+
+    [DllImport("user32.dll")]
+    public static extern IntPtr CallNextHookEx(IntPtr hhk, int nCode, IntPtr wParam, IntPtr lParam);
+
+    [DllImport("user32.dll", SetLastError = true)]
+    public static extern bool UnhookWindowsHookEx(IntPtr hhk);
+
+    // 合成 Alt 点击（SetForegroundWindow 前台锁压制时的最后一招：让系统自行完成激活）。
+    [DllImport("user32.dll")]
+    public static extern void keybd_event(byte bVk, byte bScan, uint dwFlags, UIntPtr dwExtraInfo);
+
+    public const uint KeyeventfExtendedkey = 0x1, KeyeventfKeyup = 0x2;
 
     // ---------- 显示器（物理像素工作区，弹层边缘翻转定位用） ----------
     public const uint MonitorDefaultToNearest = 2;
@@ -262,8 +306,11 @@ internal static partial class NativeMethods
     [DllImport("user32.dll")]
     public static extern IntPtr SetWinEventHook(uint min, uint max, IntPtr mod, WinEventDelegate proc, uint pid, uint tid, uint flags);
 
+    // 修正拼写：user32 的导出函数就叫 UnhookWinEvent（原声明 UnwinEventHook 能编译通过，但运行时
+    // EntryPointNotFoundException —— 只在"顶栏优雅关闭"路径上触发，Task 11 的退出实测才把它抓出来：
+    // 异常被全局兜底吞掉 → Window.Close 中断 → 进程卡在退出链路里）。
     [DllImport("user32.dll")]
-    public static extern bool UnwinEventHook(IntPtr hook);
+    public static extern bool UnhookWinEvent(IntPtr hook);
 
     [DllImport("user32.dll")] public static extern int GetDpiForWindow(IntPtr hwnd);
 
