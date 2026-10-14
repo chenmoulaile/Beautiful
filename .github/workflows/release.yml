@@ -1,0 +1,48 @@
+name: release
+
+# 推送 v* 标签时自动构建、打包并挂到该标签的 GitHub Release 上（云端兜底，
+# 与 scripts/release.ps1 的本地一键发布互补）。
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write
+
+jobs:
+  build-and-release:
+    runs-on: windows-latest
+    env:
+      DOTNET_CLI_TELEMETRY_OPTOUT: 1
+      DOTNET_NOLOGO: 1
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 安装 .NET 8 SDK
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+
+      - name: 还原与构建
+        run: dotnet build Beautiful.sln -c Release
+
+      - name: 测试门禁
+        run: dotnet test tests/Beautiful.Core.Tests -c Release
+
+      - name: 发布自包含产物
+        run: dotnet publish src/Beautiful.App -c Release -r win-x64 --self-contained true -p:PublishSingleFile=false -p:UseAppHost=true -o publish
+
+      - name: 压缩
+        run: Compress-Archive -Path publish/* -DestinationPath Beautiful-win-x64-${{ github.ref_name }}.zip
+        shell: pwsh
+
+      - name: 创建 Release 并上传
+        uses: softprops/action-gh-release@v2
+        with:
+          files: Beautiful-win-x64-${{ github.ref_name }}.zip
+          body: |
+            Beautiful ${{ github.ref_name }} — Windows 11 悬浮 Dock：macOS/Linux/鸿蒙三主题 + macOS 顶栏 + SMTC 媒体控制与双语歌词 + Alt+Tab 替换切换器。
+            解压后运行 `Beautiful.exe`（自包含，无需另装 .NET 运行时）。
+          make_latest: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
