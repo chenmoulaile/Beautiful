@@ -1,11 +1,21 @@
-﻿# Beautiful 一键发布：测试门禁 → 构建自包含产物 → 打 zip → 打 tag 推送 → 创建 GitHub Release 并上传资产。
+# Beautiful 一键发布（本地半程）：版本号 → 工作树检查 → 构建 + 测试门禁（不绿不发布）→
+#   提交 chore(release) → 打 v* 标签并推送。推送到远端即触发 .github/workflows/release.yml，
+#   由 **CI 独占** Release 创建与资产（zip）上传。
 # 用法（在仓库根目录）:
 #   powershell -NoProfile -ExecutionPolicy Bypass -File scripts\release.ps1
 #   powershell ... -File scripts\release.ps1 -Version 2.1.0     # 同时改写 Directory.Build.props 的 <Version>
 # 依赖：本机 git 凭据（Git Credential Manager）对 github.com 有 repo 权限。
+#
+# 【终审 M-4：资产归属选择】本地脚本与 CI 曾同时向同一 Release 上传**同名**资产：
+# GitHub 会拒绝重复资产名，且两条路径互相竞态（谁先传完谁占名，另一个报错或被覆盖），
+# 表现为"Release 有时没有 zip / 脚本红着退出"。现裁定：**CI 独占 Release 资产**——本地
+# 只负责"门禁 + tag + push"，push 成功即视为发布委托完成，产物由 Actions 构建上传。
+# 好处：本机不再需要 GitHub API 令牌路径，也消除了双写。
+# 【终审 M-3：git push 失败必须可见】$ErrorActionPreference='Stop' 管不到原生命令的 stderr：
+# git push 被拒（非快进、凭据失效、网络）时脚本会照常往下走，制造"tag 在本地、Release
+# 永远等不到 CI"的静默半发布。每个 push 后显式检查 $LASTEXITCODE。
 param(
-    [string]$Version,
-    [switch]$SkipPublish   # 只建 Release 不重新打包（调试用）
+    [string]$Version
 )
 $ErrorActionPreference = 'Stop'
 $root = Split-Path -Parent $PSScriptRoot
@@ -43,80 +53,28 @@ if ($LASTEXITCODE -ne 0) { throw '构建失败' }
 dotnet test tests/Beautiful.Core.Tests -c Release | Out-Host
 if ($LASTEXITCODE -ne 0) { throw '测试未通过，拒绝发布' }
 
-# 4) 提交版本号（若变化）并打 tag、推送
+# 4) 提交版本号（若变化）并打 tag、推送（推送即委托 CI 完成 Release 与资产上传）
 Step "提交版本号与标签 $tag"
 git add Directory.Build.props
 git diff --cached --quiet
-if ($LASTEXITCODE -ne 0) { git commit -m "chore(release): $tag" }
-if (git tag -l $tag) { Write-Host "标签 $tag 已存在，跳过创建" } else { git tag -a $tag -m "Beautiful $tag" }
+if ($LASTEXITCODE -ne 0) { git commit -m "chore(release): $tag"; if ($LASTEXITCODE -ne 0) { throw '版本号提交失败' } }
+if (git tag -l $tag) { Write-Host "标签 $tag 已存在，跳过创建" } else {
+    git tag -a $tag -m "Beautiful $tag"
+    if ($LASTEXITCODE -ne 0) { throw "打标签 $tag 失败" }
+}
+
+# 【M-3】git push 失败不会抛异常（native stderr 不受 ErrorActionPreference 约束），必须查退出码：
+# 否则出现"Release 建了、CI 从没跑起来"或"本地自认为发布完成、远端根本没这个 tag"的半发布。
+Step '推送分支与标签（触发云端 CI 发布）'
 git push origin HEAD
+if ($LASTEXITCODE -ne 0) { throw "git push origin HEAD 失败（退出码 $LASTEXITCODE）：分支未上远端，中止——不要手工创建 Release" }
 git push origin $tag
+if ($LASTEXITCODE -ne 0) { throw "git push origin $tag 失败（退出码 $LASTEXITCODE）：tag 未上远端，CI 不会触发，本地可重试 git push origin $tag" }
 
-# 5) 打包自产物
-$zipPath = Join-Path $env:TEMP "Beautiful-win-x64-$Version.zip"
-if (-not $SkipPublish) {
-    $out = Join-Path $root 'publish'
-    Step "发布自包含产物 → $out"
-    if (Test-Path $out) { Remove-Item $out -Recurse -Force }
-    dotnet publish src/Beautiful.App -c Release -r win-x64 --self-contained true `
-        -p:PublishSingleFile=false -p:UseAppHost=true -o $out | Out-Host
-    if ($LASTEXITCODE -ne 0) { throw 'dotnet publish 失败' }
-    Step '压缩产物'
-    if (Test-Path $zipPath) { Remove-Item $zipPath -Force }
-    Compress-Archive -Path (Join-Path $out '*') -DestinationPath $zipPath -CompressionLevel Optimal
-    $mb = [math]::Round((Get-Item $zipPath).Length / 1MB, 1)
-    Write-Host "    zip: $zipPath ($mb MB)"
-}
-
-# 6) 取 GitHub 令牌（走 Git Credential Manager，不提示输入）
-Step '获取 GitHub 凭据'
-$cred = "protocol=https`nhost=github.com`n`n" | git credential fill
-$token = ($cred | Select-String '^password=').ToString().Substring('password='.Length)
-if (-not $token) { throw '未能从 Git Credential Manager 取得令牌' }
-$api = 'https://api.github.com'
-$headers = @{ Authorization = "Bearer $token"; Accept = 'application/vnd.github+json'; 'User-Agent' = 'beautiful-release-script' }
-
-# 解析仓库归属（从 remote URL 取 owner/repo，避免硬编码）
-$remoteUrl = (git remote get-url origin)
-if ($remoteUrl -match 'github\.com[:/]([^/]+)/([^/.]+?)(\.git)?$') { $owner = $Matches[1]; $repo = $Matches[2] }
-else { throw "无法从 remote 解析 owner/repo：$remoteUrl" }
-Step "目标仓库 $owner/$repo"
-
-$body = @"
-Beautiful $tag — Windows 11 悬浮 Dock：macOS/Linux/鸿蒙三主题 + macOS 顶栏 + SMTC 媒体控制与双语歌词 + Alt+Tab 替换切换器。
-
-下载 ``Beautiful-win-x64-$Version.zip``，解压后运行 ``Beautiful.exe``（自包含，无需另装 .NET 运行时）。
-完整变更见仓库提交历史与 README。
-"@
-
-# 7) 创建（或复用）Release
-Step '创建 Release'
-$existing = Invoke-RestMethod -Uri "$api/repos/$owner/$repo/releases/tags/$tag" -Headers $headers -ErrorAction SilentlyContinue
-if ($existing) {
-    $releaseId = $existing.id
-    Write-Host "    Release 已存在 id=$releaseId，更新之"
-    $patch = @{ tag_name = $tag; name = $tag; body = $body; draft = $false; prerelease = $false } | ConvertTo-Json
-    Invoke-RestMethod -Method Patch -Uri "$api/repos/$owner/$repo/releases/$releaseId" -Headers $headers -ContentType 'application/json' -Body $patch | Out-Null
+Step "完成：tag $tag 已推送，GitHub Actions（release.yml）将构建并创建/更新 Release 与资产"
+$remoteUrl = git remote get-url origin
+if ($remoteUrl -match 'github\.com[:/]([^/]+)/([^/.]+?)(\.git)?$') {
+    Write-Host "    进度见：https://github.com/$($Matches[1])/$($Matches[2])/actions（Release 页面稍后出现 Beautiful-win-x64-$tag.zip）"
 } else {
-    $payload = @{ tag_name = $tag; name = $tag; body = $body; draft = $false; prerelease = $false } | ConvertTo-Json
-    $rel = Invoke-RestMethod -Method Post -Uri "$api/repos/$owner/$repo/releases" -Headers $headers -ContentType 'application/json' -Body $payload
-    $releaseId = $rel.id
-    Write-Host "    已创建 Release id=$releaseId"
+    Write-Host "    请到远端 Actions 页面查看发布进度（zip 资产由 CI 上传）"
 }
-
-# 8) 上传资产（同名先删，保证可重复运行）
-if (Test-Path $zipPath) {
-    Step '上传资产'
-    $assets = (Invoke-RestMethod -Uri "$api/repos/$owner/$repo/releases/$releaseId/assets" -Headers $headers)
-    foreach ($a in $assets) {
-        if ($a.name -eq "Beautiful-win-x64-$Version.zip") {
-            Invoke-RestMethod -Method Delete -Uri $a.url -Headers $headers | Out-Null
-        }
-    }
-    $upload = "https://uploads.github.com/repos/$owner/$repo/releases/$releaseId/assets?name=Beautiful-win-x64-$Version.zip"
-    $bytes = [System.IO.File]::ReadAllBytes($zipPath)
-    Invoke-RestMethod -Method Post -Uri $upload -Headers $headers -ContentType 'application/zip' -Body $bytes | Out-Null
-    Write-Host "    已上传 Beautiful-win-x64-$Version.zip"
-}
-
-Step "完成：https://github.com/$owner/$repo/releases/tag/$tag"

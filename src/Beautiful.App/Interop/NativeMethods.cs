@@ -185,7 +185,10 @@ internal static partial class NativeMethods
     public const int GwlpExStyle = -20;
     public const int GwlpStyle = -16;
     public const long WsExToolwindow = 0x80L;
-    public const long WsExNoactivate = 0x0800_0000L; // 点击不激活窗口（自绘弹层防抢焦点/防 Deactivated 竞态自关）
+    public const long WsExNoactivate = 0x0800_0000L; // 点击不激活窗口（DWM 预览浮层、切换器覆盖层使用）。
+    // 终审 M-2：本常量是全库唯一定义（原 :386 的 uint 同名重复已并入）。旧注释的"自绘弹层防抢焦点/
+    // 防 Deactivated 竞态自关"理据已随 Task 2-3 裁定**废止**——FluentPopupHost 现按设计自行激活，
+    // 不再施加本样式，勿以"防抢焦点"为由给弹层恢复它。
     public const long WsCaption = 0x00C0_0000L;     // WS_CAPTION：有标题栏（全屏判定的反向条件）
 
     // ---------- 低级键盘钩子（Alt+Tab 接管，Task 11） ----------
@@ -386,7 +389,7 @@ internal static partial class NativeMethods
     public const uint WsPopup = 0x8000_0000, WsVisible = 0x1000_0000;
     // WsExToolwindow(0x80) 已在上方"窗口与消息"段以 long 形式声明（供 WindowEligibility 与 long
     // 的 ex 位与）——此处不再重复定义；CreateWindowExW 的 exStyle 是 uint，调用点显式转型即可。
-    public const uint WsExNoActivate = 0x0800_0000, WsExTransparent = 0x20;
+    public const uint WsExTransparent = 0x20; // WS_EX_NOACTIVATE 唯一定义见上方 long 版 WsExNoactivate（终审 M-2 合并，调用点显式转型）
 
     // ---------- GDI 绘制（预览卡片边框/标题：画在缩略图矩形之外的留白环里）----------
     [StructLayout(LayoutKind.Sequential)]

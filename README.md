@@ -117,8 +117,8 @@ dotnet publish src/Beautiful.App -c Release -r win-x64 --self-contained true -p:
 ## 发布（v2）
 
 - **一键发布（本机）**：`powershell -NoProfile -ExecutionPolicy Bypass -File scripts\release.ps1`
-  流程：读取/改写版本号 → 工作树检查 → **构建 + 测试门禁（不绿不发布）** → 提交 `chore(release)` → 打 `v*` 标签并推送 → 打包自包含 zip → 经 Git Credential Manager 取令牌创建/更新 GitHub Release 并上传资产。可重复运行（同名资产先删后传）。
-- **云端兜底**：`.github/workflows/release.yml` —— 推送 `v*` 标签即由 GitHub Actions（windows-latest）执行 构建 → 测试门禁 → publish → 压缩 → 建 Release 上传资产。
+  流程：读取/改写版本号 → 工作树检查 → **构建 + 测试门禁（不绿不发布）** → 提交 `chore(release)` → 打 `v*` 标签并推送（推送失败会被退出码检出的硬失败，终审 M-3）。脚本**到此为止**——Release 创建与资产上传由 CI 独占。
+- **云端发布（Release 资产唯一归属方）**：`.github/workflows/release.yml` —— 推送 `v*` 标签即由 GitHub Actions（windows-latest）执行 构建 → 测试门禁 → publish → 压缩 → 建 Release 上传资产（`Beautiful-win-x64-v<版本>.zip`）。本地与 CI 双写同名资产会互相竞态且 GitHub 拒绝重复资产名，故本地脚本不再上传（终审 M-4）。
 - **版本号单一来源**：`Directory.Build.props` 的 `<Version>`；`release.ps1` 与 CI 均以它为准（`release.ps1 -Version x.y.z` 会同步改写该文件）。
 
 ## 使用说明

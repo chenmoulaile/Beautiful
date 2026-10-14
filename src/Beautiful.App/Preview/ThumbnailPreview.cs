@@ -328,7 +328,7 @@ public sealed class ThumbnailPreview : IDisposable
     {
         if (_hwnd != IntPtr.Zero) return;
         EnsureClass();
-        var exStyle = (uint)WsExToolwindow | WsExNoActivate;
+        var exStyle = (uint)(WsExToolwindow | WsExNoactivate); // 常量已合并为唯一 long 定义（终审 M-2）
         _hwnd = CreateWindowExW(exStyle, ClassName, null, WsPopup,
             0, 0, 0, 0, IntPtr.Zero, IntPtr.Zero, GetModuleHandle(null), IntPtr.Zero);
         if (_hwnd == IntPtr.Zero)

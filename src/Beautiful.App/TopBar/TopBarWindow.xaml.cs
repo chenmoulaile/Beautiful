@@ -437,8 +437,15 @@ public partial class TopBarWindow : AcrylicWindow
 
     private void StartStatusTracking()
     {
-        _statusTimer = new DispatcherTimer { Interval = TimeSpan.FromMinutes(1) };
-        _statusTimer.Tick += (_, _) => { UpdateClock(); UpdateNetwork(); UpdateBattery(); };
+        // 终审 M-1：首帧对齐分钟边界——启动时刻若在 mm:50，固定 1 分钟间隔会让时钟到 mm+1:50 才跳，
+        // 最多累计滞后约 2 分钟。首 Interval 只等到下一整分（DispatcherTimer 每次 Tick 按当前
+        // Interval 重排），随后固定 1 分钟，此后每分钟整点刷新。
+        _statusTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(60 - DateTime.Now.Second) };
+        _statusTimer.Tick += (_, _) =>
+        {
+            if (_statusTimer is not null) _statusTimer.Interval = TimeSpan.FromMinutes(1);
+            UpdateClock(); UpdateNetwork(); UpdateBattery();
+        };
         _statusTimer.Start();
     }
 
