@@ -48,7 +48,9 @@ internal static partial class NativeMethods
     // ---------- AppBar ----------
     public const uint AbmNew = 0, AbmRemove = 1, AbmQueryPos = 2, AbmSetPos = 3,
                       AbmGetState = 4, AbmSetState = 10;
-    public const uint AbeBottom = 3;
+    // ABE_LEFT=0 ABE_TOP=1 ABE_RIGHT=2 ABE_BOTTOM=3：顶栏用 ABE_TOP，与 Dock 的 ABE_BOTTOM 不同边共存
+    // （shell 工作区 = 屏幕矩形逐条带裁剪所有已注册 AppBar，两条互不破坏）。
+    public const uint AbeTop = 1, AbeBottom = 3;
     public const int AbsAutohide = 0x1, AbsAlwaysOnTop = 0x2;
 
     [StructLayout(LayoutKind.Sequential)]
@@ -259,6 +261,9 @@ internal static partial class NativeMethods
 
     [DllImport("user32.dll")]
     public static extern IntPtr SetWinEventHook(uint min, uint max, IntPtr mod, WinEventDelegate proc, uint pid, uint tid, uint flags);
+
+    [DllImport("user32.dll")]
+    public static extern bool UnwinEventHook(IntPtr hook);
 
     [DllImport("user32.dll")] public static extern int GetDpiForWindow(IntPtr hwnd);
 

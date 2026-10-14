@@ -6,6 +6,7 @@ using Beautiful.App.Dock;
 using Beautiful.App.Services;
 using Beautiful.App.Shell;
 using Beautiful.App.Themes;
+using Beautiful.App.TopBar;
 using Application = System.Windows.Application;
 using MessageBox = System.Windows.MessageBox;
 
@@ -15,12 +16,14 @@ namespace Beautiful.App;
 /// WPF 应用壳层（Task 17）：完整启动流程与退出编排。
 /// 启动：Logger → 全局异常兜底 → 单实例 Mutex（第二实例弹窗即退）→ SettingsService.Load →
 /// 任务栏策略/自启落地 → DockWindow（构造期按设置应用主题；SMTC 经 MediaViewModel 构造期
-/// fire-and-forget 初始化，失败仅记日志降级为无胶囊）→ --settings 打开设置窗口 → 托盘。
+/// fire-and-forget 初始化，失败仅记日志降级为无胶囊）→ 顶栏 TopBarWindow（TopBarEnabled，
+/// Task 8；创建失败仅降级不连坐）→ --settings 打开设置窗口 → 托盘。
 /// 策略落地至托盘就位整体 try/catch：失败还原任务栏/托盘后优雅退出，防僵尸进程。
 /// ShutdownMode=OnExplicitShutdown：Dock 被 Alt+F4 等关闭后壳层仍驻留（托盘可重载/退出），
 /// 退出只走托盘"退出"或显式 <see cref="Application.Shutdown"/>。
-/// 退出链路（ExitApp）：关设置窗 → 关 Dock（OnClosing 内 ABM_REMOVE）→ TaskbarManager.Restore
-/// → 托盘 Dispose → 设置兜底落盘 → Shutdown；OnExit 兜底重复清理（全部幂等）。
+/// 退出链路（ExitApp）：关设置窗 → 关顶栏（ABE_TOP ABM_REMOVE）→ 关 Dock（ABM_REMOVE）
+/// → TaskbarManager.Restore → 托盘 Dispose → 设置兜底落盘 → Shutdown；
+/// OnExit 兜底重复清理（全部幂等）。
 /// </summary>
 public partial class App : Application
 {
@@ -32,6 +35,7 @@ public partial class App : Application
     private int _exceptionDialogs;
     private TaskbarManager? _taskbar;
     private DockWindow? _dock;
+    private TopBarWindow? _topBar;
     private Settings.SettingsWindow? _settingsWindow;
     private TrayIconManager? _tray;
     private bool _exiting;
@@ -77,6 +81,10 @@ public partial class App : Application
             if (e.Args.Contains("--minimized", StringComparer.OrdinalIgnoreCase))
                 Logger.Info("--minimized（开机自启）：Dock 即主 UI，照常显示");
             Logger.Info("Dock 已显示");
+
+            // 6.5 顶栏（Task 8）：同一受保护序列内创建（失败回滚链路覆盖它）。但它是附属表面，
+            // 创建异常仅记日志降级为"无顶栏运行"，不得连坐 Dock/任务栏策略整体退出。
+            if (SettingsService.Current.TopBarEnabled) EnsureTopBar();
 
             // 7. --settings：设置窗口命令行入口（与托盘"设置"等效；窗口为单例）
             if (e.Args.Contains("--settings", StringComparer.OrdinalIgnoreCase))
@@ -174,18 +182,66 @@ public partial class App : Application
 
     /// <summary>重载 Dock：旧实例完整释放（ABM_REMOVE + WindowTracker/SmtcService 于 OnClosed Dispose）后
     /// 新建。先关后开：AppBar 底边条带先归还再申请，避免双 AppBar 同边竞争导致新 Dock 被顶高。
+    /// 顶栏随 Dock 一并重建（brief 接口：App 持有其生命周期，重载即按当前设置重放）。
     /// 设置窗口持有旧 Dock 的 VM 引用，一并关闭（下次打开自动基于新 Dock 重建）。</summary>
     private void ReloadDock()
     {
         if (_dock is null || _exiting) return;
         Logger.Info("重载 Dock：开始");
         _settingsWindow?.Close();
+        DestroyTopBar(); // 先归还顶部条带再重建（同"先关后开"理由）
         var old = _dock;
         _dock = null;
         old.Close(); // 同步走完 OnClosing（ABM_REMOVE）/ OnClosed（tracker/smtc 释放）
         _dock = new DockWindow(_taskbar);
         _dock.Show();
+        if (SettingsService.Current.TopBarEnabled) EnsureTopBar();
         Logger.Info("重载 Dock：完成");
+    }
+
+    // ---------- 顶栏生命周期（Task 8） ----------
+
+    /// <summary>按设置确保顶栏存在（幂等）。创建/显示失败仅记日志降级——顶栏是附属表面，
+    /// 不得拖垮 Dock 与任务栏策略（与启动序整体回滚区分：那条保护的是主 UI 链路）。</summary>
+    private void EnsureTopBar()
+    {
+        if (_topBar is not null || _exiting) return;
+        try
+        {
+            var bar = new TopBarWindow();
+            bar.Show();
+            _topBar = bar;
+            Logger.Info("顶栏已显示");
+        }
+        catch (Exception ex)
+        {
+            _topBar = null;
+            Logger.Warn($"顶栏创建失败（降级为无顶栏运行）: {ex.Message}");
+        }
+    }
+
+    /// <summary>销毁顶栏并归还 ABE_TOP 条带（幂等；OnClosing 内 ABM_REMOVE）。</summary>
+    private void DestroyTopBar()
+    {
+        if (_topBar is null) return;
+        var old = _topBar;
+        _topBar = null;
+        old.Close();
+        Logger.Info("顶栏已销毁（条带已归还）");
+    }
+
+    /// <summary>设置页开关的即时生效入口（Task 16 设置 UI 接线用）：落盘 + 显示/隐藏，无需重启。</summary>
+    public static void SetTopBarEnabled(bool enabled)
+    {
+        SettingsService.UpdateAndSave(SettingsService.Current with { TopBarEnabled = enabled });
+        (Current as App)?.ApplyTopBarEnabled();
+    }
+
+    /// <summary>把 SettingsService.Current.TopBarEnabled 应用到运行中的实例（创建/销毁，均幂等）。</summary>
+    private void ApplyTopBarEnabled()
+    {
+        if (SettingsService.Current.TopBarEnabled) EnsureTopBar();
+        else DestroyTopBar();
     }
 
     /// <summary>托盘"退出"：完整清理链路后显式关停（退出路径幂等，_exiting 防重入）。
@@ -199,6 +255,7 @@ public partial class App : Application
         try
         {
             _settingsWindow?.Close();
+            DestroyTopBar();         // 顶栏 OnClosing：ABE_TOP ABM_REMOVE（hwnd 销毁前）
             _dock?.Close();          // DockWindow.OnClosing：AppBar ABM_REMOVE（hwnd 销毁前）
             _taskbar?.Restore();     // Hide/AutoHide 还原系统任务栏
             _tray?.Dispose();        // 移除托盘图标（防幽灵图标）

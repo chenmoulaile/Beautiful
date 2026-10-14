@@ -1,0 +1,44 @@
+<services:AcrylicWindow
+        x:Class="Beautiful.App.TopBar.TopBarWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:services="clr-namespace:Beautiful.App.Services"
+        Title="Beautiful TopBar"
+        WindowStyle="None"
+        AllowsTransparency="False"
+        ShowInTaskbar="False"
+        ShowActivated="False"
+        Topmost="True"
+        ResizeMode="NoResize"
+        SizeToContent="Manual"
+        Focusable="False"
+        Height="30">
+
+    <!-- 关键形态选择（Task 4 约束的反向应用）：本窗口全宽矩形、不需要任何点击穿透区域，
+         所以刻意 AllowsTransparency=False（非分层）→ 可走 DWMWA_SYSTEMBACKDROP_TYPE=Acrylic
+         真系统背板（应用内首个常驻真模糊表面）。分层(True)会让 DWM 静默不合成背板 → 黑条。
+         因此 Background 不得依赖逐像素透明：代码侧按背板胜出路径在 Transparent(透出模糊)/
+         不透明兜底之间切换（同 FluentPopupHost 的约定）。 -->
+    <!-- 主题值全部走 ThemeManager 合并字典 DynamicResource（换字典即时生效）；
+         背板 tint/开关在代码侧随 ThemeChanged 重刷（见 ApplyTheme）。
+         BarBackground 半透明底铺满全窗：背板胜出时透出系统模糊；无模糊路径时代码把
+         窗口 Background 铺成不透明兜底（同 FluentPopupHost 的约定）。 -->
+    <Grid x:Name="RootHost"
+          TextElement.FontFamily="{DynamicResource ThemeFontFamily}"
+          TextElement.Foreground="{DynamicResource ThemeTextPrimary}">
+        <Border x:Name="BarBackground" Background="{DynamicResource ThemeDockBackground}"/>
+
+        <!-- ══ 左区（Task 9 插入点）：logo 菜单按钮 + 前台应用名（粗体）+ 各菜单（文件/编辑/…）
+             依次作为子项加入 LeftHost 即可，勿重排本布局。 ══ -->
+        <StackPanel x:Name="LeftHost" Orientation="Horizontal" HorizontalAlignment="Left"
+                    VerticalAlignment="Stretch" Margin="10,0,0,0">
+            <!-- 前台应用名：本任务唯一实装项，TopBarWindow.RefreshForegroundApp() 驱动 -->
+            <TextBlock x:Name="ForegroundAppText" Text="Beautiful"
+                       FontWeight="Bold" FontSize="12" VerticalAlignment="Center"/>
+        </StackPanel>
+
+        <!-- ══ 右区（Task 9 插入点）：状态项（时钟/媒体/网络/…）依次加入 RightHost。 ══ -->
+        <StackPanel x:Name="RightHost" Orientation="Horizontal" HorizontalAlignment="Right"
+                    VerticalAlignment="Stretch" Margin="0,0,10,0"/>
+    </Grid>
+</services:AcrylicWindow>
