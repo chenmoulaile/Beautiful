@@ -1,4 +1,4 @@
-# scripts/shot.ps1 - full-screen capture to repo-root shot.png (smoke verification)
+﻿# scripts/shot.ps1 - full-screen capture to repo-root shot.png (smoke verification)
 Add-Type -AssemblyName System.Windows.Forms,System.Drawing
 $b = [System.Windows.Forms.Screen]::PrimaryScreen.Bounds
 $bmp = New-Object System.Drawing.Bitmap $b.Width, $b.Height

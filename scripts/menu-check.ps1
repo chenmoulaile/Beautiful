@@ -1,4 +1,4 @@
-Add-Type -AssemblyName System.Windows.Forms,System.Drawing
+﻿Add-Type -AssemblyName System.Windows.Forms,System.Drawing
 Add-Type -AssemblyName UIAutomationClient,UIAutomationTypes
 
 if (-not ('W32M' -as [type])) {

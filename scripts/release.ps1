@@ -1,4 +1,4 @@
-# Beautiful 一键发布：测试门禁 → 构建自包含产物 → 打 zip → 打 tag 推送 → 创建 GitHub Release 并上传资产。
+﻿# Beautiful 一键发布：测试门禁 → 构建自包含产物 → 打 zip → 打 tag 推送 → 创建 GitHub Release 并上传资产。
 # 用法（在仓库根目录）:
 #   powershell -NoProfile -ExecutionPolicy Bypass -File scripts\release.ps1
 #   powershell ... -File scripts\release.ps1 -Version 2.1.0     # 同时改写 Directory.Build.props 的 <Version>
@@ -46,7 +46,8 @@ if ($LASTEXITCODE -ne 0) { throw '测试未通过，拒绝发布' }
 # 4) 提交版本号（若变化）并打 tag、推送
 Step "提交版本号与标签 $tag"
 git add Directory.Build.props
-git diff --cached --quiet || git commit -m "chore(release): $tag"
+git diff --cached --quiet
+if ($LASTEXITCODE -ne 0) { git commit -m "chore(release): $tag" }
 if (git tag -l $tag) { Write-Host "标签 $tag 已存在，跳过创建" } else { git tag -a $tag -m "Beautiful $tag" }
 git push origin HEAD
 git push origin $tag
