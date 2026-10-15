@@ -1,10 +1,10 @@
-<Project>
+﻿<Project>
   <PropertyGroup>
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
     <LangVersion>latest</LangVersion>
-    <!-- 版本号单一来源：改这里（scripts/release.ps1 与 CI 均读取此值） -->
-    <Version>2.0.0</Version>
+    <!-- 鐗堟湰鍙峰崟涓€鏉ユ簮锛氭敼杩欓噷锛坰cripts/release.ps1 涓?CI 鍧囪鍙栨鍊硷級 -->
+    <Version>3.0.0</Version>
     <Product>Beautiful</Product>
     <Company>chenmoulaile</Company>
     <Deterministic>true</Deterministic>
