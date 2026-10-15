@@ -140,23 +140,42 @@ public sealed class SwitcherService : IDisposable
         SetHookEnabled(enableHook);
     }
 
-    /// <summary>装/摘 Alt+Tab 钩子（设置项开关与应急停用共用）。摘钩后原生 Alt+Tab 立即恢复。</summary>
+    /// <summary>
+    /// 装/摘 Alt+Tab 钩子（设置项开关与应急停用共用）。摘钩后原生 Alt+Tab 立即恢复。
+    /// <para>
+    /// 【终审修正：启动器热键在这唯一一个注册点里落地】<see cref="AltTabHook.SetLauncherHotkey"/>
+    /// 在 v3 交付的版本里**没有任何调用点**，于是回调侧的 <c>_launcherMainVk</c> 恒为 0 →
+    /// README 承诺的 `Ctrl+Alt+Space` 全局热键根本不存在（只有顶栏按钮那条入口是通的）。
+    /// 本方法是钩子装/摘的唯一收口，热键注册必须挂在这里：每次装/摘都按当前设置重解析一次，
+    /// "改热键 → StopHook + SetHookEnabled"（App.ApplyLauncherHotkey 承诺的路径）因此真正生效。
+    /// </para>
+    /// <para>
+    /// 【<see cref="KeepHookForLauncher"/> 在这里被读】它原本只有写没有读：接管一关就 <see cref="StopHook"/>，
+    /// "接管关、启动器开"的机器上钩子压根不在线，热键是死配置。现在 <c>enabled</c> 只决定**吞不吞键**
+    /// （<see cref="AltTabHook.Enabled"/>），钩子在不在场由 <c>enabled || KeepHookForLauncher</c> 决定。
+    /// </para>
+    /// </summary>
     public void SetHookEnabled(bool enabled)
     {
         EnsureUiThread();
         if (_disposed) return;
         Hook.Enabled = enabled;
-        if (enabled)
+        var s = SettingsService.Current;
+        // 启动器组合键与 Alt+Tab 共用这条 WH_KEYBOARD_LL：两条分支各判各的，注册都在这里。
+        Hook.SetLauncherHotkey(s.LauncherHotkey, s.LauncherEnabled);
+        var launcherWantsHook = s.LauncherEnabled && KeepHookForLauncher;
+        if (enabled || launcherWantsHook)
         {
             if (!Hook.IsStarted)
             {
-                Hook.SetTriggerHotkey(SettingsService.Current.SwitcherHotkey);
-                Hook.FullscreenPassthrough = SettingsService.Current.FullscreenPassthrough;
+                Hook.SetTriggerHotkey(s.SwitcherHotkey);
+                Hook.FullscreenPassthrough = s.FullscreenPassthrough;
                 if (!Hook.Start())
                     Logger.Warn("切换器：键盘钩子安装失败，Alt+Tab 保持系统原生行为");
                 else
-                    Logger.Info($"切换器：已接管 Alt+Tab（热键={SettingsService.Current.SwitcherHotkey}, " +
-                                $"全屏直通={SettingsService.Current.FullscreenPassthrough}）");
+                    Logger.Info($"切换器：钩子已在线（接管={enabled}，热键={s.SwitcherHotkey}, " +
+                                $"全屏直通={s.FullscreenPassthrough}；启动器热键={s.LauncherHotkey}" +
+                                $"{(launcherWantsHook && !enabled ? "，仅为启动器保活" : string.Empty)}）");
             }
         }
         else if (Hook.IsStarted)

@@ -23,6 +23,9 @@ public class LauncherHotkeyTests
     [InlineData("", false)]
     [InlineData("   ", false)]
     [InlineData("space", false)]                 // 无修饰键 = 吞掉所有应用的空格
+    [InlineData("ctrl+space", false)]            // IME 中英切换：吞掉它 = 所有应用里切不了输入法
+    [InlineData("win+space", false)]             // 键盘布局切换
+    [InlineData("alt+space", false)]             // 前台窗口系统菜单
     [InlineData("j", false)]
     [InlineData("ctrl+", false)]                 // 缺主键
     [InlineData("ctrl+a+b", false)]              // 两个主键
@@ -76,6 +79,14 @@ public class LauncherHotkeyTests
     {
         var healed = new AppSettings { LauncherHotkey = "space" }.Normalized();
         Assert.Equal(LauncherHotkey.Default, healed.LauncherHotkey);
+
+        // 终审补：v2 遗留 / 手改的"单修饰键 + 空格"形式上合法，但那是 IME / 布局 / 系统菜单的
+        // 系统绑定，启动器要配对吞键 → 绝不能用它。这条是钩子真的注册热键之后才有的代价。
+        foreach (var reserved in new[] { "ctrl+space", "win+space", "alt+space" })
+            Assert.Equal(LauncherHotkey.Default, new AppSettings { LauncherHotkey = reserved }.Normalized().LauncherHotkey);
+
+        // 双修饰键的空格组合仍合法（默认值本身就是它，不能被上面那条误伤）
+        Assert.Equal("ctrl+alt+space", new AppSettings { LauncherHotkey = "CTRL+ALT+SPACE" }.Normalized().LauncherHotkey);
 
         var legal = new AppSettings { LauncherHotkey = "  Alt + Ctrl + J " }.Normalized();
         Assert.Equal("ctrl+alt+j", legal.LauncherHotkey);

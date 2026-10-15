@@ -222,7 +222,10 @@ public class AppSettingsStoreTests : IDisposable
             BounceEnabled = false,
             ReflectionEnabled = true,
             FullscreenPassthrough = false,
-            LauncherHotkey = "win+space",
+            // 样本必须用**合法**热键：本测试验的是"存的和读的回一致"，而 LauncherHotkey 落盘前要过
+            // LauncherHotkey.Canonicalize（终审补：win+space / ctrl+space / alt+space 这类系统绑定
+            // 会被自愈成默认组合，用它当样本就永远等不上）。
+            LauncherHotkey = "ctrl+alt+f5",
             AutoHideDock = true,
             DockMonitor = "2",
             TopBarMonitor = "primary"

@@ -514,7 +514,10 @@ public partial class App : Application
     {
         SettingsService.UpdateAndSave(SettingsService.Current with { LauncherEnabled = enabled });
         var app = Current as App;
-        if (!enabled) app?._launcher?.Close();
+        // 关掉功能要**销毁服务**而不是只收面板：只 Close() 的话 _launcher 还活着，
+        // 于是顶栏那颗按钮与（若钩子仍在）热键都还能把"已关闭的功能"打开——正是本项目最忌的假状态。
+        // 重新打开时下面的 EnsureLauncher 会重建并按当前设置预热索引。
+        if (!enabled) app?.DestroyLauncher();
         if (app?._switcher is { } svc)
         {
             svc.KeepHookForLauncher = enabled;
@@ -544,6 +547,10 @@ public partial class App : Application
     /// </summary>
     private void OnSwitcherEmergencyDisabled()
     {
+        // 应急停用的语义是"这条钩子立刻下线"。SetHookEnabled 现在会按 KeepHookForLauncher 决定
+        // 钩子是否留在场上（启动器热键共用它），若不先把保活旗标落下，这里就会在卸钩之后
+        // **当场把钩子装回去**，应急出口失效。用户按 Win+Alt+K 时要的是"全都回到系统原生"。
+        if (_switcher is { } svc) svc.KeepHookForLauncher = false;
         _switcher?.SetHookEnabled(false);
         // 钩子被摘时若面板正显示着，就再不会有人发 Commit/Cancel —— 必须就地收起（不提交，不切窗口）
         _switcherWindow?.ForceClose();

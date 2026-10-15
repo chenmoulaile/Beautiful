@@ -79,9 +79,22 @@ public static class LauncherHotkey
         // 没修饰键的组合一律拒绝（见类型注释的不对称代价）
         if (!ctrl && !alt && !win && !shift) return false;
         if (main is null) return false;
+        // 系统级保留组合一律拒绝（终审补的洞）：落盘/加载两侧只挡"无修饰键"是不够的——
+        // <c>ctrl+space</c>（IME 中英切换）、<c>win+space</c>（键盘布局切换）、<c>alt+space</c>（前台窗口
+        // 系统菜单）都是**单个修饰键 + space**，形式上合法，但本仓库的启动器要"配对吞键"
+        // （见 AltTabHook.TryLauncherTrigger：按下与抬起都吞，否则新获得焦点的搜索框会多收到一个空格），
+        // 于是吞掉它们就等于在所有应用里废掉这三个系统绑定。类型注释已经为默认值写过同一条裁定
+        // （"抢它们会让用户在其他所有应用里失去原功能"），这里把同一条规则延伸到**配置侧**：
+        // 从 v2 遗留 settings.json 里带着 ctrl+space 升上来、或手改配置的机器，都会被 Canonicalize
+        // 自愈成 <see cref="Default"/>，而不是在用户毫不知情的情况下接管系统键位。
+        if (main == "space" && IsSingleModifier(ctrl, alt, win, shift)) return false;
         gesture = new LauncherGesture(ctrl, alt, win, shift, main);
         return true;
     }
+
+    /// <summary>修饰键是否恰好只有一个（这类"单修饰键 + space"组合全是系统级绑定，见 <see cref="TryParse"/>）。</summary>
+    private static bool IsSingleModifier(bool ctrl, bool alt, bool win, bool shift)
+        => (ctrl ? 1 : 0) + (alt ? 1 : 0) + (win ? 1 : 0) + (shift ? 1 : 0) == 1;
 
     /// <summary>解析并回到规范串；不合法即回落 <see cref="Default"/>（配置自愈用，绝不写回一个脏串）。</summary>
     public static string Canonicalize(string? raw) => TryParse(raw, out var gesture) ? gesture.ToText() : Default;
