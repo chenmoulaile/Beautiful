@@ -8,7 +8,10 @@ namespace Beautiful.App.Interop;
 
 internal static partial class NativeMethods
 {
-    // ---------- 亚克力 / DWM ----------
+    // ---------- 旧亚克力（SetWindowCompositionAttribute）/ DWM ----------
+    // v3 起本 API **只**用于常驻表面（顶栏 / Dock）的 best-effort 增强：系统认账就有真模糊，
+    // 不认账也只是看不到它（我们自绘的半透明 tint 底始终铺在那里，绝不落黑）。
+    // 瞬态表面（切换器/菜单/媒体面板）不再调用它——那条路改走自绘抓屏模糊，见 Services/ScreenBlurBackdrop.cs。
     public const int WcaAccentPolicy = 19;
 
     public enum AccentState : uint
@@ -161,19 +164,6 @@ internal static partial class NativeMethods
 
     public const uint SwpNosize = 0x0001;
 
-    // 窗口区域裁切（Task 12 切换面板）。非分层窗口没有逐像素 alpha，而
-    // DWMWA_WINDOW_CORNER_PREFERENCE 只提供系统那一种半径（约 8 物理 px），做不出 macOS 大圆角、
-    // 更做不出鸿蒙胶囊；于是改由 SetWindowRgn 在原生层把窗口裁成任意圆角矩形——
-    // 形状由区域给出，DWM 的投影/背板会依该区域自动成形。坐标是**窗口客户区物理像素**
-    // （WindowStyle=None 时客户区即窗口矩形），与 WPF 的 DIP 无关。
-    [DllImport("gdi32.dll")]
-    public static extern IntPtr CreateRoundRectRgn(int left, int top, int right, int bottom, int width, int height);
-
-    // 返回 1=成功、0=失败。**成功时区域所有权转移给系统**（此后不得再 DeleteObject，否则会
-    // 销毁仍被窗口引用的区域）；只有失败时才由调用方删除——这是 GDI 句柄泄漏的经典陷阱。
-    [DllImport("user32.dll")]
-    public static extern int SetWindowRgn(IntPtr hWnd, IntPtr region, bool redraw);
-
     // 异步键盘状态（切换面板防卡死看门狗用）：最高位为 1 表示该键此刻物理按下。
     [DllImport("user32.dll")]
     public static extern short GetAsyncKeyState(int vKey);
@@ -279,34 +269,19 @@ internal static partial class NativeMethods
     [DllImport("dwmapi.dll")]
     public static extern int DwmGetWindowAttribute(IntPtr hwnd, int attr, out int value, int size);
 
-    // ---------- DWM 系统背板（Win11 Mica / Acrylic）----------
-    // DWMWA_SYSTEMBACKDROP_TYPE(38) 需 22H2+：0=AUTO 1=NONE 2=ACRYLIC 3=MICA 4=TABBED。
-    // 22H2 起该属性在 21H2/21H1 上返回 E_INVALIDARG → 退未公开 DWMWA_MICA_EFFECT(1029)（BOOL，
-    // 传 4 字节 int 1 等价，避免 bool 封送宽度歧义）→ 再退 Win10 旧 SetWindowCompositionAttribute。
-    // 关键限制：背板只合成到"非分层"窗口（WS_EX_LAYERED 即 WPF AllowsTransparency=true 的唯一透明
-    // 模式）的重定向表面上——分层窗口请求会被接受但什么都不画 → 用背板的窗口必须 AllowsTransparency=false，
-    // 圆角改由 DWMWA_WINDOW_CORNER_PREFERENCE 提供，边框由 DwmExtendFrameIntoClientArea(-1) 铺满玻璃层。
-    public const int DwmwaSystemBackdropType = 38;
-    public const int DwmwaMicaEffect = 1029;
-    // DWMWA_WINDOW_CORNER_PREFERENCE(33)：0=DEFAULT(跟随系统) 1=DONOTROUND 2=ROUND(系统圆角) 3=SMALLROUND
+    // ---------- DWM 系统背板（v3 已从 UI 表面路径退役）----------
+    // DWMWA_SYSTEMBACKDROP_TYPE(38) / DWMWA_MICA_EFFECT(1029) / DWMWA_USE_IMMERSIVE_DARK_MODE(20)
+    // 与 DwmExtendFrameIntoClientArea 一起删除：真机取证证明"非分层窗口 + 玻璃层 + 半透明内容"并不会
+    // 把客户端 alpha 与系统材质合成（Alt+Tab 面板画成黑矩形、顶栏矩形内露桌面），v3 的模糊改由
+    // Services/ScreenBlurBackdrop.cs 自己抓屏合成。保留的唯一 DWM 属性是下面 33=圆角：它服务的是
+    // Preview/ThumbnailPreview.cs 那个**纯 Win32 宿主窗口**（客户区只承载 DWM 实时缩略图，无 WPF airspace），
+    // 那里没有逐像素 alpha 需求，圆角是窗口自身的形状，属可靠路径（v2 截图已验证）。
+    // DWMWA_WINDOW_CORNER_PREFERENCE(33)：0=DEFAULT(跟随系统) 1=DONOTROUND 2=ROUND(系统圆角) 3=SMALLROUND。
     public const int DwmwaWindowCornerPreference = 33;
-    public const int DwmwaUseImmersiveDarkMode = 20; // 深色标题栏（本项目窗口均无边框，留作后续顶栏/设置窗用）
-
-    public const int DwmsbtAuto = 0, DwmsbtNone = 1, DwmsbtAcrylic = 2, DwmsbtMica = 3, DwmsbtTabbed = 4;
-    public const int DwmwcpDefault = 0, DwmwcpDoNotRound = 1, DwmwcpRound = 2, DwmwcpSmallRound = 3;
-
-    /// <summary>MARGINS：四边 -1 = 把 DWM 玻璃层铺满整个客户区（Aero 时代 "sheet of glass"，背板的载体）。</summary>
-    [StructLayout(LayoutKind.Sequential)]
-    public struct MARGINS
-    {
-        public int LeftWidth, RightWidth, TopHeight, BottomHeight;
-    }
+    public const int DwmwcpRound = 2;
 
     [DllImport("dwmapi.dll")]
     public static extern int DwmSetWindowAttribute(IntPtr hwnd, int attr, ref int pvAttribute, int cbAttribute);
-
-    [DllImport("dwmapi.dll")]
-    public static extern int DwmExtendFrameIntoClientArea(IntPtr hwnd, ref MARGINS pMarInset);
 
     // ---------- DWM 缩略图（Task 13 悬停实时预览）----------
     // 与上面三个"属性类"DWM API 不同，缩略图是一组**句柄型** API：DwmRegisterThumbnail 在目标窗口
@@ -447,6 +422,48 @@ internal static partial class NativeMethods
     public const int WsExGwl = (-20);
 
     public const uint WmPaint = 0x000F, WmDestroy = 0x0002, WmNcHitTest = 0x0084;
+
+    // ---------- 屏幕取像（v3 T2 自绘背板：玻璃感由我们合成，不再外包给 DWM 材质）----------
+    // 取像序列是 Win32 截屏的标准做法（MSDN "Screen Capture" 示例，ShareX 等开源截屏工具同用法，
+    // 本项目独立编写声明，不含第三方代码）：
+    //   GetDC(NULL) → CreateCompatibleDC → CreateDIBSection(32bpp, biHeight<0 = top-down) → BitBlt。
+    // 两个必须注意的点：
+    //  ① CAPTUREBLT(0x40000000)：不加它就抓不到分层窗口与 DWM 合成的内容（壁纸、其他软件浮层），
+    //     背板会糊成"只剩桌面底色"的纯色，玻璃感直接消失；
+    //  ② 目标必须是**自己选的** top-down DIB section：屏幕 DC 的位图是 bottom-up 且不能被 WPF 直接引用，
+    //     拿到 bits 指针后按行主序拷进托管缓冲，才能喂给 Core 的 BoxBlur（纯字节数组）。
+    // GDI 句柄全部由调用方成对释放（ReleaseDC/DeleteDC/DeleteObject），驻留进程漏一个就是句柄单调上涨。
+    [DllImport("user32.dll")] public static extern IntPtr GetDC(IntPtr hWnd);   // hWnd=NULL → 整个屏幕 DC
+    [DllImport("user32.dll")] public static extern int ReleaseDC(IntPtr hWnd, IntPtr hDC);
+    [DllImport("gdi32.dll")] public static extern IntPtr CreateCompatibleDC(IntPtr hdc);
+    [DllImport("gdi32.dll")] public static extern bool DeleteDC(IntPtr hdc);
+    [DllImport("gdi32.dll")]
+    public static extern bool BitBlt(IntPtr hdc, int x, int y, int cx, int cy,
+                                     IntPtr hdcSrc, int xSrc, int ySrc, uint rop);
+    [DllImport("gdi32.dll")]
+    public static extern IntPtr CreateDIBSection(IntPtr hdc, ref BITMAPINFOHEADER bmi,
+                                                 uint usage, out IntPtr bits, IntPtr section, uint offset);
+
+    /// <summary>
+    /// BITMAPINFOHEADER（wingdi.h）。字段顺序与原生逐字节一致；CreateDIBSection 的入参在原生侧是
+    /// BITMAPINFO*，而 32bpp BI_RGB 没有颜色表，BITMAPINFOHEADER* 与它前缀等价（标准互操作技巧，
+    /// 因此不必再复制一个把本结构包起来的 BITMAPINFO）。
+    /// </summary>
+    [StructLayout(LayoutKind.Sequential)]
+    public struct BITMAPINFOHEADER
+    {
+        public uint biSize;
+        public int biWidth, biHeight;   // biHeight &lt; 0 = top-down（第一行就是屏幕那侧的第一行，与 WPF 一致）
+        public ushort biPlanes, biBitCount;
+        public uint biCompression, biSizeImage;
+        public int biXPelsPerMeter, biYPelsPerMeter;
+        public uint biClrUsed, biClrImportant;
+    }
+
+    public const uint Srccopy = 0x00CC0020;        // 直接拷像素（不做光栅三元运算合成）
+    public const uint CaptureBlt = 0x4000_0000;    // CAPTUREBLT：把分层窗口/DWM 合成层一并抓进来
+    public const uint DibRgbColor = 0;             // CreateDIBSection 的 iUsage：不索引调色板
+    public const uint BiRgb = 0;                   // 未压缩 BGRA 位图
 
     // ---------- 进程路径 ----------
     public const uint ProcessQueryLimitedInformation = 0x1000;

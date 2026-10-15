@@ -31,9 +31,10 @@ namespace Beautiful.App.TopBar;
 /// macOS 风格顶部菜单栏（"finder 栏"，对标 MyDockFinder 顶栏）：主屏顶部全宽 <see cref="BarHeightDip"/> DIP
 /// 条带，ABE_TOP AppBar 注册（ABM_NEW → ABM_QUERYPOS → ABM_SETPOS），最大化窗口自动让位顶栏+Dock 双条带。
 /// <para>
-/// 【背板形态】与 Dock（分层、两侧点击穿透）不同：本窗口全宽矩形、无穿透需求，故
-/// <c>AllowsTransparency=false</c> 非分层 + <see cref="AcrylicWindow.ApplyBackdrop"/>(Acrylic, 无圆角)
-/// 走 DWMWA_SYSTEMBACKDROP_TYPE 真系统背板（Task 4 结论的正向应用）。
+/// 【形态（v3 T2/T3）】<see cref="AcrylicWindow"/> 分层窗口：<c>AllowsTransparency=true</c> +
+/// <c>Background={x:Null}</c>，条带矩形由 XAML 三层自绘底（tint + 顶部内高光 + 下缘亮边）铺满，
+/// 不留任何未绘制像素；<see cref="ApplyTheme"/> 另请求一次 best-effort 旧亚克力作系统侧模糊增强。
+/// v2 的"非分层 + <c>DWMWA_SYSTEMBACKDROP_TYPE</c>"已在真机上被证伪（条带矩形内露桌面），已退役。
 /// </para>
 /// <para>
 /// 【Task 9：菜单与状态项】左区 = logo（Beautiful 应用菜单）+ 前台应用名（粗体）+ 文件/编辑/视图/窗口/帮助；
@@ -309,14 +310,11 @@ public partial class TopBarWindow : AcrylicWindow
         if (_closing) return;
         var tint = Color.FromArgb(theme.AcrylicTint.A, theme.AcrylicTint.R,
                                   theme.AcrylicTint.G, theme.AcrylicTint.B);
-        var path = ApplyBackdrop(tint,
-            theme.BlurEnabled ? BackdropKind.Acrylic : BackdropKind.None,
-            roundedCorners: false);
-        var hasBlur = path is BackdropPath.SystemBackdrop or BackdropPath.MicaLegacy
-                                        or BackdropPath.CompositionAccent;
-        Background = hasBlur
-            ? Brushes.Transparent
-            : new SolidColorBrush(Color.FromArgb(0xFF, tint.R, tint.G, tint.B));
+        // 顶栏是**常驻**表面：不做抓屏背板（重抓会把自身像素抓进去 = 鬼影；为抓屏先隐藏一帧 = 闪烁），
+        // 也绝不依赖系统是否画得出模糊。可见底恒由 XAML 的 BarBackground/BarGlow/BarEdge 三层铺满整条
+        // （DynamicResource 随主题即时变色），这里只把旧亚克力当一次性增强请求出去。
+        // 于是"顶栏上方露壁纸"这类问题的成因被彻底收在几何侧（T1），渲染侧不再有"背板胜出/失败"两种形态。
+        ApplyTintFallback(tint, theme.BlurEnabled);
     }
 
     // ---------- 前台应用名（Task 8） ----------

@@ -26,6 +26,14 @@ public readonly record struct StripTarget(
 public readonly record struct MonitorOption(string Value, string Label);
 
 /// <summary>
+/// 一块显示器的两块矩形与该屏缩放（物理像素），见 <see cref="MonitorGeometry.AreaForPoint"/>。
+/// </summary>
+/// <param name="Monitor">全屏矩形 <c>rcMonitor</c>。</param>
+/// <param name="Work">工作区矩形 <c>rcWork</c>（扣掉任务栏与已注册 AppBar）。</param>
+/// <param name="DpiScale">该显示器有效 DPI 缩放（= MDT_EFFECTIVE_DPI / 96）。</param>
+public readonly record struct MonitorArea(PhysicalRect Monitor, PhysicalRect Work, double DpiScale);
+
+/// <summary>
 /// 每显示器几何适配层：Win32 取值（显示器句柄 / <c>rcMonitor</c> / 有效 DPI）全部集中在这里，
 /// 算术一律走 <see cref="StripMath"/>（Core 纯函数，可单测）。
 /// <para>
@@ -101,6 +109,27 @@ public static class MonitorGeometry
         if (!TryInfo(monitor, out var info)) return false;
         bottom = info.rcMonitor.Bottom;
         return true;
+    }
+
+    /// <summary>
+    /// 某个物理像素点**所在**显示器的两块矩形与该屏缩放（v3 T2 抓屏背板用）。
+    /// <para>
+    /// 为什么暴露两个矩形而不是一个：抓屏区要钳到 <see cref="MonitorArea.Work"/>（不把系统任务栏/
+    /// 其他 AppBar 的像素糊进背板），但面板本身可能合法地压在工作区之外（顶栏下方 8px 留白、
+    /// 弹层贴边翻转的边界情形）——那时钳工作区会**抓不到面板自己的区域**，画刷就会露出未绘制空洞
+    /// （分层窗口 = 透明 → 看穿到桌面，等于回到 v2 的故障形态）。调用方据此回退到整屏
+    /// <see cref="MonitorArea.Monitor"/>：宁可背板里混一条任务栏，也不让卡片缺一块。
+    /// </para>
+    /// </summary>
+    /// <param name="x">锚点物理 px X（屏幕坐标）。</param>
+    /// <param name="y">锚点物理 px Y。</param>
+    /// <returns>取不到任何显示器时返回 null（拔屏瞬间/远程会话），调用方必须放弃本次抓屏。</returns>
+    public static MonitorArea? AreaForPoint(int x, int y)
+    {
+        var monitor = NativeMethods.MonitorFromPoint(new NativeMethods.POINT { X = x, Y = y },
+                                                     NativeMethods.MonitorDefaultToNearest);
+        if (!TryInfo(monitor, out var info)) return null;
+        return new MonitorArea(ToCore(in info.rcMonitor), ToCore(in info.rcWork), ScaleOf(monitor, IntPtr.Zero));
     }
 
     /// <summary>

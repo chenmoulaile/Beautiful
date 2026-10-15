@@ -5,7 +5,8 @@
         xmlns:services="clr-namespace:Beautiful.App.Services"
         Title="Beautiful TopBar"
         WindowStyle="None"
-        AllowsTransparency="False"
+        AllowsTransparency="True"
+        Background="{x:Null}"
         ShowInTaskbar="False"
         ShowActivated="False"
         Topmost="True"
@@ -14,19 +15,25 @@
         Focusable="False"
         Height="30">
 
-    <!-- 关键形态选择（Task 4 约束的反向应用）：本窗口全宽矩形、不需要任何点击穿透区域，
-         所以刻意 AllowsTransparency=False（非分层）→ 可走 DWMWA_SYSTEMBACKDROP_TYPE=Acrylic
-         真系统背板（应用内首个常驻真模糊表面）。分层(True)会让 DWM 静默不合成背板 → 黑条。
-         因此 Background 不得依赖逐像素透明：代码侧按背板胜出路径在 Transparent(透出模糊)/
-         不透明兜底之间切换（同 FluentPopupHost 的约定）。 -->
-    <!-- 主题值全部走 ThemeManager 合并字典 DynamicResource（换字典即时生效）；
-         背板 tint/开关在代码侧随 ThemeChanged 重刷（见 ApplyTheme）。
-         BarBackground 半透明底铺满全窗：背板胜出时透出系统模糊；无模糊路径时代码把
-         窗口 Background 铺成不透明兜底（同 FluentPopupHost 的约定）。 -->
+    <!-- 形态（v3 T2/T3 裁定，替换 v2 的"非分层 + DWMWA_SYSTEMBACKDROP_TYPE 真背板"）：
+         顶栏是**常驻**表面，不能做实时抓屏（重抓会把自身像素抓进背板 = 鬼影；为抓屏先隐藏一帧 = 闪烁），
+         因此走"分层窗口 + 自绘半透明底 + best-effort 旧亚克力"：
+         ① AllowsTransparency=True + Background={x:Null}：逐像素 alpha 由 WPF 自己保证，任何机型一致；
+         ② BarBackground/BarGlow/BarEdge 三层把**整条矩形铺满**，条带内不得有一个未绘制像素——
+            v2 真机"顶栏上方露一截壁纸"就是矩形里出现了没画到的那一块；
+         ③ ApplyTintFallback 只请求系统侧模糊作增强（系统认账就有真模糊，不认账仍是②的自绘底，绝不黑）。
+         主题值全部走 ThemeManager 合并字典 DynamicResource（换字典即时生效）；tint 与模糊开关在代码侧
+         随 ThemeChanged 重刷（见 ApplyTheme）。 -->
 
     <!-- macOS 顶栏扁平按钮：透明底 + 悬停强调底色（ThemePanelBackground，DynamicResource 随主题）。
          左区菜单按钮与右区状态项共用；圆角 5 贴合系统菜单栏选中态。 -->
     <services:AcrylicWindow.Resources>
+        <!-- 顶部内高光（macOS 菜单栏的"light top edge"）：只占条带上 40% 高度，越往下越淡。 -->
+        <LinearGradientBrush x:Key="BarInnerGlow" StartPoint="0,0" EndPoint="0,1">
+            <GradientStop Color="#1AFFFFFF" Offset="0"/>
+            <GradientStop Color="#07FFFFFF" Offset="0.4"/>
+            <GradientStop Color="#00FFFFFF" Offset="1"/>
+        </LinearGradientBrush>
         <Style x:Key="BarButton" TargetType="Button">
             <Setter Property="Background" Value="Transparent"/>
             <Setter Property="BorderThickness" Value="0"/>
@@ -58,7 +65,13 @@
     <Grid x:Name="RootHost"
           TextElement.FontFamily="{DynamicResource ThemeFontFamily}"
           TextElement.Foreground="{DynamicResource ThemeTextPrimary}">
+        <!-- 三层自绘底铺满整条矩形（顺序即叠放顺序）：tint 底 → 顶部内高光 → 下缘 1px 亮边。
+             全部 IsHitTestVisible=False 之外的命中交给按钮自身：这一层不做任何交互，只保证
+             "条带矩形内没有一个未绘制像素"（分层窗口里未绘制 = 真透明 = 直接看穿到桌面）。 -->
         <Border x:Name="BarBackground" Background="{DynamicResource ThemeDockBackground}"/>
+        <Border x:Name="BarGlow" IsHitTestVisible="False" Background="{StaticResource BarInnerGlow}"/>
+        <Border x:Name="BarEdge" IsHitTestVisible="False" BorderBrush="#26FFFFFF" BorderThickness="0,0,0,1"
+                VerticalAlignment="Stretch"/>
 
         <!-- ══ 左区（Task 9）：[logo 菜单按钮] + 前台应用名（粗体，macOS "应用菜单"位）+
              文件/编辑/视图/窗口/帮助 菜单按钮。logo 与菜单按钮由代码按 BarButton 样式注入 LeftHost，

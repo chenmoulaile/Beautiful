@@ -11,6 +11,7 @@ using System.Windows.Threading;
 using Beautiful.App.Interop;
 using Beautiful.App.Services;
 using Beautiful.App.Themes;
+using Beautiful.Core.Layout;
 using Beautiful.Core.Switcher;
 using Beautiful.Core.Themes;
 using static Beautiful.App.Interop.NativeMethods;
@@ -46,11 +47,12 @@ namespace Beautiful.App.Switcher;
 /// 我们的窗口。键盘输入全部来自全局低级钩子（不依赖焦点），因此这里必须
 /// <c>ShowActivated=false</c> + <c>WS_EX_NOACTIVATE</c> + <c>Focusable=false</c>。
 ///
-/// 【形态】<see cref="Window.AllowsTransparency"/>=false（分层窗口与 DWM 背板互斥，见
-/// <see cref="SystemBackdrop"/>）→ 圆角/胶囊由 <see cref="SetWindowRgn"/> 裁切（DWM 的
-/// 圆角属性只有系统那一种半径），并把 <c>DWMWA_WINDOW_CORNER_PREFERENCE</c> 显式置 DoNotRound，
-/// 避免与区域半径打架。定位全程物理像素 + 目标显示器有效 DPI 缩放（沿用 FluentPopupHost 的
-/// 混合 DPI 结论），并按工作区宽度逐级缩小图标，绝不让面板超出屏幕。
+/// 【形态】<see cref="Window.AllowsTransparency"/>=true 的分层窗口（WPF 唯一保证客户端逐像素 alpha 的
+/// 模式）：圆角/胶囊由 <c>Card</c> 自绘（macOS 18 / Win11 8 / 鸿蒙胶囊），"玻璃"由**显示前抓屏自绘模糊**
+/// 提供（<see cref="ScreenBlurBackdrop"/>）。v2 的两条路径已整枝删除：<c>SetWindowRgn</c> 裁形（真机上
+/// 根本没生效，面板带硬边）与"非分层 + DWM 系统背板"（半透明卡底下的客户端像素不被合成 → 黑矩形）。
+/// 定位全程物理像素 + 目标显示器有效 DPI 缩放（沿用 FluentPopupHost 的混合 DPI 结论），
+/// 并按工作区宽度逐级缩小图标，绝不让面板超出屏幕。
 ///
 /// 【不留残影】每条路径都收口到 <see cref="HidePanel"/>：服务 Closed、hook 判定未打开、异常、以及
 /// 150ms 的"触发键是否还按着"看门狗（<see cref="Watchdog_Tick"/>）。Alt 的 key-up 若被漏收、或会话
@@ -84,8 +86,7 @@ public sealed partial class SwitcherWindow : Window
     private double _verticalBias = 0.42; // 面板中心在工作区高度的位置比例（macOS 略高于中线）
     private bool _pillPanel;             // 鸿蒙胶囊：区域半径 = 高度/2
     private bool _captionVisible = true;
-    private BackdropKind? _backdropKind;  // 已落到窗口上的背板种类（null = 句柄还没建）
-    private bool _regionFailed;
+    private ScreenBackdrop? _backdrop;   // 本次会话的抓屏背板（显示前抓一次，面板长大只重瞄不重抓；null = 实心卡底）
     private bool _disposed;
 
     // ---- macOS 二次展开（同一 App 多窗口）----
@@ -350,12 +351,23 @@ public sealed partial class SwitcherWindow : Window
         Resources["SwitcherAccent"] = accent;
         Resources["SwitcherIconSize"] = _baseIconSize;
 
-        Card.CornerRadius = new CornerRadius(_pillPanel ? 1000 : _panelRadius); // 区域失败时的观感兜底
+        // 形状唯一来源：自绘半径随样式。Scrim/Tint/Glow 是 Card 的**子 Border**——WPF 的 CornerRadius
+        // 只裁剪 Border 自己的背景，不裁剪子元素；这三层若不带同一半径，其矩形背景会在"该透明的
+        // 圆角缺口"里照画不误（真机取证：圆角被画回直角深色块）。必须与 Card 同步赋值。
+        var cardRadius = new CornerRadius(_pillPanel ? 1000 : _panelRadius);
+        Card.CornerRadius = cardRadius;
+        Scrim.CornerRadius = cardRadius;
+        TintLayer.CornerRadius = cardRadius;
+        GlowLayer.CornerRadius = cardRadius;
         Body.Margin = _bodyPadding;
         Caption.Visibility = _captionVisible ? Visibility.Visible : Visibility.Collapsed;
         AppRow.ItemContainerStyle = GapContainerStyle(_itemGap);
         WindowRow.ItemContainerStyle = GapContainerStyle(Math.Max(2, _itemGap - 1));
-        ApplyBackdropForStyle(); // 样式换了背板种类可能跟着换（linux ↔ 其余）
+        // 先把卡底落成**实心**渐变：样式切换（linux ↔ 其余）与背板抓屏都晚于此处，
+        // ShowPanel 抓到背板后再由 ApplyCardFill 换成模糊画刷。默认值必须是"什么都不依赖"的实心底，
+        // 这样任何一条降级路径（抓屏失败 / 环境开关关闭 / linux 样式）都不会出现未绘制的透明洞。
+        Card.Background = (Brush)Resources["CardFillSolid"];
+        Scrim.Background = Brushes.Transparent;
     }
 
     /// <summary>条目间距（模板外的样式差异，直接用容器 Style 给 Margin，免得多套一层资源间接层）。</summary>
@@ -413,6 +425,13 @@ public sealed partial class SwitcherWindow : Window
     private void ShowPanel()
     {
         if (_phase == Phase.Showing && IsVisible) { Reposition(); return; }
+        var hwnd = new WindowInteropHelper(this).EnsureHandle();
+        // 【抓屏必须在首次 Show 之前】此刻本窗口尚不可见，取回的是"面板下方"的干净内容；
+        // 显示之后再抓就会把面板自己的像素抓进背板（鬼影）。矩形由与 Reposition 同一套测量算出，
+        // 因此落位后只是"重瞄"同一张已抓好的图，面板长大也不会重抓、也不会重新缩放。
+        // linux 样式（GNOME 覆盖条原生不模糊）与 BEAUTIFUL_NOBLUR=1 / 抓屏失败一样：_backdrop=null
+        // → 卡底维持 ApplyStyle 落的实心渐变，两条分支都是铺满整张卡的不透明底。
+        _backdrop = _style == "linux" ? null : ScreenBlurBackdrop.ForPanel(ComputePanelRect(hwnd));
         if (!IsVisible) Show(); // 非激活式：Show 不会夺前台（ShowActivated=false + WS_EX_NOACTIVATE）
         _phase = Phase.Showing;
         _expandedApp = -1;
@@ -428,6 +447,9 @@ public sealed partial class SwitcherWindow : Window
         _windowCursor = 0;
         _subSteps = 0;
         _visitedApps.Clear();
+        // 会话结束即弃掉背板：下次打开必须按"那时的屏幕内容"重抓（留着旧图 = 陈旧背景），
+        // 同时释放那张 1/4 分辨率位图。
+        _backdrop = null;
         if (WindowRow.Visibility == Visibility.Visible)
         {
             WindowRow.Visibility = Visibility.Collapsed;
@@ -440,6 +462,7 @@ public sealed partial class SwitcherWindow : Window
     private void ForceHideUnsafe()
     {
         _phase = Phase.Hidden;
+        _backdrop = null;
         StopWatchdog();
         try { if (IsVisible) Hide(); } catch { /* 进程正在退出 */ }
     }
@@ -449,78 +472,54 @@ public sealed partial class SwitcherWindow : Window
         base.OnSourceInitialized(e);
         var hwnd = new WindowInteropHelper(this).Handle;
 
-        // 非激活 + 不进 alt-tab 列表 + 不进任务栏（三件套，缺一即可能被系统当成可切换窗口）
+        // 非激活 + 不进 alt-tab 列表 + 不进任务栏（三件套，缺一即可能被系统当成可切换窗口）。
+        // 这是 Alt 键状态机的前提（键盘输入全部来自全局低级钩子，不依赖焦点），不要"顺手"改成激活式。
         var ex = GetWindowLongPtr(hwnd, GwlpExStyle);
         SetWindowLongPtr(hwnd, GwlpExStyle, ex | WsExNoactivate | WsExToolwindow);
-        ApplyBackdropForStyle();
     }
 
     /// <summary>
-    /// 真背板：linux 样式实底（GNOME 覆盖条不模糊），其余亚克力。圆角属性显式关掉——形状归
-    /// SetWindowRgn 管，两套半径同时生效会在角上叠出第二道弧。
-    /// 句柄存在后每次样式变更都会重放（改 settings.json 后切样式不必重启进程；
-    /// 背板种类变了必须重写 DWM 属性，否则 linux 样式仍带着上一轮的模糊）。
+    /// 卡底两层：抓屏模糊（Card.Background）+ 深色遮罩（Scrim，负责文字/图标字幕的对比度）。
+    /// <para>
+    /// 每次重排都按**当前面板矩形**重瞄：同一张已抓好的图，长大只是露出旁边已抓好的内容，
+    /// 既不重抓屏也不重新缩放（这就是捕获区带余量的意义）。
+    /// 任何一条分支都必须把整张卡铺满：本窗口是分层窗口，"没画到"= 真透明 = 直接看穿到桌面，
+    /// 那正是 v2 真机上"面板矩形里露背景"的故障形态。背板不可用（抓屏失败 / <c>BEAUTIFUL_NOBLUR=1</c>
+    /// / linux 样式 / 瞄准越界）时一律回落实心渐变 <c>CardFillSolid</c>。
+    /// </para>
     /// </summary>
-    private void ApplyBackdropForStyle()
+    private void ApplyCardFill(in PhysicalRect panelPx)
     {
-        var hwnd = new WindowInteropHelper(this).Handle;
-        if (hwnd == IntPtr.Zero) return;
-        var kind = _style == "linux" ? BackdropKind.None : BackdropKind.Acrylic;
-        if (kind == _backdropKind) return;
-        _backdropKind = kind;
-
-        // 背板底色取"样式自己的"主题参数（切换面板样式独立于 Dock 主题：面板样式=linux 时即使
-        // Dock 是鸿蒙配色，实底也应是 GNOME 的深色，而不是当前主题的 tint）
-        var source = _style switch
-        {
-            "linux" => ThemeDefinition.Linux(),
-            "harmonyos" => ThemeDefinition.HarmonyOs(),
-            _ => ThemeDefinition.MacOs()
-        };
-        var tint = Color.FromArgb(source.AcrylicTint.A, source.AcrylicTint.R,
-                                  source.AcrylicTint.G, source.AcrylicTint.B);
-        var path = kind == BackdropKind.None ? ApplyFlat(hwnd) : SystemBackdrop.Apply(this, tint, kind, roundedCorners: false, darkTint: true);
-        var noRound = DwmwcpDoNotRound;
-        DwmSetWindowAttribute(hwnd, DwmwaWindowCornerPreference, ref noRound, sizeof(int));
-
-        // 【实测】没有真背板时（kind=None 或三档全败）窗口必须自铺**不透明**底色：本窗口已经
-        // DwmExtendFrameIntoClientArea(-1) 铺满玻璃层，而玻璃层上没有背板可合成时，半透明内容
-        // 直接透出桌面——实测 linux 样式整块面板"窗口存在、区域正确、屏幕上一个像素都没画出来"。
-        // 与 FluentPopupHost.ApplySystemBackdrop 同一兜底（那里是"不留黑卡"，这里是"不留隐形"）。
-        var hasBlur = path is BackdropPath.SystemBackdrop or BackdropPath.MicaLegacy or BackdropPath.CompositionAccent;
-        Card.Background = (Brush)Resources[hasBlur ? "CardFillBlur" : "CardFillSolid"];
-        Background = hasBlur
-            ? Brushes.Transparent
-            : new SolidColorBrush(Color.FromArgb(0xFF, source.DockBackground.R,
-                                                 source.DockBackground.G, source.DockBackground.B));
-        GlowLayer.Visibility = hasBlur ? Visibility.Visible : Visibility.Collapsed;
-    }
-
-    /// <summary>
-    /// 实底样式（linux）：**不能**走 <see cref="SystemBackdrop"/> 的通用路径——它总是先
-    /// <c>DwmExtendFrameIntoClientArea(-1)</c> 铺满玻璃层，而玻璃层在没有背板时会被 DWM 画成一张
-    /// 白色 sheet（实测：整块面板冲成白色、图标只剩淡淡的色印）。这里反过来把玻璃层收回 0 边距、
-    /// 并把背板类型显式清回 None（样式从 macos 切到 linux 时上一轮的亚克力不会自己消失）。
-    /// </summary>
-    private static BackdropPath ApplyFlat(IntPtr hwnd)
-    {
-        var flat = new MARGINS();
-        DwmExtendFrameIntoClientArea(hwnd, ref flat);
-        var none = DwmsbtNone;
-        DwmSetWindowAttribute(hwnd, DwmwaSystemBackdropType, ref none, sizeof(int));
-        return BackdropPath.None;
+        Brush? blur = _backdrop is { } b && b.Aim(panelPx) ? b.Brush : null;
+        Card.Background = blur ?? (Brush)Resources["CardFillSolid"];
+        // Scrim 铺的是**深色遮罩**而不是模糊画刷本身（与 FluentMenu.OnBackdropReady 同一两层材质）：
+        // 直接把模糊赋给 Scrim 等于没有任何东西压暗它，卡浮在亮窗口上就被冲成浅灰、白字幕失去对比度。
+        // 实心底分支保持透明——CardFillSolid 本身已是深色，再压一层只会闷。
+        Scrim.Background = blur is not null ? (Brush)Resources["CardFillBlur"] : Brushes.Transparent;
     }
 
     /// <summary>
     /// 按内容测量窗口尺寸并落位：目标显示器 = 前台窗口所在屏（用户在哪个屏就在哪切），
     /// 物理尺寸 = 测量的 DIP × 该屏有效 DPI（混合 DPI 结论同 FluentPopupHost）；
     /// 超出工作区宽度则逐级缩小图标后重测，直到装得下（最小 24px）。
+    /// 落位后把背板**重瞄**到新的卡片矩形（同一张已抓好的图，不重抓屏、不重新缩放）。
     /// </summary>
     private void Reposition()
     {
         var hwnd = new WindowInteropHelper(this).Handle;
         if (hwnd == IntPtr.Zero) return;
+        var target = ComputePanelRect(hwnd);
+        SetWindowPos(hwnd, IntPtr.Zero, target.Left, target.Top, target.Width, target.Height, SwpNoactivate);
+        ApplyCardFill(target);
+    }
 
+    /// <summary>
+    /// 测量并算出面板的**目标物理矩形**（同时将 WPF 侧 <c>Width/Height</c> 定形）。
+    /// 与 <see cref="Reposition"/> 拆开的唯一理由：抓屏要在窗口可见之前拿到矩形，而那次还不能 SetWindowPos。
+    /// 两次调用之间没有内容变化 ⇒ 结果恒等（测量与图标缩小都是确定性纯算）。
+    /// </summary>
+    private PhysicalRect ComputePanelRect(IntPtr hwnd)
+    {
         var (work, scale) = TargetMonitorOf(hwnd);
         double maxWidth = Math.Max(240, work.Width * 0.92);
 
@@ -549,8 +548,7 @@ public sealed partial class SwitcherWindow : Window
         var y = (int)Math.Round(yCenter - hPx / 2);
         y = Math.Max((int)(work.Y + 8), Math.Min(y, (int)(work.Y + work.Height - hPx - 8)));
         x = Math.Max((int)(work.X + 8), x);
-        SetWindowPos(hwnd, IntPtr.Zero, x, y, (int)wPx, (int)hPx, SwpNoactivate);
-        ApplyRegion(hwnd, wPx, hPx, scale);
+        return new PhysicalRect(x, y, x + (int)wPx, y + (int)hPx);
     }
 
     /// <summary>图标尺寸变化后同步三处：尺寸资源、遮罩几何（尺寸相关）、缩小后仍要保持各样式比例。</summary>
@@ -562,30 +560,6 @@ public sealed partial class SwitcherWindow : Window
             case "linux": SetIconClip(size, radiusRatio: 8.0 / 44.0); break;
             case "harmonyos": SetIconClip(size, squircle: true); break;
             default: Resources.Remove("SwitcherIconClip"); break;
-        }
-    }
-
-    /// <summary>区域裁切出圆角矩形（鸿蒙为胶囊）。半径物理像素 = 样式 DIP 半径 × 目标屏缩放。</summary>
-    private void ApplyRegion(IntPtr hwnd, double wPx, double hPx, double scale)
-    {
-        if (_regionFailed) return;
-        double radius = _pillPanel ? hPx / 2 : _panelRadius * scale;
-        radius = Math.Min(radius, Math.Min(wPx, hPx) / 2);
-        int w = (int)wPx, h = (int)hPx;
-        if (radius < 1)
-        {
-            if (SetWindowRgn(hwnd, IntPtr.Zero, true) == 0) _regionFailed = true;
-            return;
-        }
-        int ellipse = (int)Math.Round(radius * 2);
-        var region = CreateRoundRectRgn(0, 0, w + 1, h + 1, ellipse, ellipse);
-        if (region == IntPtr.Zero) { _regionFailed = true; return; }
-        // 成功即把区域所有权交给系统：此后绝不能再 DeleteObject（会销毁窗口仍在用的区域）
-        if (SetWindowRgn(hwnd, region, true) == 0)
-        {
-            DeleteObject(region);
-            _regionFailed = true;
-            Logger.Warn("切换面板：SetWindowRgn 失败，退化为 DWM 圆角/方角形态");
         }
     }
 

@@ -4,7 +4,7 @@
         xmlns:sys="clr-namespace:System;assembly=mscorlib"
         Title="Beautiful Switcher"
         WindowStyle="None" ResizeMode="NoResize" SizeToContent="Manual"
-        AllowsTransparency="False" Background="Transparent"
+        AllowsTransparency="True" Background="{x:Null}"
         ShowInTaskbar="False" ShowActivated="False" Focusable="False" IsTabStop="False"
         Topmost="True" WindowStartupLocation="Manual"
         UseLayoutRounding="True" SnapsToDevicePixels="True"
@@ -16,23 +16,25 @@
          Alt 仍被用户按着：面板若夺前台会打断修饰键状态机（系统可能据此认为会话结束），并且面板自己
          成了前台 → 随后 Commit 的目标就成了我们的面板窗口。按键全部来自全局低级键盘钩子（不依赖焦点），
          所以这里既不需要键盘可达，也绝不能键盘可达。
-         【真背板】AllowsTransparency=False（分层窗口与 DWM 背板互斥），形状由 SetWindowRgn 裁切：
-         DWMWA_WINDOW_CORNER_PREFERENCE 只有系统那一种半径（约 8 物理 px），画不出 macOS 大圆角与
-         鸿蒙胶囊；区域半径随样式给，内容三层（卡底 / 主题 tint / 顶部内高光）铺满整个窗口。
+         【形态（v3 T2/T3）】分层窗口（AllowsTransparency=True）+ Background={x:Null}：
+         圆角/胶囊 100% 由 Card 自绘（半径随样式 macOS 18 / Win11 8 / 鸿蒙胶囊），逐像素 alpha 由 WPF
+         保证。v2 的两条不可靠路径已整枝删除——SetWindowRgn 裁形（真机上根本没生效，面板带硬边）与
+         "非分层 + DWM 背板"（半透明卡底下的客户端像素不被合成 → 黑矩形）。玻璃感来自显示前的抓屏模糊
+         （见 code-behind 的 ShowPanel：量好矩形 → ForPanel 抓屏 → 再 Show）。
          【样式】差异收敛为两处：模板经 DynamicResource 取 SwitcherIconSize / SwitcherTileRadius /
          SwitcherAccent / SwitcherIconClip（图标遮罩几何，macOS 样式删键 → 不遮罩）；卡片半径、内边距、
          字幕可见性、条目间距等不在模板里的，由 ApplyStyle() 直接赋值（无资源间接层，少一处易错点）。 -->
 
     <Window.Resources>
-        <!-- 卡底：真背板可用时半透明（让系统模糊透出），三档全败时自铺实底（非分层窗口没有逐像素
-             alpha，半透明只会露出黑区 → 与 FluentMenu 同一"降级不得画成黑卡"约束） -->
-        <LinearGradientBrush x:Key="CardFillBlur" StartPoint="0,0" EndPoint="0,1">
-            <GradientStop Color="#8A232327" Offset="0"/>
-            <GradientStop Color="#9A19191C" Offset="1"/>
-        </LinearGradientBrush>
+        <!-- 卡底降级形态：没有抓屏模糊时自铺**实心**渐变（分层窗口上"没画到"= 看穿到桌面，绝不允许）。 -->
         <LinearGradientBrush x:Key="CardFillSolid" StartPoint="0,0" EndPoint="0,1">
             <GradientStop Color="#F62C2C2F" Offset="0"/>
             <GradientStop Color="#FA1B1B1F" Offset="1"/>
+        </LinearGradientBrush>
+        <!-- 抓屏模糊之上的遮罩：半透明深色渐变，负责图标/字幕的文字对比度。 -->
+        <LinearGradientBrush x:Key="CardFillBlur" StartPoint="0,0" EndPoint="0,1">
+            <GradientStop Color="#8A232327" Offset="0"/>
+            <GradientStop Color="#9A19191C" Offset="1"/>
         </LinearGradientBrush>
         <!-- 顶部内高光：macOS 玻璃感的"light top edge"（与 FluentMenu 同一视觉语言） -->
         <LinearGradientBrush x:Key="CardInnerGlow" StartPoint="0,0" EndPoint="0,1">
@@ -50,9 +52,12 @@
         <!-- SwitcherIconClip（图标遮罩几何）不写默认值：缺键 → DynamicResource 不解析 → Clip=null -->
     </Window.Resources>
 
-    <Border x:Name="Card" Background="{StaticResource CardFillBlur}" CornerRadius="18">
+    <Border x:Name="Card" Background="{StaticResource CardFillSolid}" CornerRadius="18">
         <Grid>
-            <!-- 主题 tint 覆盖层：系统背板（档 1/2）不认我们的 tint，只能作为内容层叠加体现主题 -->
+            <!-- 叠放顺序即材质顺序：抓屏模糊（Card.Background）→ 深色遮罩 → 主题 tint → 内高光 → 内容。
+                 Scrim 只在有模糊时铺 CardFillBlur（实心底形态再叠一层深色只会闷），由代码切换。 -->
+            <Border x:Name="Scrim" IsHitTestVisible="False" Background="Transparent"/>
+            <!-- 主题 tint 覆盖层：随 DynamicResource 即时体现主题色 -->
             <Border x:Name="TintLayer" IsHitTestVisible="False"
                     Background="{DynamicResource ThemeBackdropTint}"/>
             <Border x:Name="GlowLayer" IsHitTestVisible="False" Background="{StaticResource CardInnerGlow}"/>

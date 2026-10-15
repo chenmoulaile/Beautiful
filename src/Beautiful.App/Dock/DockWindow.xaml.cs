@@ -161,25 +161,24 @@ public partial class DockWindow : AcrylicWindow
     private void OnThemeChanged(ThemeDefinition theme) => ApplyTheme(theme);
 
     /// <summary>
-    /// 主题切换落地：窗口级亚克力开/关 + 间距参数；放大开关与 MaxScale 由动画/悬停路径
+    /// 主题切换落地：窗口级底色策略 + 间距参数；放大开关与 MaxScale 由动画/悬停路径
     /// 直读 ThemeManager.Current；底色/圆角/图标尺寸/字体/指示样式走字典 DynamicResource 即时生效。
     /// <para>
-    /// 【Task 4 裁定：Dock 不用 DWM 系统背板】本窗口的点击穿透依赖 XAML 的
+    /// 【v3 T2 裁定：常驻表面不做抓屏，只做自绘底 + best-effort 系统模糊】本窗口的点击穿透依赖 XAML 的
     /// <c>Background="{x:Null}"</c>（未绘制区域不参与命中测试 → 面板两侧的条带空白可点到底下的桌面/
-    /// 图标），而 WPF 里"未绘制区域真的透明"只有 <c>AllowsTransparency=true</c>（分层窗口）能做到；
-    /// 分层窗口与 <c>DWMWA_SYSTEMBACKDROP_TYPE</c> 互斥（DWM 不在其重定向表面后合成背板，写入返回
-    /// S_OK 却什么都不画 → 黑条），且 <c>DwmExtendFrameIntoClientArea</c> 在分层窗口上同样无效。
-    /// 所以 Dock 保留旧 <c>SetWindowCompositionAttribute</c> 亚克力（现代主题下确有模糊，只是非系统背板），
-    /// 真背板只用于"内容铺满窗口"的弹层族（FluentPopupHost）与 MediaPanel。勿在此窗口改用 ApplyBackdrop。
+    /// 图标），而 WPF 里"未绘制区域真的透明"只有 <c>AllowsTransparency=true</c>（分层窗口）能做到。
+    /// Dock 又是常驻表面：实时抓屏会把已画好的面板像素抓进背板（鬼影），为抓屏先隐藏一帧又是可见闪烁，
+    /// 所以它不调用 <see cref="ScreenBlurBackdrop"/>，而是"DockPanelRoot 自绘 ThemeDockBackground + 1px 亮边"
+    /// 作为唯一可见底，另发一次旧 <c>SetWindowCompositionAttribute</c> 请求（<see cref="AcrylicWindow.ApplyTintFallback"/>）
+    /// 作增强：系统认账就有真模糊，不认账看到的仍是自绘底，两种结果都不落黑。
+    /// 真模糊的抓屏路径只给"显示一次"的瞬态表面（切换器 / 菜单弹层 / 媒体面板）。
     /// </para>
     /// </summary>
     private void ApplyTheme(ThemeDefinition theme)
     {
-        if (theme.BlurEnabled)
-            ApplyAcrylic(Color.FromArgb(theme.AcrylicTint.A, theme.AcrylicTint.R,
-                                        theme.AcrylicTint.G, theme.AcrylicTint.B));
-        else
-            DisableAcrylic();
+        ApplyTintFallback(Color.FromArgb(theme.AcrylicTint.A, theme.AcrylicTint.R,
+                                         theme.AcrylicTint.G, theme.AcrylicTint.B),
+                          theme.BlurEnabled);
         // 排布参数：底色/圆角/字体走 DynamicResource，尺寸/间距/放大写入 DockSurface。
         // IconSize/MaxScale 由设置项驱动（DockIconSize / MagnificationStrength），主题只提供"是否放大"与间距，
         // 见 ApplySurfaceLayoutParams。尺寸变化会改条带高度 → 顺带重排 AppBar（若尚未注册则 no-op，
@@ -820,6 +819,10 @@ public partial class DockWindow : AcrylicWindow
                 _mediaPanel.Closed += (_, _) => { _mediaPanel = null; _panelAutoHiddenAtUtc = null; };
             }
             PositionMediaPanel();
+            // 背板抓屏必须在 Show 之前（此刻面板不可见 → 抓到的是胶囊上方那块桌面的干净内容）：
+            // 显示之后再抓就会把面板自己已有的像素抓进背板（鬼影）。矩形用 Left/Top/Width/Height，
+            // PositionMediaPanel 刚写完这四个属性，所以抓屏区与最终落位一致。
+            _mediaPanel.RefreshBackdrop();
             _mediaPanel.Show();      // Show 默认激活 → Deactivated 自动收起链路生效
             _mediaPanel.Activate();
             _mediaPanel.ScrollToCurrentLine();

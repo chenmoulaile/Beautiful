@@ -7,10 +7,9 @@ using System.Windows.Media.Animation;
 using System.Windows.Threading;
 using Beautiful.App.Interop;
 using Beautiful.App.Services;
-using Beautiful.App.Themes;
+using Beautiful.Core.Layout;
 using static Beautiful.App.Interop.NativeMethods;
 using Brushes = System.Windows.Media.Brushes; // UseWindowsForms 隐式全局 using 与 System.Drawing.Brushes 冲突
-using Color = System.Windows.Media.Color;     // 同上，System.Drawing.Color
 using Point = System.Windows.Point; // UseWindowsForms 隐式全局 using 与 System.Drawing.Point 冲突
 using Size = System.Windows.Size; // 同上，System.Drawing.Size
 
@@ -20,13 +19,17 @@ namespace Beautiful.App.Controls;
 /// 无边框高级弹层宿主：Topmost、不进任务栏、<c>ShowActivated=true</c> + <c>Focusable=true</c>
 /// （评审 Important#3：菜单须键盘可达 → 采用"激活式弹层"模型：窗口显示即夺取前台激活与键盘焦点）。
 /// <para>
-/// 【Task 4：真背板形态】主题启用模糊时窗口为 <c>AllowsTransparency=false</c> 的普通（非分层）窗口，
-/// 由 <see cref="Services.SystemBackdrop"/> 铺 "sheet of glass" + <c>DWMWA_SYSTEMBACKDROP_TYPE=2(Acrylic)</c>
-/// 取 Windows 11 真系统背板，圆角由 <c>DWMWA_WINDOW_CORNER_PREFERENCE=ROUND</c> 原生裁切。
-/// 因此内容必须铺满整个窗口矩形（不再有逐像素透明的外圈留白与自绘 DropShadow），入场淡入也改为动画
-/// <c>Content.Opacity</c>——<see cref="Window.Opacity"/> 会把窗口变成分层窗口（WS_EX_LAYERED），而分层
-/// 窗口与系统背板互斥（DWM 不在其后合成背板 → 黑卡）。主题禁用模糊（Linux）时才退回分层窗口 +
-/// 自绘圆角/投影形态（该分支没有背板可牺牲，逐像素 alpha 才有意义）。
+/// 【形态（v3 T2/T3）】恒为<b>分层窗口</b>（<c>AllowsTransparency=true</c>）——WPF 唯一保证客户端逐像素
+/// alpha 的模式，圆角与自绘投影留白因此真的透明；v2 那句"启用模糊的主题走非分层 + DWM 系统背板"
+/// 已在用户真机上被证伪（半透明卡底下面是不被合成的客户端像素 → 黑卡 + 硬边），连同
+/// <c>DwmExtendFrameIntoClientArea</c> / <c>DWMWA_SYSTEMBACKDROP_TYPE</c> /
+/// <c>DWMWA_WINDOW_CORNER_PREFERENCE</c> 一起退役。入场淡入动画 <c>Content.Opacity</c> 的习惯保留：
+/// 分层窗口动画 <c>Window.Opacity</c> 会额外叠一层整窗混合，内容层淡入既够用又更省。
+/// <para>
+/// 【玻璃感来自抓屏自绘模糊】落位算出窗口物理矩形后、<b>Show 之前</b>调
+/// <see cref="Services.ScreenBlurBackdrop.ForPanel"/>：此刻本窗口还不可见，抓到的必定是干净的下方内容
+/// （弹层是"显示一次"的瞬态表面，不需要重抓）。抓屏失败或 <c>BEAUTIFUL_NOBLUR=1</c> 时交回 null，
+/// 内容由 <see cref="IBackdropAware.OnBackdropReady"/> 改铺实心卡底——降级链上没有任何一环会画成黑。
 /// </para>
 /// <para>
 /// 关闭策略【Deactivated→Close 为主，光标探测看门狗为辅】：激活式窗口显示后即为前台，失去激活
@@ -57,7 +60,6 @@ public class FluentPopupHost : Window
     private DispatcherTimer? _watchdog;
     private int _outsideTicks;
     private bool _flipX, _flipY; // 最近一次收敛落位是否左/上翻转（入场动画方向用）
-    private BackdropPath _backdrop = BackdropPath.None;
 
     /// <summary>暂停自动关闭（拖拽选择、模态确认等场景可临时置 true 抑制"光标离开即关"）。</summary>
     public bool KeepOpen { get; set; }
@@ -76,14 +78,12 @@ public class FluentPopupHost : Window
     {
         WindowStyle = WindowStyle.None;
         ResizeMode = ResizeMode.NoResize;
-        // 【Task 4 形态选择】分层窗口（AllowsTransparency=true，WPF 唯一逐像素透明模式）与
-        // DWMWA_SYSTEMBACKDROP_TYPE 真背板互斥：DWM 拒绝在分层窗口的重定向表面后合成背板
-        // （属性写入返回 S_OK 却什么都不画 → 黑卡）。所以启用模糊的主题一律走非分层 +
-        // DwmExtendFrameIntoClientArea(-1) + 背板 + DWMWA_WINDOW_CORNER_PREFERENCE=ROUND（原生圆角），
-        // 内容铺满整个窗口矩形；只有"主题明确禁模糊"（Linux 实底）才保留逐像素 alpha 的自绘圆角/投影。
-        // 每次显示都新建宿主 → 构造期读当前主题即成立（改主题必然伴随菜单关闭重建）。
-        AllowsTransparency = !ThemeManager.Current.BlurEnabled;
-        Background = Brushes.Transparent; // 有背板 → 透出系统模糊；无背板 → 由内容自铺底（见 ApplySystemBackdrop）
+        // 【v3 形态】一律分层窗口：WPF 的逐像素 alpha 只有这一条路，圆角卡 + 四周自绘投影留白
+        // 都靠它才能真正透明（v2 按主题模糊开关在 true/false 之间切换，是"黑卡 + 硬边"的成因）。
+        // 玻璃感不再来自 DWM 材质，而来自显示前的抓屏模糊（ShowAtPhysical 里 ForPanel），
+        // 拿不到背板时由内容自铺实心卡底 —— 窗口底维持 Transparent（不参与"要不要透出模糊"的决策）。
+        AllowsTransparency = true;
+        Background = Brushes.Transparent;
         ShowInTaskbar = false;
         Topmost = true;
         Focusable = true;                    // 激活式弹层：可获焦 → 支持键盘导航（评审 Important#3）
@@ -103,32 +103,6 @@ public class FluentPopupHost : Window
         var hwnd = new WindowInteropHelper(this).Handle;
         var ex = GetWindowLongPtr(hwnd, GwlpExStyle);
         SetWindowLongPtr(hwnd, GwlpExStyle, ex | WsExToolwindow);
-
-        ApplySystemBackdrop();
-    }
-
-    /// <summary>
-    /// 取 Win11 系统背板（38 → 1029 → 旧亚克力三级降级，见 <see cref="SystemBackdrop"/>），并把胜出的路径
-    /// 告知内容（<see cref="IBackdropAware"/>）：只有真有模糊的路径内容才可用半透明底让背板透出；
-    /// 三档全失败时窗口自铺不透明底——非分层窗口没有逐像素 alpha，半透明只会露出黑色空洞，
-    /// 这条约束正是"降级路径不得悄悄画出黑卡"的落地点。
-    /// </summary>
-    private void ApplySystemBackdrop()
-    {
-        var theme = ThemeManager.Current;
-        var tint = Color.FromArgb(theme.AcrylicTint.A, theme.AcrylicTint.R,
-                                  theme.AcrylicTint.G, theme.AcrylicTint.B);
-        _backdrop = SystemBackdrop.Apply(this, tint,
-            theme.BlurEnabled ? BackdropKind.Acrylic : BackdropKind.None);
-
-        var hasBlur = _backdrop is BackdropPath.SystemBackdrop or BackdropPath.MicaLegacy
-                                        or BackdropPath.CompositionAccent;
-        if (!hasBlur && !AllowsTransparency)
-            Background = new SolidColorBrush(Color.FromArgb(0xFF, tint.R, tint.G, tint.B)); // 兜底：不留黑区
-        else
-            Background = Brushes.Transparent;
-
-        (Content as IBackdropAware)?.OnBackdropApplied(_backdrop);
     }
 
     /// <summary>
@@ -170,15 +144,28 @@ public class FluentPopupHost : Window
         if (y + hPx > work.Bottom - EdgeInset) { y = flip.Y - hPx; _flipY = true; } // 底边收拢到 flip 锚点
         if (y < work.Top + EdgeInset) y = work.Top + EdgeInset;
 
-        // 首帧即透明，杜绝任何潜在跳动。淡入只动画内容不动画窗口：Window.Opacity 会把窗口置为
-        // 分层窗口（WS_EX_LAYERED），系统背板随即停止合成 → 淡入结束会出现"由模糊变黑卡"的抖动。
+        var ix = (int)Math.Round(x);
+        var iy = (int)Math.Round(y);
+
+        // 【抓屏必须在 Show 之前】此刻本窗口不可见，取回的是"面板下方"的干净内容；
+        // 显示之后再抓就会把弹层自己的像素抓进背板（鬼影）。捕获区已由 ScreenBlurBackdrop 外扩余量，
+        // 因此菜单内容变宽/换行只露出旁边已抓好的内容，不需要重抓。
+        // 只在内容确实要铺背板时才抓（不实现 IBackdropAware 的内容 = 自绘卡片，没必要为它跑一遍 GDI）。
+        var backdrop = Content is IBackdropAware && wPx > 0 && hPx > 0
+            ? ScreenBlurBackdrop.ForPanel(new PhysicalRect(ix, iy, ix + (int)Math.Round(wPx), iy + (int)Math.Round(hPx)))
+            : null;
+
+        // 首帧即透明，杜绝任何潜在跳动。淡入只动画内容不动画窗口（Window.Opacity 会给整窗再叠一层
+        // 混合，内容层淡入够用且更省）。
         if (Content is UIElement rootForFade) rootForFade.Opacity = 0;
         Show();
         // Show 后 WPF 可能按默认位置落一次（Left/Top 未设），以测量位置强制覆盖
-        var ix = (int)Math.Round(x);
-        var iy = (int)Math.Round(y);
         SetWindowPos(hwnd, IntPtr.Zero, ix, iy, 0, 0, SwpNosize | SwpNozorder | SwpNoactivate);
         PlacedPhysicalRect = new Rect(ix, iy, wPx, hPx);
+
+        // 把背板交给内容：卡片在窗口里的位置只有内容知道（自绘投影留白），所以由内容自己瞄准并决定
+        // 实心降级底。null 也是合法结果（抓屏失败 / BEAUTIFUL_NOBLUR=1）→ 内容必须铺实心底，不得留透明。
+        (Content as IBackdropAware)?.OnBackdropReady(backdrop);
 
         // 激活式弹层：落位后强制夺取前台激活/键盘焦点。托盘右键经 NotifyIcon 消息进来时本进程未必是
         // 前台，系统前台锁会压制 ShowActivated/Activate → 菜单收不到键盘（评审 Important#3 键盘可达的
