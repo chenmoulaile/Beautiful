@@ -245,7 +245,7 @@ public static class ScreenBlurBackdrop
 
     /// <summary>
     /// 便捷入口：给"尺寸此后不再变化"的窗口面板返回一个**已冻结**的画刷（冻结后 WPF 免变更跟踪）。
-    /// 面板会长大的表面（切换器）请改用 <see cref="ForPanel"/> + 每次重排后 <see cref="ScreenBackdrop.Paint"/>。
+    /// 面板会长大的表面（切换器）请改用 <see cref="ForPanel"/> + 每次重排后 <see cref="ScreenBackdrop.Aim"/>。
     /// </summary>
     /// <param name="window">目标窗口（内部 <c>EnsureHandle</c>；调用点须已定形 Left/Top/Width/Height）。</param>
     /// <param name="panelDip">面板在窗口客户区内的 DIP 矩形（本项目所有表面 <c>WindowStyle=None</c> ⇒ 客户区即窗口矩形）。</param>
@@ -352,11 +352,20 @@ public static class ScreenBlurBackdrop
         }
     }
 
-    /// <summary>整块缓冲是否逐字节全零（采样点数固定 ≈4096，不为判定遍历几百万字节）。</summary>
+    /// <summary>整块缓冲是否逐字节全零（采样点数固定 ≈4096，不为判定遍历几百万字节）。
+    /// <para>
+    /// 【遍历上界必须是 w·h·4，不能是 <c>bgra.Length</c>】传入的是 <see cref="ArrayPool{T}"/> 借来的缓冲，
+    /// 实际长度 **≥** 请求长度且尾部是上一次归还未定时的旧字节；按 Length 扫会让"越界那一段里恰好有非零
+    /// 残值"被当成"抓到了内容"，于是全零帧检测形同虚设（黑背板照旧铺上卡片）。判据本身仍是逐字节为 0，
+    /// 只是把窗口收回到真正被 BitBlt 写过的像素上。
+    /// </para>
+    /// </summary>
     private static bool IsAllBlack(ReadOnlySpan<byte> bgra, int width, int height)
     {
+        var len = Math.Min(bgra.Length, width * height * BoxBlur.BytesPerPixel);
+        if (len <= 0) return true;
         var step = Math.Max(1, width * height / 4096) * BoxBlur.BytesPerPixel;
-        for (var i = 0; i + 2 < bgra.Length; i += step)
+        for (var i = 0; i + 2 < len; i += step)
             if (bgra[i] != 0 || bgra[i + 1] != 0 || bgra[i + 2] != 0) return false;
         return true;
     }

@@ -154,8 +154,11 @@ internal static class IconExtractor
     }
 
     /// <summary>
-    /// ①② 两层跑一遍取**更大**的那个（两层通常给同一个 256 帧，差别只在个别资源）。
-    /// 已经拿到 ≥ 请求尺寸就立刻返回，不再多跑第二层（省一次 shell 调用）。
+    /// ①② 两层**都**跑一遍取更大的那个（两层通常给同一个 256 帧，差别只在个别资源：
+    /// PrivateExtractIcons 认得某些资源的最大帧，SHDefExtractIcon 在别的组合上更全）。
+    /// 这里刻意不"拿到 256 就短路"：短路会依赖①层是否可用（本机①层按名解析不到，见
+    /// <see cref="_privateExtractUsable"/>），于是同一台机器上"用了哪一层"随资源顺序漂移；
+    /// 两次调用的代价落在条目构建期（每个源一次，结果进 <see cref="Cache"/>），不在逐帧路径。
     /// </summary>
     private static Result TryFileTiers(string path, int size, Tier first, Tier second)
     {

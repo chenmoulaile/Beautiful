@@ -222,6 +222,11 @@ public sealed class DockSurface : Canvas
         MouseLeftButtonDown += OnDragMouseDown;
         MouseMove += OnDragMouseMove;
         MouseLeftButtonUp += OnMouseLeftButtonUp;
+        // 【终审修正】捕获被外力剥夺（系统弹模态框/另一窗口强制捕获/Alt+Tab 切走）时 WPF **不会**再发
+        // MouseLeftButtonUp：没有这一句，_dragging 永久为真（DockWindow 的悬停预览 MouseMove 据此早退，
+        // 预览功能当场死掉直到下次点击），插入指示条也会一直画在行里 = 分层窗口上一道除点击外无法消失的
+        // accent 竖线。释放捕获即等价于"这次拖拽取消了"。
+        LostMouseCapture += (_, _) => { if (_dragging) FinishDrag(); };
         PreviewMouseRightButtonUp += OnPreviewMouseRightButtonUp;
         Unloaded += (_, _) => StopLoop();
     }
@@ -967,10 +972,15 @@ public sealed class DockSurface : Canvas
         // 落在条带内 → ItemDroppedInside（携带落点探针，DockWindow 决定排序 / 转固定 / 回收站 no-op）。
         if (_dragging)
         {
-            var dragged = _dragCandidate!;
+            var dragged = _dragCandidate;
             FinishDrag();
-            if (IsInsideRow(p)) ItemDroppedInside?.Invoke(dragged, ProbeDrop(p));
-            else ItemDraggedOut?.Invoke(dragged);
+            // _dragCandidate 为空只可能来自"拖拽进行中又按下一次左键且落点不可拖"（OnDragMouseDown 会把它
+            // 清成 null 而 _dragging 仍为真）：本次只收状态机，绝不把 null 递给 DockWindow 的策略回调。
+            if (dragged is not null)
+            {
+                if (IsInsideRow(p)) ItemDroppedInside?.Invoke(dragged, ProbeDrop(p));
+                else ItemDraggedOut?.Invoke(dragged);
+            }
             e.Handled = true;
             return;
         }
@@ -981,6 +991,7 @@ public sealed class DockSurface : Canvas
 
     private void OnDragMouseDown(object sender, MouseButtonEventArgs e)
     {
+        if (_dragging) return;   // 拖拽已接管鼠标：第二次的按下不得清空被拖条目（释放时要有对象可交代）
         var p = e.GetPosition(this);
         var item = HitTestItem(p);
         // 只有固定项 / 运行窗口项可拖；媒体胶囊 / 回收站 / 分隔符不启动拖拽（保持各自的点击/静态语义）。
