@@ -116,9 +116,13 @@ public partial class DockWindow : AcrylicWindow
         // 一个半构造、无 HWND 却永久挂在静态事件上的僵尸实例——与 TopBarWindow/EnsureTopBar、
         // SwitcherService 已修过的同类泄漏一致。订阅移到 OnSourceInitialized（Show/Handle 生成时），
         // 初值主题在那里显式 ApplyTheme(ThemeManager.Current)；解绑在 OnClosed，两者对称。
+        // 【终审 I-6 的同类残留】TaskbarPolicyApplied 原先订阅在**构造函数**里（本方法末尾），而解绑在 OnClosed：
+        // 构造期 ThemeManager.Apply / Loaded 接线若抛异常，这个半构造、无 HWND 的实例就永久挂在
+        // _taskbar（活得比窗口久的宿主）上——OnClosed 永远不会走，之后每次策略变更都对一个僵尸实例
+        // 执行 Reassert + PositionAsAppBar。与 ThemeChanged 那条已修的泄漏同型，故订阅一并移到
+        // OnSourceInitialized（Show/句柄生成时），与 OnClosed 的解绑对称。
         // 任务栏策略切换/explorer 重启重放（TaskbarManager.Apply/Restore → PolicyApplied）后，
         // AppBar 条带需重新协商：Hide 释放了底部条带预留 → Dock 贴真底；Keep → 让位在任务栏上方。
-        if (_taskbar is not null) _taskbar.PolicyApplied += OnTaskbarPolicyApplied;
         // 初始主题：设置项驱动（settings.json 的 Theme，缺省鸿蒙；设置窗口切换即持久化）
         ThemeManager.Apply(SettingsService.ThemeDefinitionOf(SettingsService.Current), Application.Current);
         Loaded += OnWindowLoaded;
@@ -295,6 +299,9 @@ public partial class DockWindow : AcrylicWindow
         // 只更新全局资源字典，本窗口的亚克力/间距/放大参数从这里开始由 ThemeChanged 驱动，不再硬编码。
         ApplyTheme(ThemeManager.Current);
         ThemeManager.ThemeChanged += OnThemeChanged;
+        // 策略重放订阅与上面的 ThemeChanged 同一条时序纪律：句柄已生成、构造已完成，
+        // OnClosed 里有对称的一句解绑（半构造实例绝不挂在宿主事件上）。
+        if (_taskbar is not null) _taskbar.PolicyApplied += OnTaskbarPolicyApplied;
     }
 
     // ---------- 主题引擎（Task 13） ----------
