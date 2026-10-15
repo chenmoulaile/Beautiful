@@ -22,6 +22,9 @@
          触发器可见性默认值放在元素 Style 中
          （模板触发器可覆盖 Style Setter，但不能覆盖本地值）。 -->
     <services:AcrylicWindow.Resources>
+        <!-- 图标烘焙转换器（v3 T6）：条目 → 当前 (源,尺寸,主题,DPI) 下已烘好并冻结的位图。
+             必须声明在下面的模板之前（StaticResource 向后不可见）。 -->
+        <dock:IconBakedSourceConverter x:Key="IconBaked"/>
         <!-- 通用条目模板（Pinned/Window/RecycleBin）：图标 + 缺失回退字形 + 运行指示 + 悬停高亮。
              Media 条目由 MediaItemTemplate 接管（DockItemTemplateSelector 分派）。 -->
         <DataTemplate x:Key="DefaultItemTemplate">
@@ -30,13 +33,16 @@
             <Grid x:Name="ItemRoot" Background="Transparent"
                   ToolTip="{Binding Label}" ToolTipService.Placement="Top"
                   ToolTipService.InitialShowDelay="300">
-                <Image x:Name="IconImage" Source="{Binding Icon}"
+                <Image x:Name="IconImage" Source="{Binding Converter={StaticResource IconBaked}}"
                        Width="{DynamicResource ThemeIconSize}" Height="{DynamicResource ThemeIconSize}"
                        RenderOptions.BitmapScalingMode="HighQuality">
                     <Image.Style>
                         <Style TargetType="Image">
-                            <!-- 主题遮罩（鸿蒙 squircle / Linux 圆角方形）由 ThemeManager 注入
-                                 ThemeIconClip；macOS 无此键 → 不解析 → Clip=null 原样 -->
+                            <!-- 形状属主（v3 T6 裁定，二者互斥、不会双遮罩）：
+                                 · auto/mask 且主题给了形状（macOS 圆角方块 / 鸿蒙 squircle）→ 形状已经
+                                   **烧进位图**（连同顶部内高光与投影），ThemeManager 此时不注入本键 → Clip=null；
+                                 · plain 方式或 GNOME（主题无遮罩）→ 位图只有像素，形状回到这里的 XAML clip。
+                                 macOS 在 v3 T4 之前一直是"无此键 → 原样"，T6 起它由位图负责形状。 -->
                             <Setter Property="Clip" Value="{DynamicResource ThemeIconClip}"/>
                         </Style>
                     </Image.Style>

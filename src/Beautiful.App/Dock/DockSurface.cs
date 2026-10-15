@@ -922,4 +922,16 @@ public sealed class DockSurface : Canvas
         InvalidateMeasure();
         Wake();
     }
+
+    /// <summary>
+    /// 让每个条目的**绑定重新求值**（v3 T6）：图标位图是模板绑定经 <see cref="IconBakedSourceConverter"/>
+    /// 烘出来的，主题 / 图标尺寸 / DPI / IconTreatment 一变，旧位图就不再是"当前参数下的那一张"。
+    /// 重建容器是唯一正确的出口——WPF 会重新实例化模板并重跑绑定，不需要再造一套"图标刷新"通道。
+    /// <para>
+    /// 【低频纪律】只在参数变更时调用（DockWindow 侧对滑杆拖动做了防抖），绝不进逐帧路径。
+    /// 它走的是既有的 <c>RebuildVisualTree</c>：可视树整体换掉，逐帧缩放状态随之重置为 1，
+    /// 这与"条目增删/换源"的既有语义一致，不会带来额外的布局成本。
+    /// </para>
+    /// </summary>
+    public void RebindIconContainers() => RebuildVisualTree();
 }

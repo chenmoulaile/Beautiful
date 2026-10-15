@@ -76,9 +76,17 @@ public static class ThemeManager
     /// 图标遮罩策略（spec 4.2 表）：ratio=0 不遮罩（macOS 原样）；ratio=0.25 鸿蒙 squircle
     /// （Superellipse nExp=4.4，|x/22|^4.4+|y/22|^4.4=1）；其余 = 圆角方形（半径 = ratio·size，Linux 取 8）。
     /// 遮罩几何按传入 size 构建（与图片宽高同源），使尺寸覆盖后遮罩仍严丝合缝。
+    /// <para>
+    /// 【v3 T6：形状只有一个属主】烘焙位图自己已经把遮罩/高光/投影烧进像素时（<see cref="Services.IconBakeContext.BakesMask"/>，
+    /// 即 macOS 圆角方块与鸿蒙 squircle 在 auto/mask 下），这里必须返回 null → 模板的
+    /// <c>Clip={DynamicResource ThemeIconClip}</c> 解析不到键 → Clip=null，不再有第二层几何裁剪。
+    /// 两条都开会出现"同一形状被抗锯齿两遍"的灰边，并且投影会被 XAML 的 clip 沿方框切掉。
+    /// 反之在 plain 方式或 GNOME（主题本就无遮罩）下，形状仍由这里的几何负责 —— 与 v2/v3 T4 的观感完全一致。
+    /// </para>
     /// </summary>
     private static Geometry? CreateIconClip(ThemeDefinition theme, double size)
     {
+        if (Services.IconBakeContext.BakesMask) return null;
         if (theme.IconCornerRadiusRatio <= 0) return null;
         if (theme.IconCornerRadiusRatio == 0.25) return CreateSquircleClip(size);
         var radius = theme.IconCornerRadiusRatio * size;

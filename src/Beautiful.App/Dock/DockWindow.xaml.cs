@@ -68,6 +68,9 @@ public partial class DockWindow : AcrylicWindow
     // 图标尺寸/放大强度滑杆拖动时会连续触发排布刷新；条带重排（AppBar 协商 + SetWindowPos）成本较高，
     // 用一次性防抖把拖动期间的多次请求合并成落定后的一次重排（排布参数本身每帧即时写入，图标视觉跟手）。
     private DispatcherTimer? _repositionDebounce;
+    // v3 T6：图标烘焙参数（尺寸/DPI/主题/方式）变更后要重挂条目绑定（=重建容器 = 重烘一排图标）。
+    // 滑杆连续拖动时合并成一次，绝不让"每步重烘"进到帧预算里（P95 门）。
+    private DispatcherTimer? _iconRebindDebounce;
 
     // ---------- 悬停实时预览（Task 13）----------
     // _preview 惰性创建（首次悬停到窗口条目），随 Dock 关闭 Dispose（内部注销缩略图句柄 + 销毁宿主窗口）。
@@ -84,6 +87,12 @@ public partial class DockWindow : AcrylicWindow
     private NativeMethods.RECT _screenRect; // **窗口**物理矩形（含顶部放大余量），非 AppBar 预留带——物理光标校验用，见 IsCursorOutsideWindow
     private PhysicalRect _windowTarget;     // 最近一次协商出的目标窗口矩形：shell 重排条带时用它重申落位（见 AssertWindowRect）
     private PhysicalRect _monitorRect;      // 本 Dock 所在显示器的 rcMonitor（媒体面板水平钳制用，副屏原点可为负/非 0）
+    /// <summary>
+    /// 本 Dock 所在显示器的**有效缩放**（MDT_EFFECTIVE_DPI/96，与条带几何同一个来源）。
+    /// v3 T6 把它同时作为图标烘焙的 DPI 输入：位图边长 = IconSizeDIP·本值，所以"Dock 搬到 200% 的副屏"
+    /// 必须重烘一次，否则 150% 那套位图会被再次拉伸（正是"图标劣质"的第二条来源）。
+    /// </summary>
+    private double? _monitorScale;
     private bool _appbarRegistered;
     private bool _closing; // OnClosing 起置位：阻止关闭前挂起的 BeginInvoke 重注册在 ABM_REMOVE 后复活 AppBar
     private HwndSource? _source;
@@ -198,6 +207,11 @@ public partial class DockWindow : AcrylicWindow
     /// 主题只决定"是否放大"（macOS 才有放大）与间距；强度与尺寸是用户配置。放大关闭时 MaxScale 归 1、
     /// DockSurface 场恒回落 1（仍走阻尼，不冻结）。图标宽高 + 遮罩几何经 <see cref="ThemeManager.ApplyIconSize"/>
     /// 覆盖主题字典的 ThemeIconSize/ThemeIconClip，使条目模板的图片随 DockIconSize 即时缩放。
+    /// <para>
+    /// 【v3 T6 的顺序有讲究】先 <see cref="ApplyIconBake"/>（落烘焙参数，其中包含"形状归位图还是归 XAML"）
+    /// 再 ThemeManager.ApplyIconSize（据此注入或移除 <c>ThemeIconClip</c>）。反过来就会用上一轮的属主决定
+    /// 这一轮的 clip，切换主题的同一帧里出现"双遮罩"或"没人遮罩"。
+    /// </para>
     /// </summary>
     private void ApplySurfaceLayoutParams()
     {
@@ -219,8 +233,67 @@ public partial class DockWindow : AcrylicWindow
                                     theme.DockPanelPaddingXDip, theme.DockPanelPaddingYDip);
         Surface.Margin = padding;
         DockPanelRoot.Padding = padding;
+        // 烘焙参数（主题形状 / 尺寸 / DPI / IconTreatment）→ 决定 ThemeIconClip 的属主，必须在下面两步之前
+        ScheduleIconRebind();
         // 图标宽高 + 遮罩 + 分隔符几何（线粗/高度/盒宽）随尺寸与主题重注入主题字典（冻结/数值，非逐帧路径）。
         ThemeManager.ApplyIconSize(icon, Application.Current);
+    }
+
+    // ---------- 图标烘焙（v3 T6） ----------
+
+    /// <summary>
+    /// 本 Dock 所在显示器的缩放（物理/DIP）。首选 <see cref="_monitorScale"/>（MonitorGeometry 按锚点屏
+    /// 取的 MDT_EFFECTIVE_DPI/96，与条带几何同源）；AppBar 还没协商过（构造期）时用 WPF 自己的 DPI，
+    /// 两者都拿不到才按 1.0 —— <see cref="IconBakeContext.Configure"/> 只在真的变化时动作，
+    /// 所以这里的兜底序列不会造成反复重烘。
+    /// </summary>
+    private double CurrentDpiScale()
+    {
+        if (_monitorScale is { } m && m > 0) return m;
+        if (_hwnd == IntPtr.Zero) return 1.0;
+        try
+        {
+            var dpi = VisualTreeHelper.GetDpi(this).PixelsPerDip;
+            return dpi > 0 ? dpi : 1.0;
+        }
+        catch (InvalidOperationException)
+        {
+            return 1.0;   // PresentationSource 尚未就绪
+        }
+    }
+
+    /// <summary>
+    /// 图标烘焙参数落地 + 需要时重挂条目绑定。
+    /// <para>
+    /// 【为什么把重建防抖】图标尺寸滑杆每步都会改 DPI·尺寸这一组键；立即重建 = 每步都重烘一排图标
+    /// （UI 线程几十毫秒），既浪费也会把 frametime 的 P95 顶起来。防抖到落定之后一次：
+    /// 拖动期间 <c>ThemeIconSize</c> 已即时改了方框大小，图片被高质量拉伸着看（观感略软但不是错的尺寸），
+    /// 松手后立刻换成 1:1 的烘焙位图。
+    /// </para>
+    /// </summary>
+    private void ScheduleIconRebind()
+    {
+        var changed = IconBakeContext.Configure(ThemeManager.Current, Surface.IconSize,
+                                                CurrentDpiScale(), SettingsService.Current.IconTreatment);
+        if (changed) ThemeManager.ApplyIconSize(Surface.IconSize, Application.Current);  // 属主可能翻转 → 重落 clip
+        if (!changed) return;
+
+        _iconRebindDebounce ??= new DispatcherTimer(DispatcherPriority.Background)
+        {
+            Interval = TimeSpan.FromMilliseconds(120)
+        };
+        _iconRebindDebounce.Stop();
+        _iconRebindDebounce.Tick -= OnIconRebindTick;
+        _iconRebindDebounce.Tick += OnIconRebindTick;
+        _iconRebindDebounce.Start();
+    }
+
+    private void OnIconRebindTick(object? sender, EventArgs e)
+    {
+        _iconRebindDebounce?.Stop();
+        if (_closing) return;
+        Surface.RebindIconContainers();   // 模板重实例化 → 绑定按新的烘焙参数重新求值
+        Surface.Refresh();
     }
 
     // ---------- 条带几何（随图标尺寸/放大强度动态；预留带 ≠ 窗口矩形） ----------
@@ -312,6 +385,7 @@ public partial class DockWindow : AcrylicWindow
     {
         _closing = true;                             // 先于 ABM_REMOVE：作废队列中尚未执行的 BeginInvoke 重注册
         _repositionDebounce?.Stop();                 // 作废挂起的条带重排（OnClosing 后不再 ABM_SETPOS）
+        _iconRebindDebounce?.Stop();                 // 作废挂起的图标重烘（OnClosing 后不再重建可视树）
         _previewDwell?.Stop();                       // 作废挂起的预览驻留
         _preview?.Dispose();                         // 注销缩略图句柄 + 销毁宿主窗口（Task 13，必走，防句柄泄漏）
         _preview = null;
@@ -423,6 +497,10 @@ public partial class DockWindow : AcrylicWindow
         if (target is null) return;   // 显示器取不到（拔屏瞬间）：保持上次几何，不写非法矩形
         var t = target.Value;
         _monitorRect = t.MonitorRect;                       // 媒体面板水平钳制要用**本屏**左右缘
+        // v3 T6：本屏有效缩放同时是图标烘焙的 DPI 输入。换屏 / 改缩放 / 拔屏都会重走这里，
+        // 于是这一处就是"DPI 变了就重烘"的唯一入口（Configure 内部比对，值没变就零动作）。
+        _monitorScale = t.DpiScale;
+        ScheduleIconRebind();
         var panelH = t.Reserve.Height;                        // 预留带高（上报 shell，决定工作区）
         var headroomH = t.Window.Height - t.Reserve.Height;   // 向上越界生长的透明余量（不占工作区）
 

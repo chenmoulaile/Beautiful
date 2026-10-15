@@ -12,10 +12,16 @@ namespace Beautiful.App.Dock;
 /// <param name="Kind">条目种类（<see cref="DockItemKind.Separator"/> 表示分隔符槽：不放大、不可点击）。</param>
 /// <param name="LaunchPath">启动目标：exe 路径或 shell: 路径。</param>
 /// <param name="WindowHandle">Kind=Window 时的顶层窗口句柄。</param>
+/// <param name="IconSource">
+/// **实际用于提取图标的源**（v3 T6）：固定项是解析过 .lnk 之后的文件路径、运行窗口是进程 exe 路径、
+/// 回收站是 shell 命名空间 id。烘焙缓存按它取键，因此它必须稳定且能区分不同图标；
+/// 为 null 时转换器退回用原位图实例的引用身份。
+/// </param>
 public record DockItem(
     string Id,
     string Label,
     BitmapSource? Icon,
     DockItemKind Kind,
     string LaunchPath,
-    IntPtr? WindowHandle = null);
+    IntPtr? WindowHandle = null,
+    string? IconSource = null);

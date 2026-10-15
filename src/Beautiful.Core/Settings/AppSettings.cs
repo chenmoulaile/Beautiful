@@ -81,6 +81,13 @@ public sealed record AppSettings
     /// <summary>顶栏所在显示器（取值口径同 <see cref="DockMonitor"/>；两条 surface 可以分处两屏）。</summary>
     public string TopBarMonitor { get; init; } = "auto";
 
+    /// <summary>
+    /// 图标处理方式（v3 T6）："auto"（跟随主题：macOS 圆角方块+投影 / 鸿蒙 squircle+投影 / GNOME 平铺）、
+    /// "mask"（强制遮罩+高光+投影）、"plain"（只做 2× 超采样降到当前 DPI 的像素尺寸，不烧形状与投影，
+    /// 形状属主交回 XAML 的 ThemeIconClip）。取值解释集中在 <see cref="Imaging.IconTreatment"/>。
+    /// </summary>
+    public string IconTreatment { get; init; } = "auto";
+
     /// <summary>合法主题标识（小写）。</summary>
     public static IReadOnlyList<string> KnownThemes { get; } = ["harmonyos", "macos", "linux"];
 
@@ -92,6 +99,11 @@ public sealed record AppSettings
 
     /// <summary>合法 Dock 停靠边标识（小写，供设置面板下拉复用）。</summary>
     public static IReadOnlyList<string> KnownDockPositions { get; } = ["bottom", "top", "left", "right"];
+
+    /// <summary>
+    /// 合法图标处理方式标识（小写，v3 T6；白名单与解释器同源，避免设置面板和 Core 各写一份 switch）。
+    /// </summary>
+    public static IReadOnlyList<string> KnownIconTreatments { get; } = Imaging.IconTreatment.Known;
 
     /// <summary>Dock 图标尺寸下限（供设置面板滑杆复用）。</summary>
     public const int MinDockIconSize = 32;
@@ -116,8 +128,8 @@ public sealed record AppSettings
 
     /// <summary>
     /// 加载侧规范化：数值字段钳制到合法区间（LyricsOffsetMs ±2000、DockIconSize 32..72、
-    /// MagnificationStrength 1.0..2.5）；枚举串字段（主题/策略/切换器样式/停靠边）小写去空白后
-    /// 比对白名单，未知值收敛为默认，避免手改配置把 App 侧映射打到兜底分支之外的未定义行为。
+    /// MagnificationStrength 1.0..2.5）；枚举串字段（主题/策略/切换器样式/停靠边/图标处理方式）
+    /// 小写去空白后比对白名单，未知值收敛为默认，避免手改配置把 App 侧映射打到兜底分支之外的未定义行为。
     /// 显示器选择器（DockMonitor/TopBarMonitor）走 <see cref="MonitorSelectorOrDefault"/>：
     /// 关键字（auto/primary）之外只接受 1..MaxMonitorIndex 的十进制序号。
     /// 热键是自由文本（改键由 App 侧解析并在注册失败时提示），只做 null/空白兜底。
@@ -137,7 +149,8 @@ public sealed record AppSettings
         DockIconSize = Math.Clamp(DockIconSize, MinDockIconSize, MaxDockIconSize),
         MagnificationStrength = Math.Clamp(MagnificationStrength, MinMagnificationStrength, MaxMagnificationStrength),
         DockMonitor = MonitorSelectorOrDefault(DockMonitor),
-        TopBarMonitor = MonitorSelectorOrDefault(TopBarMonitor)
+        TopBarMonitor = MonitorSelectorOrDefault(TopBarMonitor),
+        IconTreatment = Canonical(IconTreatment, "auto", KnownIconTreatments)
     };
 
     /// <summary>枚举串规范化：null/空白/大小写与首尾空白差异都归一为小写标识；不在白名单内取兜底。</summary>

@@ -14,6 +14,7 @@ using Brush = System.Windows.Media.Brush;
 using Color = System.Windows.Media.Color;
 using ColorConverter = System.Windows.Media.ColorConverter;
 using ComboBox = System.Windows.Controls.ComboBox;                                 // 消歧：WinForms 隐式 using 带入同名控件
+using ComboBoxItem = System.Windows.Controls.ComboBoxItem;                        // 同上（图标处理方式三项）
 using SelectionChangedEventArgs = System.Windows.Controls.SelectionChangedEventArgs; // 同上
 using MessageBox = System.Windows.MessageBox;
 using OpenFileDialog = Microsoft.Win32.OpenFileDialog;
@@ -116,6 +117,9 @@ public partial class SettingsWindow : Window
         IconSizeSlider.Value = s.DockIconSize;
         MagnifySlider.Value = s.MagnificationStrength;
         OffsetSlider.Value = s.LyricsOffsetMs;
+
+        // 图标处理方式（v3 T6）：按 Tag 选中，未知值由 AppSettings.Normalized 收敛成 auto，这里必定命中一项
+        SelectTreatment(s.IconTreatment);
 
         LoadMonitorSelectors();
 
@@ -222,6 +226,34 @@ public partial class SettingsWindow : Window
         // DockSurface 倒影渲染器即时增删镜像元素并加长条目行（ApplyDockLayout → 重落旗标 + 重排条带）
         App.ApplyDockLayout();
     }
+
+    /// <summary>
+    /// 图标处理方式（v3 T6）变更：落盘 + 走既有的 Dock 布局重放入口
+    /// （App.ApplyDockLayout → DockWindow.RefreshLayoutFromSettings → 重落烘焙参数 → 缓存清空 → 防抖重建条目）。
+    /// 与图标尺寸同一条路径，所以不需要重启，也不会出现"设置已改、图标还是上一套形状"。
+    /// </summary>
+    private void IconTreatment_Changed(object sender, SelectionChangedEventArgs e)
+    {
+        if (_loading) return;
+        var value = TagOf(IconTreatmentBox.SelectedItem) ?? "auto";
+        SettingsService.UpdateAndSave(SettingsService.Current with { IconTreatment = value });
+        App.ApplyDockLayout();
+    }
+
+    /// <summary>按 Tag 选中处理方式那一项（找不到就退回第一项 auto，永不显示空白）。</summary>
+    private void SelectTreatment(string value)
+    {
+        foreach (var item in IconTreatmentBox.Items.OfType<ComboBoxItem>())
+            if (string.Equals(TagOf(item), value, StringComparison.OrdinalIgnoreCase))
+            {
+                IconTreatmentBox.SelectedItem = item;
+                return;
+            }
+        IconTreatmentBox.SelectedIndex = 0;
+    }
+
+    private static string? TagOf(object? item)
+        => (item as ComboBoxItem)?.Tag as string;
 
     private void Bounce_Changed(object sender, RoutedEventArgs e)
     {

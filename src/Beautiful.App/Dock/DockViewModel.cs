@@ -124,11 +124,17 @@ public sealed class DockViewModel
     }
 
     private static DockItem MakePinned(string path)
-        => new(Id: path,
-               Label: Path.GetFileNameWithoutExtension(path),
-               Icon: IconExtractor.GetIcon(IconSourceFor(path)),
-               Kind: DockItemKind.Pinned,
-               LaunchPath: path); // .lnk 原样作为启动目标（UseShellExecute 可直接启动快捷方式）
+    {
+        // 图标源与启动路径分家：.lnk 直接按路径取图在本机取不到（SHDefExtractIconW 返回 hr=1 空句柄），
+        // 必须解析到目标 exe / IconLocation 才有 256px 的大帧可用（v3 T6 实测）。
+        var iconSource = IconSourceFor(path);
+        return new DockItem(Id: path,
+                            Label: Path.GetFileNameWithoutExtension(path),
+                            Icon: IconExtractor.GetIcon(iconSource),
+                            Kind: DockItemKind.Pinned,
+                            LaunchPath: path,
+                            IconSource: iconSource);
+    }
 
     /// <summary>
     /// 固定项图标源：.lnk 经 ShellLink 解析取 IconLocation（剥去尾随 ",index"），无自定义图标
@@ -159,9 +165,13 @@ public sealed class DockViewModel
     private static DockItem CreateRecycleBinItem()
         => new(Id: "shell:RecycleBinFolder",
                Label: "回收站",
-               Icon: IconExtractor.GetIcon("::{645FF040-5081-101B-9F08-00AA002F954E}"), // 可能为 null → 视图回退 ♻
+               Icon: IconExtractor.GetIcon(RecycleBinIconSource), // 可能为 null → 视图回退 ♻
                Kind: DockItemKind.RecycleBin,
-               LaunchPath: "shell:RecycleBinFolder");
+               LaunchPath: "shell:RecycleBinFolder",
+               IconSource: RecycleBinIconSource);
+
+    /// <summary>回收站图标的 shell 命名空间 id（启动路径是 shell: 形式，取图要用 ::{clsid} 形式）。</summary>
+    private const string RecycleBinIconSource = "::{645FF040-5081-101B-9F08-00AA002F954E}";
 
     private static DockItem CreateMediaItem()
         => new(Id: "media", Label: "媒体", Icon: null, Kind: DockItemKind.Media, LaunchPath: string.Empty);
@@ -185,7 +195,8 @@ public sealed class DockViewModel
                Icon: w.Icon,
                Kind: DockItemKind.Window,
                LaunchPath: w.ExePath,
-               WindowHandle: w.Handle);
+               WindowHandle: w.Handle,
+               IconSource: w.ExePath);   // 跟踪器就是按 exe 路径取图并缓存的，键与它同源
 
     private void OnWindowsChanged(object? sender, NotifyCollectionChangedEventArgs e)
     {

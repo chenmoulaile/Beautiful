@@ -507,7 +507,9 @@ internal static partial class NativeMethods
     [DllImport("user32.dll")] public static extern int GetDpiForWindow(IntPtr hwnd);
 
     // ---------- Shell 图标 ----------
-    public const uint ShgfiIcon = 0x100, ShgfiPidl = 0x8;
+    public const uint ShgfiIcon = 0x100, ShgfiPidl = 0x8, ShgfiLargeIcon = 0x0, ShgfiSmallIcon = 0x1;
+    /// <summary>SHGetFileInfo(SHGFI_ICON) 的"大图标"= SM_CXICON（本机 32px）。T6 里它只做末位兜底。</summary>
+    public const uint ShgfiIconLarge = ShgfiIcon | ShgfiLargeIcon;
 
     [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
     public struct SHFILEINFOW
@@ -523,6 +525,14 @@ internal static partial class NativeMethods
     public static extern int SHDefExtractIcon(string file, int index, uint flags,
         out IntPtr hIconLarge, out IntPtr hIconSmall, uint nIconSize);
 
+    // v3 T6 一层：请求 w×h 时返回资源里**最接近**的帧（含 256px 的 PNG 帧）。
+    // 【绝不猜序号】本机实测 shell32 的这个名字解析不到（EntryPointNotFoundException），
+    // 而按序号调用陌生函数 = 用错签名调用别的东西 = 进程级风险（探针里 #152 就返回了指针样的垃圾）。
+    // 所以这里只按名声明，由 IconExtractor 捕获 EntryPointNotFoundException 后**永久停用本层**并降级。
+    [DllImport("shell32.dll", CharSet = CharSet.Unicode)]
+    public static extern int PrivateExtractIconsW(string file, int index, int width, int height,
+        IntPtr[]? hIcons, int[]? iconIds, int count, uint flags);
+
     [DllImport("shell32.dll", CharSet = CharSet.Unicode, PreserveSig = false)]
     public static extern void SHParseDisplayName(string name, IntPtr pbc, out IntPtr ppidl,
         uint sfgaoIn, out uint sfgaoOut);
@@ -534,6 +544,81 @@ internal static partial class NativeMethods
     [DllImport("user32.dll")] public static extern bool DestroyIcon(IntPtr hIcon);
 
     [DllImport("gdi32.dll")] public static extern bool DeleteObject(IntPtr hObject);
+
+    // HBITMAP → 保 alpha 的 BitmapSource 需要读位图的宽/高/位深与像素指针
+    [StructLayout(LayoutKind.Sequential)]
+    public struct BITMAP
+    {
+        public int bmType, bmWidth, bmHeight, bmWidthBytes;
+        public ushort bmPlanes, bmBitsPixel;
+        public IntPtr bmBits;
+    }
+
+    [DllImport("gdi32.dll")]
+    public static extern int GetObjectW(IntPtr h, int size, ref BITMAP bm);
+
+    // ---------- IShellItemImageFactory（**默认关闭**的可选层，v3 T6 第 4 层） ----------
+    // 仓库历史与 THIRD-PARTY-NOTICES 记录：本机（Win11 VM）对任意路径/尺寸组合调用 GetImage 都触发
+    // AccessViolationException。AV 在 .NET 8 属于"损坏状态异常"，try/catch **抓不到**，因此这一层
+    // 无法在进程内做到绝对安全 —— 唯一可行口径是"默认关闭 + 显式环境变量开启"（BEAUTIFUL_ICON_SHELLIMAGE=1），
+    // 详见 IconExtractor.TryShellItemImage。
+    [StructLayout(LayoutKind.Sequential)]
+    public struct PSIZE
+    {
+        public int cx, cy;
+    }
+
+    /// <summary>GetImage 的标志：允许返回比请求更大的图（拿到真实 logo 而不是被缩小过的缩略图）。</summary>
+    public const uint SiigbfBiggerSizeOk = 0x10;
+
+    [ComImport, Guid("bcc18b79-ba16-442f-80c4-8a59c30c463b"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+    public interface IShellItemImageFactory
+    {
+        /// <summary>成功时输出一个 DIB 段 HBITMAP（**调用方负责 DeleteObject**）。</summary>
+        void GetImage(PSIZE size, uint flags, out IntPtr phbm);
+    }
+
+    private static readonly Guid IidShellItem = new("43826d1e-eeca-4d1c-a512-efe8d4d8f783");
+
+    /// <summary>
+    /// 按 shell 命名空间路径（<c>shell:AppsFolder\AUMID</c>、<c>::{clsid}</c>、普通文件路径）绑定 IShellItem，
+    /// 再 QI 成 <see cref="IShellItemImageFactory"/>。失败返回 null（抛出的 COM 异常由调用方兜住）。
+    /// </summary>
+    public static IShellItemImageFactory? BindShellItemImageFactory(string parsingName)
+    {
+        var iid = IidShellItem;
+        IntPtr punk;
+        try
+        {
+            SHCreateItemFromParsingName(parsingName, IntPtr.Zero, ref iid, out punk);
+        }
+        catch (Exception ex) when (ex is COMException or EntryPointNotFoundException or DllNotFoundException)
+        {
+            return null;
+        }
+        if (punk == IntPtr.Zero) return null;
+        try
+        {
+            // IShellItem → IShellItemImageFactory 走标准 COM QI（Marshal 负责引用计数，
+            // 不自己 P/Invoke ole32 的导出函数：那条路径在本仓库不可验证，错了就是难查的悬挂指针）。
+            var target = typeof(IShellItemImageFactory).GUID;
+            var hr = Marshal.QueryInterface(punk, ref target, out var factory);
+            Marshal.Release(punk);
+            if (hr != 0 || factory == IntPtr.Zero) return null;
+            var obj = Marshal.GetObjectForIUnknown(factory);
+            Marshal.Release(factory);
+            return obj as IShellItemImageFactory;
+        }
+        catch (Exception ex) when (ex is COMException or InvalidCastException)
+        {
+            Marshal.Release(punk);
+            return null;
+        }
+    }
+
+    [DllImport("shell32.dll", CharSet = CharSet.Unicode, PreserveSig = false)]
+    private static extern void SHCreateItemFromParsingName(
+        [MarshalAs(UnmanagedType.LPWStr)] string path, IntPtr pbc, ref Guid riid, out IntPtr ppv);
 
     // ---------- 电源（顶栏电量状态项，Task 9） ----------
     /// <summary>SYSTEM_POWER_STATUS（kernel32 GetSystemPowerStatus）：均为字节/双字，Pack=1 对齐 Win32 布局。</summary>

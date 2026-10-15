@@ -86,6 +86,20 @@
                         </StackPanel>
 
                         <StackPanel Orientation="Horizontal" Margin="0,12,0,0">
+                            <TextBlock Text="图标质感" Style="{StaticResource RowLabel}" Width="72"/>
+                            <!-- v3 T6：图标的“处理方式”。三者都建立在同一件事之上——先按 256px 取源、
+                                 再按当前 DPI 一次性烘到位图尺寸，所以逐帧路径永远是 1:1 搬运。
+                                 auto = 主题的遮罩/投影数据（macOS 圆角方块+投影、鸿蒙 squircle+投影、GNOME 平铺）；
+                                 mask = 强制启用遮罩+高光+投影；plain = 只缩放，形状交回 XAML 的 ThemeIconClip。 -->
+                            <ComboBox x:Name="IconTreatmentBox" Width="300" VerticalAlignment="Center"
+                                      SelectionChanged="IconTreatment_Changed">
+                                <ComboBoxItem Content="跟随主题（推荐）" Tag="auto"/>
+                                <ComboBoxItem Content="强制遮罩 + 投影" Tag="mask"/>
+                                <ComboBoxItem Content="原样（仅高清缩放）" Tag="plain"/>
+                            </ComboBox>
+                        </StackPanel>
+
+                        <StackPanel Orientation="Horizontal" Margin="0,12,0,0">
                             <TextBlock Text="放大强度" Style="{StaticResource RowLabel}" Width="72"/>
                             <Slider x:Name="MagnifySlider" Width="300" Minimum="1.0" Maximum="2.5"
                                     SmallChange="0.1" LargeChange="0.3" IsSnapToTickEnabled="True" TickFrequency="0.1"

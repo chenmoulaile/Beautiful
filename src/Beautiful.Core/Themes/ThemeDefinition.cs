@@ -34,7 +34,11 @@ public sealed record ThemeDefinition(
     bool DockSeparatorsEnabled,   // 仅 macOS 原生 Dock 有分隔符；GNOME dash / 鸿蒙是连续列表
     double DockSeparatorWidthDip,      // 竖线粗细
     double DockSeparatorHeightRatio,   // 竖线高占**行高**比例（0.6~0.7）
-    double DockSeparatorSideInsetDip)  // 竖线左右对称留白（条目盒宽 = 粗细 + 2×本值）
+    double DockSeparatorSideInsetDip,  // 竖线左右对称留白（条目盒宽 = 粗细 + 2×本值）
+    // ---------- v3 T6：图标遮罩/投影也是主题数据（形状的唯一属主是烘焙位图，见 Imaging.IconTreatment） ----------
+    IconMaskStyle IconMask,     // None=原样平铺（GNOME dash）；RoundedRectangle=macOS；Squircle=鸿蒙
+    double IconMaskRadiusRatio, // 圆角半径 / artwork 边长（Squircle 忽略本值，用 Superellipse 的 n）
+    bool IconShadow)            // 是否烘焙"图标自身 alpha 轮廓"下方的柔影（macOS/鸿蒙有，GNOME 无）
 {
     /// <summary>控制器裁定：MaxScale&gt;1 才启用高斯放大（鸿蒙/Linux 无放大）。</summary>
     public bool ShowMagnification => MaxScale > 1.0;
@@ -70,7 +74,10 @@ public sealed record ThemeDefinition(
         DockSeparatorsEnabled: false, // 连续列表，无分隔符
         DockSeparatorWidthDip: 0,
         DockSeparatorHeightRatio: 0,
-        DockSeparatorSideInsetDip: 0);
+        DockSeparatorSideInsetDip: 0,
+        IconMask: IconMaskStyle.Squircle,      // 既有 ThemeIconClip 就是 squircle（ratio 0.25），烘焙接管形状后同一观感
+        IconMaskRadiusRatio: 0,                // squircle 用超椭圆指数，不用半径
+        IconShadow: true);
 
     /// <summary>
     /// macOS：暗色亚克力 #B4202020（tint 同底色）、系统蓝 #0A84FF、抛物线放大 MaxScale=1.8、
@@ -97,7 +104,13 @@ public sealed record ThemeDefinition(
         DockSeparatorsEnabled: true,  // 唯一有分隔符的主题（原生结构）
         DockSeparatorWidthDip: 1,
         DockSeparatorHeightRatio: 0.65,
-        DockSeparatorSideInsetDip: 5);
+        DockSeparatorSideInsetDip: 5,
+        // v3 T6：macOS 图标被剪成圆角方块（Big Sur ≈ 边长的 20%）并浮在一道贴近的柔影上。
+        // IconCornerRadiusRatio 仍留 0 —— 那是 XAML 的 ThemeIconClip（遮罩）口径；形状改由烘焙位图
+        // 拥有，ThemeManager 在 bakesMask 时不注入 clip，于是"原样不遮罩"的老注释不再自相矛盾。
+        IconMask: IconMaskStyle.RoundedRectangle,
+        IconMaskRadiusRatio: 0.2,
+        IconShadow: true);
 
     /// <summary>
     /// Linux(GNOME)：#E61C1C1C 实底（BlurEnabled=false 禁用亚克力）、accent #3584E4、无放大、
@@ -124,7 +137,12 @@ public sealed record ThemeDefinition(
         DockSeparatorsEnabled: false,
         DockSeparatorWidthDip: 0,
         DockSeparatorHeightRatio: 0,
-        DockSeparatorSideInsetDip: 0);
+        DockSeparatorSideInsetDip: 0,
+        // GNOME dash 的图标是**平铺**的：柔影与 squircle 都不是它的语言，所以烘焙不参与形状/投影
+        // （IconMask=None → ThemeManager 继续注入 ThemeIconClip 的 8px 圆角，形状属主留在 XAML）。
+        IconMask: IconMaskStyle.None,
+        IconMaskRadiusRatio: 0,
+        IconShadow: false);
 
     /// <summary>#RRGGBB / #AARRGGBB → Color（内置解析：System.Drawing.Common 的 ColorTranslator 不在 net8.0 基础包内）。</summary>
     private static Color Argb(string hex)
