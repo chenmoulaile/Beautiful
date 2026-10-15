@@ -1,8 +1,9 @@
-using System;
+﻿using System;
 using System.Threading;
 using System.Windows.Threading;
 using Beautiful.App.Interop;
 using Beautiful.App.Services;
+using Beautiful.Core.Launcher;
 
 namespace Beautiful.App.Switcher;
 
@@ -24,9 +25,12 @@ namespace Beautiful.App.Switcher;
 /// "Alt 按住 + Tab"才触发，Tab 被吞即足以压制它。
 ///
 /// 【注入键一律放行】回调首行检查 <c>LLKHF_INJECTED</c>：凡 keybd_event/SendInput 合成的按键
-/// （我们自己的 TapAlt 兜底、密码管理器自动填充、屏幕键盘、远程输入）既不参与状态位跟踪也不被吞掉。
-/// 否则注入的 Alt 会开出幽灵会话（提交后到下一次真按键之间吞掉一切），注入的 Alt+Tab 则被吞后
-/// 目标应用永远收不到（评审发现 I2）。应急组合 Win+Alt+K 因此只认真实体键——注入键无法解除接管。
+/// （我们自己的 TapAlt 兜底、密码管理器自动填充、屏幕键盘、远程输入）既不参与切换器的状态位跟踪，
+/// 也不被切换器吞掉。否则注入的 Alt 会开出幽灵会话（提交后到下一次真按键之间吞掉一切），注入的
+/// Alt+Tab 则被吞后目标应用永远收不到（评审发现 I2）。应急组合 Win+Alt+K 因此只认真实体键——注入键无法解除接管。
+/// <b>唯一的例外是启动器组合键</b>（<see cref="LauncherRequested"/>）：它是一次无状态的"打开面板"边沿，
+/// 没有会话可被污染，所以注入键同样触发；但注入键的按下/抬起一律不吞——那是别人主动送进来的序列。
+/// 这一条例外在 <see cref="OnKey"/> ⓪ 里实现并就地写明理由。
 ///
 /// 【自愈】会话的开启与收束以 **OS 报告的修饰键状态**（<c>LLKHF_ALTDOWN</c> / GetAsyncKeyState）
 /// 为权威，不信任缓存位：漏收一个 key-up 边缘最多错过一次接管，绝不会"陈旧位永久吞掉普通 Tab"
@@ -64,6 +68,13 @@ public sealed class AltTabHook : IDisposable
     // 触发组合的修饰键要求（默认 Alt；来自设置项 SwitcherHotkey）
     private volatile int _needAlt = 1, _needCtrl, _needWin;
 
+    // ---- 启动器触发组合（v3 T7，来自设置项 LauncherHotkey；默认 Ctrl+Alt+Space）----
+    // 主键 0 = 停用（设置里关了启动器）。修饰键要求与主键都是"位/整数"，回调里只做比较，不查表。
+    private volatile int _launcherMainVk;
+    private volatile int _launcherNeedCtrl = 1, _launcherNeedAlt = 1, _launcherNeedWin, _launcherNeedShift;
+    private bool _launcherTriggerDown;   // 已吞下按下，等着吞掉配对的那个抬起
+    private int _pendingLauncher;
+
     /// <summary>
     /// 是否启用接管。false 时所有按键原样放行（钩子仍在线，仅为保住应急停用组合）。
     /// 由设置项 <c>SwitcherEnabled</c> 与应急停用共同驱动。
@@ -89,6 +100,10 @@ public sealed class AltTabHook : IDisposable
     public event Action? PreviousRequested;
     public event Action? CommitRequested;
     public event Action? CancelRequested;
+
+    /// <summary>启动器组合键被按下（v3 T7）：宿主据此开/收 Spotlight 式启动面板。</summary>
+    public event Action? LauncherRequested;
+
 
     /// <summary>应急停用（Win+Alt+K）触发：接管已关闭且 <see cref="UnhookRequested"/> 已排队，宿主据此同步设置/UI。</summary>
     public event Action? EmergencyDisabled;
@@ -133,6 +148,86 @@ public sealed class AltTabHook : IDisposable
     }
 
     /// <summary>
+    /// 设置启动器触发组合（v3 T7）。<paramref name="enabled"/>=false 时主键归 0 → 回调里这条分支整体退出，
+    /// 键盘路径回到"只有切换器在看"。解析一律走 <see cref="LauncherHotkey"/>（Core，含"必须带修饰键"
+    /// 这条硬约束与单测），这里只把结果落成钩子能立刻比较的位/键码。
+    /// 主键名到虚拟键码的映射见 <see cref="VirtualKeyOf"/>：Core 不认识 VK，App 侧不认拼音表，各管一段。
+    /// </summary>
+    public void SetLauncherHotkey(string? hotkey, bool enabled)
+    {
+        if (!enabled)
+        {
+            Interlocked.Exchange(ref _launcherMainVk, 0);
+            Logger.Info("启动器：热键已停用（设置里关了启动器）");
+            return;
+        }
+        if (!LauncherHotkey.TryParse(hotkey, out var gesture))
+        {
+            // 走到这里说明配置绕过了 Normalized（例如旧版本留下的脏串）：回落默认组合而不是停摆，
+            // 用户至少还能打开面板；原因写进日志，不在按键路径上弹任何东西。
+            if (!LauncherHotkey.TryParse(LauncherHotkey.Default, out gesture))
+            {
+                Interlocked.Exchange(ref _launcherMainVk, 0);
+                Logger.Warn($"启动器：热键 \"{hotkey}\" 无法解析，且默认组合也解析失败 → 本次不注册");
+                return;
+            }
+            Logger.Warn($"启动器：热键 \"{hotkey}\" 无法解析 → 回落 {LauncherHotkey.Default}");
+        }
+        var vk = VirtualKeyOf(gesture.Key);
+        if (vk == 0)
+        {
+            Interlocked.Exchange(ref _launcherMainVk, 0);
+            Logger.Warn($"启动器：热键 \"{hotkey}\" 的主键 {gesture.Key} 没有键码映射 → 本次不注册");
+            return;
+        }
+        Interlocked.Exchange(ref _launcherNeedCtrl, gesture.Ctrl ? 1 : 0);
+        Interlocked.Exchange(ref _launcherNeedAlt, gesture.Alt ? 1 : 0);
+        Interlocked.Exchange(ref _launcherNeedWin, gesture.Win ? 1 : 0);
+        Interlocked.Exchange(ref _launcherNeedShift, gesture.Shift ? 1 : 0);
+        Interlocked.Exchange(ref _launcherMainVk, vk);
+        Logger.Info($"启动器：热键已注册 {gesture.ToText()}（VK=0x{vk:X2}）");
+    }
+
+    /// <summary>
+    /// 主键名 → 虚拟键码；认不出返回 0（调用方据此不注册）。字母/数字/F1-F12 按码位算，
+    /// 其余按键名给常量（与 <see cref="LauncherHotkey.KeyNames"/> 一一对应，多一条都不留）。
+    /// </summary>
+    private static int VirtualKeyOf(string key) => key switch
+    {
+        "space" => NativeMethods.VkSpace,
+        "enter" => NativeMethods.VkReturn,
+        "tab" => NativeMethods.VkTab,
+        "escape" => NativeMethods.VkEscape,
+        "backspace" => NativeMethods.VkBack,
+        "home" => NativeMethods.VkHome,
+        "end" => NativeMethods.VkEnd,
+        "pageup" => NativeMethods.VkPrior,
+        "pagedown" => NativeMethods.VkNext,
+        "left" => NativeMethods.VkLeft,
+        "right" => NativeMethods.VkRight,
+        "up" => NativeMethods.VkUp,
+        "down" => NativeMethods.VkDown,
+        "minus" => NativeMethods.VkOemMinus,
+        "equal" => NativeMethods.VkOemPlus,
+        "comma" => NativeMethods.VkOemComma,
+        "period" => NativeMethods.VkOemPeriod,
+        "slash" => NativeMethods.VkOem2,
+        "backslash" => NativeMethods.VkOem5,
+        "semicolon" => NativeMethods.VkOem1,
+        "quote" => NativeMethods.VkOem7,
+        "leftbracket" => NativeMethods.VkOem4,
+        "rightbracket" => NativeMethods.VkOem6,
+        _ => key.Length switch
+        {
+            1 when key[0] is >= 'a' and <= 'z' => 'A' + (key[0] - 'a'),
+            1 when key[0] is >= '0' and <= '9' => key[0],
+            _ when key.Length is 2 or 3 && key[0] == 'f' && int.TryParse(key.AsSpan(1), out var n)
+                 && n is >= 1 and <= 12 => NativeMethods.VkF1 + n - 1,
+            _ => 0,
+        },
+    };
+
+    /// <summary>
     /// 安装钩子（须在 UI 线程）。失败返回 false，调用方据此降级为"不接管"。
     /// 装钩前先清零全部修饰键/会话状态位：钩子看不见安装之前发生的按下/抬起边缘，
     /// 带着陈旧位上线会让"改热键重装"（App.ApplySwitcherHotkey 的注释承诺）变成空话（评审发现 I1）。
@@ -149,7 +244,10 @@ public sealed class AltTabHook : IDisposable
         _altLeft = _altRight = _ctrlLeft = _ctrlRight = _winLeft = _winRight = _shiftLeft = _shiftRight = false;
         _switching = false;
         _nativeSession = false;
+        // 启动器的"按下已吞、等抬起"配对位一并清掉：残留会让下一次普通主键抬起被误吞
+        _launcherTriggerDown = false;
     }
+
 
     /// <summary>卸载钩子（幂等；转回安装线程）。应急停用与关开关走这里，Dispose 亦复用。</summary>
     public void Stop() => _keyboard.Uninstall();
@@ -166,6 +264,7 @@ public sealed class AltTabHook : IDisposable
         _keyboard.Dispose(); // 卸载钩子（内部转回安装线程）+ 释放委托的 GCHandle
         OpenRequested = null; NextRequested = null; PreviousRequested = null;
         CommitRequested = null; CancelRequested = null; EmergencyDisabled = null;
+        LauncherRequested = null;
         UnhookRequested = null;
     }
 
@@ -173,17 +272,23 @@ public sealed class AltTabHook : IDisposable
 
     private bool OnKey(int msg, uint vk, uint flags)
     {
-        // ⓪ 注入键（LLKHF_INJECTED）一律原样放行，且不碰任何状态位：我们自己的 TapAlt 兜底、
-        // 密码管理器/屏幕键盘/远程输入合成的 Alt+Tab 若被当作真实输入，前者会开出幽灵 Alt 会话、
-        // 后者会被吞掉导致目标应用收不到（评审发现 I2）。
-        if ((flags & NativeMethods.LlkhfInjected) != 0) return false;
-
         var isDown = msg is NativeMethods.WmKeyDown or NativeMethods.WmSysKeyDown;
         var isUp = msg is NativeMethods.WmKeyUp or NativeMethods.WmSysKeyUp;
-        if (!isDown && !isUp) return false; // WM_SYSCHAR 等字符消息：放行
+        var injected = (flags & NativeMethods.LlkhfInjected) != 0;
+
+        // ⓪ 启动器组合键。这一支刻意排在"注入键一律放行"**之前**，原因与切换器不同：
+        //    切换器要跟踪 Alt 会话状态，注入的 Alt 会开出幽灵会话，所以注入键必须完全对它隐形；
+        //    而"开启动器"是一次**无状态的边沿动作**——没有会话、没有修饰键残留可被污染，注入键触发它
+        //    与真键盘触发它的后果完全一致（也让验收脚本能用 keybd_event 走同一条判定，见 scripts/launcher.ps1）。
+        //    但吞键只对真实键生效：注入键是别人（我们的脚本/输入法/远程桌面）主动送进来的序列，
+        //    把它吞掉等于替别人的前台应用做主。
+        if (!isDown && !isUp) return false;          // WM_SYSCHAR 等字符消息：放行
+        if (TryLauncherTrigger(vk, isDown, injected)) return true;
+        if (injected) return false;                  // 其余注入键：原样放行且不碰任何状态位
 
         // ① 修饰键状态跟踪；修饰键自身一律放行（见类型注释"为什么不吞 Alt 本身"）
         if (TrackModifiers(vk, isDown)) return false;
+
 
         // ② 应急停用：Win+Alt+K。排在 Enabled 判定之前——被卡住时这条是唯一出口
         if (isDown && vk == VkK && WinDown && AltDown)
@@ -255,6 +360,43 @@ public sealed class AltTabHook : IDisposable
 
         return false;
     }
+
+    /// <summary>
+    /// 启动器组合键判定（回调热路径：一次键码比较 + 至多几次 GetAsyncKeyState 纯读，零分配零 IO）。
+    /// 返回 true = 本次按键已被本分支接管（真实键的按下与抬起都被吞）。
+    /// <para>
+    /// 【为什么按下与抬起要配对吞】面板打开即夺取焦点，若把 Ctrl+Alt+Space 的"空格抬起"放行出去，
+    /// 焦点已切换到搜索框的应用会收到一次孤立的空格 —— 恰好落进用户刚要输入的第一个字符位。
+    /// 配对位 <see cref="_launcherTriggerDown"/> 只由按下置位、由抬起或重装清零，因此不满足修饰键要求时
+    /// 的主键（普通空格）绝不会被误吞。
+    /// </para>
+    /// </summary>
+    private bool TryLauncherTrigger(uint vk, bool isDown, bool injected)
+    {
+        var main = _launcherMainVk;
+        if (main == 0 || vk != (uint)main) return false;
+        if (!isDown)
+        {
+            var swallow = _launcherTriggerDown;
+            _launcherTriggerDown = false;
+            return swallow;
+        }
+        if (!LauncherModifiersHeld()) return false;
+        Interlocked.Add(ref _pendingLauncher, 1);
+        ScheduleDrain();
+        _launcherTriggerDown = !injected;   // 注入键只投递、不吞（见 OnKey ⓪ 的裁定）
+        return !injected;
+    }
+
+    /// <summary>
+    /// 启动器要求的修饰键是否按住（与 <see cref="TriggerHeldPerOs"/> 同口径：只信 OS 的实时状态，
+    /// 不信缓存位——缓存位漏收一次抬起就会永久"以为按着"，把用户的主键吞到下一次重启）。
+    /// </summary>
+    private bool LauncherModifiersHeld()
+        => (_launcherNeedCtrl == 0 || IsDownOs(NativeMethods.VkLControl) || IsDownOs(NativeMethods.VkRControl))
+         && (_launcherNeedAlt == 0 || IsDownOs(NativeMethods.VkLMenu) || IsDownOs(NativeMethods.VkRMenu))
+         && (_launcherNeedWin == 0 || IsDownOs(NativeMethods.VkLWin) || IsDownOs(NativeMethods.VkRWin))
+         && (_launcherNeedShift == 0 || IsDownOs(NativeMethods.VkLShift) || IsDownOs(NativeMethods.VkRShift));
 
     /// <summary>更新左右修饰键状态位；返回 true 表示本次按键就是修饰键（不吞）。所有 Alt/Tab 组合都依赖这些位，必须逐键跟踪。</summary>
     private bool TrackModifiers(uint vk, bool down)
@@ -337,6 +479,7 @@ public sealed class AltTabHook : IDisposable
         var commit = Interlocked.Exchange(ref _pendingCommit, 0);
         var cancel = Interlocked.Exchange(ref _pendingCancel, 0);
         var emergency = Interlocked.Exchange(ref _pendingEmergency, 0);
+        var launcher = Interlocked.Exchange(ref _pendingLauncher, 0);
         var passthrough = Interlocked.Exchange(ref _pendingPassthrough, 0);
         if (passthrough > 0)
             Logger.Info($"切换器：前台为全屏应用，本次 Alt+Tab 交给系统原生切换（全屏直通，累计 {passthrough} 次）");
@@ -349,6 +492,10 @@ public sealed class AltTabHook : IDisposable
             EmergencyDisabled?.Invoke();
             return; // 挂起的会话动作全部丢弃：面板该关，且不能再提交
         }
+
+        // 启动器排在会话动作之前投递：同一次排空里若两者都攒下了，先开面板再回放步进——
+        // 面板显示即夺取前台，把步进留在它之后就不会落到一个已经失焦的旧会话上。
+        if (launcher > 0) LauncherRequested?.Invoke();
 
         if (open > 0) OpenRequested?.Invoke();
 

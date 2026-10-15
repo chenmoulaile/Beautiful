@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Linq;
 using Beautiful.Core.Controls;
 using Beautiful.Core.Settings;
@@ -12,6 +12,9 @@ using Xunit;
 /// </summary>
 public class QuickSettingsTests
 {
+    /// <summary>砖块投影的测试入口：控制中心总是显式探测壁纸可读性，单测默认按“读得到”走正常分支。</summary>
+    private static IReadOnlyList<QuickTile> Tiles(AppSettings s, ThemeDefinition theme, bool accentAvailable = true)
+        => QuickSettings.ToggleTiles(s, theme, accentAvailable);
     // ---------- 分段与白名单同源 ----------
 
     [Fact]
@@ -135,7 +138,7 @@ public class QuickSettingsTests
     [Fact]
     public void 不做放大的主题里放大砖块置灰并给出原因()
     {
-        var tiles = QuickSettings.ToggleTiles(new AppSettings { Theme = "linux" }, ThemeDefinition.Linux());
+        var tiles = Tiles(new AppSettings { Theme = "linux" }, ThemeDefinition.Linux());
         var magnify = QuickSettings.FindTile(tiles, QuickSettings.MagnificationId)!;
         Assert.False(magnify.IsEnabled);
         Assert.NotNull(magnify.BlockReason);
@@ -146,7 +149,7 @@ public class QuickSettingsTests
     [Fact]
     public void 做放大的主题里放大砖块可点且原因留空()
     {
-        var tiles = QuickSettings.ToggleTiles(new AppSettings { Theme = "macos" }, ThemeDefinition.MacOs());
+        var tiles = Tiles(new AppSettings { Theme = "macos" }, ThemeDefinition.MacOs());
         var magnify = QuickSettings.FindTile(tiles, QuickSettings.MagnificationId)!;
         Assert.True(magnify.IsEnabled);
         Assert.Null(magnify.BlockReason);
@@ -160,7 +163,7 @@ public class QuickSettingsTests
         foreach (var theme in new[] { ThemeDefinition.MacOs(), ThemeDefinition.Linux(), ThemeDefinition.HarmonyOs() })
         {
             var tile = QuickSettings.FindTile(
-                QuickSettings.ToggleTiles(new AppSettings { Theme = theme.Id.ToLowerInvariant() }, theme),
+                Tiles(new AppSettings { Theme = theme.Id.ToLowerInvariant() }, theme),
                 QuickSettings.ReflectionId)!;
             Assert.True(tile.IsEnabled);
             Assert.Null(tile.BlockReason);
@@ -172,16 +175,42 @@ public class QuickSettingsTests
     {
         var s = new AppSettings { Theme = "macos", ShowMediaCapsule = false, MagnificationStrength = 2.0, ReflectionEnabled = true };
         var theme = ThemeDefinition.MacOs();
-        var tiles = QuickSettings.ToggleTiles(s, theme);
+        var tiles = Tiles(s, theme);
         Assert.True(QuickSettings.FindTile(tiles, QuickSettings.MagnificationId)!.IsOn);
         Assert.True(QuickSettings.FindTile(tiles, QuickSettings.ReflectionId)!.IsOn);
         Assert.False(QuickSettings.FindTile(tiles, QuickSettings.MediaCapsuleId)!.IsOn);
-        Assert.Equal(3, tiles.Count);   // 顺序与数量都是界面的契约（UniformGrid Columns=3）
+        Assert.Equal(4, tiles.Count);   // 顺序与数量都是界面的契约（UniformGrid 现在是两列，四块正好 2×2）
+    }
+
+    [Fact]
+    public void 壁纸取色砖块按能不能读到壁纸决定可点()
+    {
+        // 关着且读得到 → 可点且为关；开着且读不到 → 已开但仍要灰（用户得知道"现在没法生效"）
+        var available = Tiles(new AppSettings { UseWallpaperAccent = false }, ThemeDefinition.MacOs(), true);
+        var on = QuickSettings.FindTile(available, QuickSettings.WallpaperAccentId)!;
+        Assert.True(on.IsEnabled);
+        Assert.False(on.IsOn);
+        Assert.Null(on.BlockReason);
+
+        var unavailable = Tiles(new AppSettings { UseWallpaperAccent = true }, ThemeDefinition.MacOs(), false);
+        var blocked = QuickSettings.FindTile(unavailable, QuickSettings.WallpaperAccentId)!;
+        Assert.False(blocked.IsEnabled);
+        Assert.True(blocked.IsOn);                       // 设置里的真值照实显示（不是"点了没反应"的假状态）
+        Assert.Equal("读不到当前壁纸文件（幻灯片或纯色桌面）", blocked.BlockReason);
+    }
+
+    [Fact]
+    public void 壁纸取色开关联动设置值()
+    {
+        var on = QuickSettings.WithWallpaperAccent(new AppSettings(), on: true);
+        Assert.True(on.UseWallpaperAccent);
+        Assert.True(QuickSettings.IsWallpaperAccentOn(on));
+        Assert.False(QuickSettings.IsWallpaperAccentOn(QuickSettings.WithWallpaperAccent(on, on: false)));
     }
 
     [Fact]
     public void 未知砖块标识查询返回空而不是伪造一项()
-        => Assert.Null(QuickSettings.FindTile(QuickSettings.ToggleTiles(new AppSettings(), ThemeDefinition.MacOs()), "brightness"));
+        => Assert.Null(QuickSettings.FindTile(Tiles(new AppSettings(), ThemeDefinition.MacOs()), "brightness"));
 
     // ---------- 策略说明文案 ----------
 

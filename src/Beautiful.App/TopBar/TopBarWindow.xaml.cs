@@ -515,6 +515,16 @@ public partial class TopBarWindow : AcrylicWindow
         bat.Visibility = Visibility.Collapsed;
         RightHost.Children.Add(bat);
 
+        // 启动器入口（v3 T7，放大镜字形与搜索语义一致）：放在控制中心<b>左侧</b>而不是最右——
+        // 最右一位是"快捷设置"的既有位置（macOS/Win11 都是），新入口不该去抢它，
+        // 而验收脚本也是按"控制中心"这个名字点最右一颗的（位置口径不变）。
+        // ToolTip 里刻意不写热键：热键是设置项，改了顶栏按钮不会被重建，写上去就会变成过期承诺。
+        var (launcherButton, _) = MakeStatusItem("\uE721", iconFont: true);
+        AutomationProperties.SetName(launcherButton, "启动器");
+        launcherButton.ToolTip = "启动器：搜索并启动应用";
+        launcherButton.Click += (_, _) => _context.OpenLauncher();
+        RightHost.Children.Add(launcherButton);
+
         // 控制中心入口（v3 T7，最右一位 = macOS/Win11 的"快捷设置"位置）：
         // 字形取已在托盘/顶栏菜单里验证过能渲染的 \uE790（与状态项同一套 Segoe 图标字体 + 同一字号），
         // 打开态用样式同款的主题面板底色做持久高亮（见 ToggleControlCenter）。

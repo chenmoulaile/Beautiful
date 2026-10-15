@@ -1,4 +1,4 @@
-using System.Windows;
+﻿using System.Windows;
 using System.Windows.Automation;
 using System.Windows.Controls;
 using System.Windows.Controls.Primitives;
@@ -30,7 +30,7 @@ namespace Beautiful.App.Controls;
 /// <para>
 /// 【每个控件都真的动东西，且只有三条落地路径】
 /// ① 主题 → <see cref="TopBarContext.ApplyTheme"/>（托盘菜单/设置窗口同一条：落盘 + ThemeManager.Apply）；
-/// ② 任务栏策略/三个开关 → App 的 Set* 入口（落盘 + TaskbarManager.Apply / App.ApplyDockLayout / 媒体 VM 旗标）；
+/// ② 任务栏策略/四个开关 → App 的 Set* 入口（落盘 + TaskbarManager.Apply / App.ApplyDockLayout / 媒体 VM 旗标）；
 /// ③ 音量 → <see cref="SystemVolumeService"/>（Core Audio 端点，真写系统）。
 /// "什么算开、点了写什么值"这些判断全在 <see cref="QuickSettings"/> / <see cref="VolumeMath"/>（Core，有单测），
 /// 本类只做渲染与事件接线——所以界面与设置页永远不会对同一个设置项给出两种解释。
@@ -167,7 +167,11 @@ public partial class ControlCenterPanel : UserControl, IBackdropAware
 
     // ---------- 开关砖块 ----------
 
-    /// <summary>三个开关砖块：完全按 <see cref="QuickSettings.ToggleTiles"/> 的投影生成（含置灰与原因）。</summary>
+    /// <summary>
+    /// 四个开关砖块：完全按 <see cref="QuickSettings.ToggleTiles"/> 的投影生成（含置灰与原因）。
+    /// 其中"壁纸取色"的一块要问 <see cref="WallpaperAccentService"/> 当前读不读得到壁纸文件——
+    /// 读不到（纯色桌面/幻灯片）就灰着写原因，而不是点上去后画面一动不动。
+    /// </summary>
     private void BuildTiles()
     {
         var previous = _loading;
@@ -176,8 +180,9 @@ public partial class ControlCenterPanel : UserControl, IBackdropAware
         {
             var settings = SettingsService.Current;
             var theme = ThemeManager.Current;
+            var accentAvailable = WallpaperAccentService.IsWallpaperReadable();
             TileHost.Children.Clear();
-            foreach (var tile in QuickSettings.ToggleTiles(settings, theme))
+            foreach (var tile in QuickSettings.ToggleTiles(settings, theme, accentAvailable))
             {
                 var toggle = new ToggleButton
                 {
@@ -213,6 +218,7 @@ public partial class ControlCenterPanel : UserControl, IBackdropAware
             case QuickSettings.MagnificationId: App.SetMagnification(on); break;
             case QuickSettings.ReflectionId: App.SetReflection(on); break;
             case QuickSettings.MediaCapsuleId: App.SetMediaCapsule(on); break;
+            case QuickSettings.WallpaperAccentId: App.SetWallpaperAccent(on); break;
             default: break;   // 未知砖块 Id：不写任何东西，下面的重投影会把界面拉回真值
         }
         RebuildTilesDeferred();

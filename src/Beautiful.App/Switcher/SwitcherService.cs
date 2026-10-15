@@ -58,6 +58,14 @@ public sealed class SwitcherService : IDisposable
     /// <summary>Alt+Tab 事件源（面板直接订阅其 Next/Previous 等事件做动画；提交动作仍回调本服务）。</summary>
     public AltTabHook Hook { get; }
 
+    /// <summary>
+    /// 钩子是否为启动器热键保活（v3 T7）。true 时即使"接管 Alt+Tab"关着，钩子也<b>留在场上但不吞键</b>
+    /// （<see cref="AltTabHook.Enabled"/> = false），否则关掉切换器会连带把启动器热键一起弄没——
+    /// 那两个功能共用一条 WH_KEYBOARD_LL，挂/摘在这里集中决定，App 侧不需要知道钩子的存在。
+    /// </summary>
+    public bool KeepHookForLauncher { get; set; }
+
+
     /// <summary>当前分组快照（仅在 <see cref="Opened"/> 之后保证新鲜；面板打开期间不重排，避免高亮跳动）。</summary>
     public IReadOnlyList<SwitcherApp> Apps => _apps;
 

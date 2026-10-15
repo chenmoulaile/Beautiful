@@ -2,6 +2,7 @@ using System.Windows;
 using System.Windows.Media;
 using Beautiful.Core.Themes;
 using Application = System.Windows.Application;
+using Color = System.Windows.Media.Color;   // UseWindowsForms 隐式 using 与 System.Drawing.Color 冲突
 using Point = System.Windows.Point;
 
 namespace Beautiful.App.Themes;
@@ -17,6 +18,12 @@ public static class ThemeManager
     public static ThemeDefinition Current { get; private set; } = ThemeDefinition.HarmonyOs();
     public static event Action<ThemeDefinition>? ThemeChanged;
 
+    /// <summary>主题字典里强调色的资源键（Dock 指示条/顶栏高亮/启动器选中行都 DynamicResource 引用它）。</summary>
+    private const string AccentKey = "ThemeAccent";
+
+    /// <summary>壁纸取色的覆盖值（null = 不覆盖）。见 <see cref="SetWallpaperAccent"/>。</summary>
+    private static Color? _accentOverride;
+
     public static void Apply(ThemeDefinition theme, Application app)
     {
         Current = theme;
@@ -30,8 +37,58 @@ public static class ThemeManager
             if (app.Resources.MergedDictionaries[i].Source?.OriginalString.Contains("/Themes/") == true)
                 app.Resources.MergedDictionaries.RemoveAt(i);
         app.Resources.MergedDictionaries.Add(dict);
+        // 壁纸取色开着时，换主题必须把覆盖重新贴回新字典（否则"切一下主题强调色就跑回主题值"，
+        // 用户看到的是开关明明开着却失效了）。撤销覆盖同样是这里说了算。
+        ApplyAccentOverride(app);
         ThemeChanged?.Invoke(theme);
     }
+
+    /// <summary>
+    /// 设/撤壁纸强调色覆盖（v3 T7）。<b>只改当前主题字典里 <see cref="AccentKey"/> 这一个键的值</b>：
+    /// Themes/*.xaml 的颜色值一个都不动（那是主题的作者意图，覆盖它等于篡改主题），也不新增第二套键名。
+    /// 传 null 即把该键写回 <see cref="ThemeDefinition.AccentHex"/>——主题定义里本来就有这个十六进制，
+    /// 于是"撤销"有一个与 XAML 同源的准确答案，不需要自己记住"原来的画刷是谁"。
+    /// </summary>
+    public static void SetWallpaperAccent(Color? accent)
+    {
+        _accentOverride = accent;
+        if (System.Windows.Application.Current is { } app) ApplyAccentOverride(app);
+    }
+
+    /// <summary>当前覆盖值（诊断/设置页回显用；null = 强调色仍由主题决定）。</summary>
+    public static Color? WallpaperAccent => _accentOverride;
+
+    private static void ApplyAccentOverride(Application app)
+    {
+        var dict = FindThemeDictionary(app);
+        if (dict is null) return;   // 主题字典尚未合并（构造早期）：Apply 时会再贴一次，这里不抢跑
+        var brush = new SolidColorBrush(_accentOverride ?? ParseAccentHex(Current.AccentHex));
+        brush.Freeze();             // 冻结后才能被渲染线程共享（与主题字典里其余画刷同一形态）
+        dict[AccentKey] = brush;
+    }
+
+    /// <summary>主题定义里的强调色 → Color。形状固定是 "#RRGGBB"，解析失败绝不猜一个颜色画上去。</summary>
+    private static Color ParseAccentHex(string hex)
+    {
+        try
+        {
+            return (Color)System.Windows.Media.ColorConverter.ConvertFromString(hex);
+        }
+        catch (FormatException)
+        {
+            return Color.FromRgb(0x0A, 0x59, 0xF7);
+        }
+    }
+
+    /// <summary>取当前合并字典里那份来自 /Themes/*.xaml 的字典（与 <see cref="ApplyIconSize"/> 同一找法）。</summary>
+    private static ResourceDictionary? FindThemeDictionary(Application app)
+    {
+        for (var i = app.Resources.MergedDictionaries.Count - 1; i >= 0; i--)
+            if (app.Resources.MergedDictionaries[i].Source?.OriginalString.Contains("/Themes/") == true)
+                return app.Resources.MergedDictionaries[i];
+        return null;
+    }
+
 
     /// <summary>
     /// 注入 Dock 的**度量类**主题键：图标尺寸（设置项 DockIconSize 覆盖主题默认）与分隔符几何。

@@ -66,8 +66,26 @@ public sealed record AppSettings
     /// <summary>前台为全屏应用时是否放行原生 Alt+Tab（游戏兜底）。</summary>
     public bool FullscreenPassthrough { get; init; } = true;
 
-    /// <summary>启动器热键（小写规范形，如 "ctrl+space"）。</summary>
-    public string LauncherHotkey { get; init; } = "ctrl+space";
+    /// <summary>
+    /// 启动器（v3 T7 Spotlight 式搜索面板）是否可用：热键与顶栏入口都受这一项控制。
+    /// 关掉时键盘钩子不再为它保活（见 SwitcherService.KeepHookForLauncher）。
+    /// </summary>
+    public bool LauncherEnabled { get; init; } = true;
+
+    /// <summary>
+    /// 启动器热键（小写规范形，如 "ctrl+alt+space"）。
+    /// <b>默认不能用 Ctrl+Space</b>：那是系统 IME 中英切换的既有绑定，占掉它等于让用户在所有应用里
+    /// 敲不出空格（v3 裁定：宁可键位土一点，也不抢系统级组合），因此给 Ctrl+Alt+Space 这种
+    /// 系统未占用、且不需要 Win 键的组合。
+    /// </summary>
+    public string LauncherHotkey { get; init; } = "ctrl+alt+space";
+
+    /// <summary>
+    /// 是否用当前壁纸的取色结果覆盖主题强调色（v3 T7）。关（默认）时主题观感与取色功能上线前完全一致；
+    /// 开时由 App 侧读壁纸 → <see cref="Imaging.DominantColor"/> 取色 → 覆盖 <c>ThemeAccent</c> 一个资源键，
+    /// <b>不改任何 Themes/*.xaml 的颜色值</b>（取不到色即回落，见 App 侧 WallpaperAccentService）。
+    /// </summary>
+    public bool UseWallpaperAccent { get; init; }
 
     /// <summary>Dock 是否自动收起。</summary>
     public bool AutoHideDock { get; init; }
@@ -139,7 +157,9 @@ public sealed record AppSettings
     /// 小写去空白后比对白名单，未知值收敛为默认，避免手改配置把 App 侧映射打到兜底分支之外的未定义行为。
     /// 显示器选择器（DockMonitor/TopBarMonitor）走 <see cref="MonitorSelectorOrDefault"/>：
     /// 关键字（auto/primary）之外只接受 1..MaxMonitorIndex 的十进制序号。
-    /// 热键是自由文本（改键由 App 侧解析并在注册失败时提示），只做 null/空白兜底。
+    /// 热键：切换器是自由文本（只做 null/空白兜底，解析失败由 App 侧回退 Alt 并留日志）；启动器热键则在这里
+    /// 就要求"至少一个修饰键 + 可识别主键"（见 Launcher.LauncherHotkey），因为它的后果是<b>全局吞键</b>——
+    /// 一个没有修饰键的组合（如 "space"）会把所有应用的空格吃掉，这种值绝不允许落进配置。
     /// 手改 JSON 可能把字符串字段写成 null（System.Text.Json 会把 null 填进非可空 string 属性）
     /// 或空串/纯空白，一律兜默认，避免 NRE 漏出 Load 的自愈网；布尔字段无需规范化——JSON 里写成
     /// 非布尔会触发 JsonException，由 AppSettingsStore 按损坏文件处理。
@@ -152,7 +172,7 @@ public sealed record AppSettings
         SwitcherStyle = Canonical(SwitcherStyle, "macos", KnownSwitcherStyles),
         DockPosition = Canonical(DockPosition, "bottom", KnownDockPositions),
         SwitcherHotkey = HotkeyOrDefault(SwitcherHotkey, "alt+tab"),
-        LauncherHotkey = HotkeyOrDefault(LauncherHotkey, "ctrl+space"),
+        LauncherHotkey = Launcher.LauncherHotkey.Canonicalize(LauncherHotkey),
         DockIconSize = Math.Clamp(DockIconSize, MinDockIconSize, MaxDockIconSize),
         MagnificationStrength = Math.Clamp(MagnificationStrength, MinMagnificationStrength, MaxMagnificationStrength),
         DockMonitor = MonitorSelectorOrDefault(DockMonitor),

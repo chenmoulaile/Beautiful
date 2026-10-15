@@ -1,4 +1,4 @@
-using System.Threading;
+﻿using System.Threading;
 using System.Threading.Tasks;
 using System.Windows;
 using System.Windows.Threading;
@@ -40,6 +40,7 @@ public partial class App : Application
     private TopBarWindow? _topBar;
     private Switcher.SwitcherService? _switcher;
     private Switcher.SwitcherWindow? _switcherWindow;
+    private Launcher.LauncherService? _launcher;
     private Settings.SettingsWindow? _settingsWindow;
     private TrayIconManager? _tray;
     private bool _exiting;
@@ -92,7 +93,19 @@ public partial class App : Application
 
             // 6.6 切换器（Task 11）：Alt+Tab 接管。同样按"附属能力"处理——钩子装不上只是退回原生
             // Alt+Tab，绝不能连坐主 UI；但退出时必须先卸钩（见 ExitApp/OnExit）。
+            // 启动器热键<b>共用</b>这一条 WH_KEYBOARD_LL（钩子回调里两条分支各判各的组合键，见 AltTabHook），
+            // 因此装配顺序是"先切器、后启动器"：切器一侧按 KeepHookForLauncher 决定钩子装不装，
+            // 启动器只接事件，绝不自己再装第二个全局钩子。
             EnsureSwitcher();
+
+            // 6.7 启动器（v3 T7）：Spotlight 式搜索面板。索引在后台线程扫开始菜单，UI 不等待它。
+            EnsureLauncher();
+
+            // 6.8 壁纸取色（v3 T7）：这个开关开着时启动算一次（解码在后台线程，不阻塞启动序）。
+            // 关着就什么都不做——"关掉时主题观感与取色功能上线前完全一致"是这条功能的验收点。
+            // 取不到色由 WallpaperAccentService 内部回落主题色并留原因，这里不需要再包一层 try。
+            if (SettingsService.Current.UseWallpaperAccent)
+                _ = WallpaperAccentService.RefreshAsync(true);
 
             // 7. --settings：设置窗口命令行入口（与托盘"设置"等效；窗口为单例）
             if (e.Args.Contains("--settings", StringComparer.OrdinalIgnoreCase))
@@ -126,6 +139,7 @@ public partial class App : Application
         // 兜底路径（系统会话结束、显式 Shutdown 等）也要清理；与 ExitApp 重复调用均幂等
         _tray?.Dispose();
         _tray = null;
+        DestroyLauncher();  // 覆盖层是瞬态弹层：兜底路径也要收（Dispose 幂等，ExitApp 已走过一次则 no-op）
         DestroySwitcher(); // 键盘钩子必须卸载（幂等）：残留的 WH_KEYBOARD_LL 会在进程退出时由系统回收，
                            // 但显式 Shutdown 而未走 ExitApp 的路径若卡在非 UI 线程，卸载会失败 → 这里至少留日志
         _taskbar?.Restore(); // Hide/AutoHide 策略下退出必须还原系统任务栏（T16 起保留）
@@ -271,6 +285,7 @@ public partial class App : Application
         Media = () => _dock?.MediaVm,
         OpenMediaPanel = () => _dock?.OpenMediaPanelFromTopBar(),
         OpenSettings = OpenSettings,
+        OpenLauncher = () => _launcher?.Toggle(),
         ReloadDock = ReloadDock,
         Exit = ExitApp,
         ApplyTheme = ApplyThemeFromTray,
@@ -353,6 +368,16 @@ public partial class App : Application
         if (dock is not null) dock.MediaVm.CapsuleVisible = on;
     }
 
+    /// <summary>
+    /// 壁纸取色开关（v3 T7）：落盘 + 立即重放一次取色。设置页与控制中心共用这一个入口
+    /// （与放大/倒影/媒体胶囊同一形状：值只经 QuickSettings 折算一次，落地只经这里一次）。
+    /// </summary>
+    public static void SetWallpaperAccent(bool on)
+    {
+        SettingsService.UpdateAndSave(QuickSettings.WithWallpaperAccent(SettingsService.Current, on));
+        _ = WallpaperAccentService.RefreshAsync(on);
+    }
+
 
     // ---------- 切换器生命周期（Task 11） ----------
 
@@ -373,6 +398,13 @@ public partial class App : Application
         {
             svc = new Switcher.SwitcherService();
             svc.Hook.EmergencyDisabled += OnSwitcherEmergencyDisabled;
+            // 启动器热键与 Alt+Tab **共用这条钩子**（AltTabHook 里两条分支各判各的组合键）。
+            // 事件接在组合根而不是让 LauncherService 自己去摸切换器：装/拆都在这个方法里看得见，
+            // DestroySwitcher 里有对称的一句解绑（本仓库的长命事件泄漏教训都栽在"不对称"上）。
+            svc.Hook.LauncherRequested += OnLauncherHotkey;
+            // 关掉 Alt+Tab 接管不等于可以摘钩：启动器还靠它收键。保活旗标必须在 Start 之前就位，
+            // 否则"接管关、启动器开"的机器上钩子压根不会装（热键成了死配置）。
+            svc.KeepHookForLauncher = SettingsService.Current.LauncherEnabled;
             _switcher = svc;
             svc.Start(SettingsService.Current.SwitcherEnabled);
             EnsureSwitcherWindow();
@@ -428,8 +460,81 @@ public partial class App : Application
         var old = _switcher;
         _switcher = null;
         try { old.Hook.EmergencyDisabled -= OnSwitcherEmergencyDisabled; } catch { }
+        try { old.Hook.LauncherRequested -= OnLauncherHotkey; } catch { }
         old.Dispose();
         Logger.Info("切换器已销毁（键盘钩子已卸载、面板已关闭）");
+    }
+
+    // ---------- 启动器生命周期（v3 T7） ----------
+
+    /// <summary>
+    /// 确保启动器服务存在并预热索引（幂等）。与切器同档"附属能力"：装配失败只是没有启动器，
+    /// 绝不连坐 Dock/顶栏。热键本身挂在切器那条钩子上（见 <see cref="EnsureSwitcher"/>），
+    /// 所以这里失败时钩子照常工作，只是按下去没人接。
+    /// </summary>
+    private void EnsureLauncher()
+    {
+        if (_launcher is not null || _exiting) return;
+        if (!SettingsService.Current.LauncherEnabled)
+        {
+            Logger.Info("启动器：设置里已关闭，本次运行不装配");
+            return;
+        }
+        try
+        {
+            _launcher = new Launcher.LauncherService();
+            _launcher.PrewarmIndex();
+            Logger.Info($"启动器已装配（热键={SettingsService.Current.LauncherHotkey}）");
+        }
+        catch (Exception ex)
+        {
+            _launcher = null;
+            Logger.Warn($"启动器装配失败（顶栏入口与热键都将无响应）: {ex.Message}");
+        }
+    }
+
+    /// <summary>热键回调（已由钩子投递到 UI 线程）：开/收两相。启动器被关掉时这一句就是 no-op。</summary>
+    private void OnLauncherHotkey() => _launcher?.Toggle();
+
+    /// <summary>销毁启动器（幂等）：先收面板再释放服务。</summary>
+    private void DestroyLauncher()
+    {
+        if (_launcher is null) return;
+        var old = _launcher;
+        _launcher = null;
+        try { old.Dispose(); }
+        catch (Exception ex) { Logger.Warn($"启动器销毁异常: {ex.Message}"); }
+    }
+
+    /// <summary>
+    /// 设置页"启用启动器"的即时生效入口：落盘 + 重定钩子保活策略 + 关掉时收面板。
+    /// <b>关功能即收界面</b>：留一个已经禁用的功能的面板在屏幕上，是本项目最忌的"假状态"。
+    /// </summary>
+    public static void SetLauncherEnabled(bool enabled)
+    {
+        SettingsService.UpdateAndSave(SettingsService.Current with { LauncherEnabled = enabled });
+        var app = Current as App;
+        if (!enabled) app?._launcher?.Close();
+        if (app?._switcher is { } svc)
+        {
+            svc.KeepHookForLauncher = enabled;
+            // 装/摘在这里统一决定：接管关、启动器开 → 钩子仍需在线（Enabled=false 不吞键，只投递热键）；
+            // 两个都关 → SetHookEnabled 内部会 StopHook 摘干净。
+            svc.SetHookEnabled(SettingsService.Current.SwitcherEnabled);
+        }
+        if (enabled) app?.EnsureLauncher();   // 从关到开时补装配（此前被关过就没建过服务）
+    }
+
+    /// <summary>
+    /// 设置页改启动器热键的即时生效入口：与 <see cref="ApplySwitcherHotkey"/> 同一条注册/自愈路径
+    /// （落盘 → 卸钩 → 重装），改完不需要重启也不需要重载 Dock。
+    /// </summary>
+    public static void ApplyLauncherHotkey(string hotkey)
+    {
+        SettingsService.UpdateAndSave(SettingsService.Current with { LauncherHotkey = hotkey });
+        var app = Current as App;
+        app?._switcher?.StopHook();
+        app?._switcher?.SetHookEnabled(SettingsService.Current.SwitcherEnabled);
     }
 
     /// <summary>
@@ -492,6 +597,7 @@ public partial class App : Application
         try
         {
             _settingsWindow?.Close();
+            DestroyLauncher();           // 先收覆盖层：它和控制中心同为瞬态弹层，退出流程里不该还有窗口在屏幕上
             DestroySwitcher();         // 先收面板 + 卸键盘钩子：退出过程中任何一次 Alt+Tab 都不该被吞，
                                        // 也绝不能在屏幕上留下一块永不消失的切换面板（Task 12）
             DestroyTopBar();           // 顶栏 OnClosing：ABE_TOP ABM_REMOVE（hwnd 销毁前）

@@ -1,4 +1,4 @@
-using System.Text.Json;
+﻿using System.Text.Json;
 using Beautiful.Core.Settings;
 using Xunit;
 
@@ -54,7 +54,9 @@ public class AppSettingsTests
         Assert.True(s.BounceEnabled);
         Assert.Null(s.ReflectionEnabled);   // v3 T4 三态：null = 跟随主题默认（不再由设置硬关/硬开）
         Assert.True(s.FullscreenPassthrough);
-        Assert.Equal("ctrl+space", s.LauncherHotkey);
+        Assert.Equal("ctrl+alt+space", s.LauncherHotkey);
+        Assert.True(s.LauncherEnabled);       // v3 T7：启动器默认开（关掉它等于没有这个功能）
+        Assert.False(s.UseWallpaperAccent);   // 壁纸取色默认关：主题观感与取色功能上线前完全一致
         Assert.False(s.AutoHideDock);
     }
 
@@ -102,13 +104,13 @@ public class AppSettingsTests
         Assert.Equal("macos", nulled.SwitcherStyle);
         Assert.Equal("bottom", nulled.DockPosition);
         Assert.Equal("alt+tab", nulled.SwitcherHotkey);
-        Assert.Equal("ctrl+space", nulled.LauncherHotkey);
+        Assert.Equal("ctrl+alt+space", nulled.LauncherHotkey);
 
         var blank = new AppSettings { SwitcherStyle = "   ", DockPosition = "", SwitcherHotkey = "  ", LauncherHotkey = "" }.Normalized();
         Assert.Equal("macos", blank.SwitcherStyle);
         Assert.Equal("bottom", blank.DockPosition);
         Assert.Equal("alt+tab", blank.SwitcherHotkey);
-        Assert.Equal("ctrl+space", blank.LauncherHotkey);
+        Assert.Equal("ctrl+alt+space", blank.LauncherHotkey);
     }
 
     [Fact]
@@ -316,7 +318,9 @@ public class AppSettingsStoreTests : IDisposable
         Assert.True(s.BounceEnabled);
         Assert.Null(s.ReflectionEnabled);   // v3 T4 三态：null = 跟随主题默认（不再由设置硬关/硬开）
         Assert.True(s.FullscreenPassthrough);
-        Assert.Equal("ctrl+space", s.LauncherHotkey);
+        Assert.Equal("ctrl+alt+space", s.LauncherHotkey);
+        Assert.True(s.LauncherEnabled);       // v3 T7：启动器默认开（关掉它等于没有这个功能）
+        Assert.False(s.UseWallpaperAccent);   // 壁纸取色默认关：主题观感与取色功能上线前完全一致
         Assert.False(s.AutoHideDock);
     }
 

@@ -23,6 +23,9 @@ public sealed record TopBarContext
     /// <summary>设置…：打开设置窗口（复用 App.OpenSettings）。</summary>
     public required Action OpenSettings { get; init; }
 
+    /// <summary>启动器（v3 T7）：开/收 Spotlight 式搜索面板（复用 App 的启动器服务，与热键同一入口）。</summary>
+    public required Action OpenLauncher { get; init; }
+
     /// <summary>重载 Dock（复用 App.ReloadDock；顶栏随之重建）。</summary>
     public required Action ReloadDock { get; init; }
 

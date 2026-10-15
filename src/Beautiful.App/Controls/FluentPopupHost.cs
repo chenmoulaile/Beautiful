@@ -1,4 +1,4 @@
-// 自绘菜单，视觉对标 macOS；无第三方代码。
+﻿// 自绘菜单，视觉对标 macOS；无第三方代码。
 using System.Runtime.InteropServices;
 using System.Windows;
 using System.Windows.Interop;
@@ -214,8 +214,10 @@ public class FluentPopupHost : Window
                c.Y >= r.Top - inflate && c.Y <= r.Bottom + inflate;
     }
 
-    /// <summary>锚点所在显示器的工作区（物理像素，扣任务栏）；异常回退主屏全屏。</summary>
-    private static Rect WorkAreaOf(Point anchorPhysicalPx)
+    /// <summary>锚点所在显示器的工作区（物理像素，扣任务栏）；异常回退主屏全屏。
+    /// internal：启动器覆盖层要按"光标所在屏"把卡片水平居中并落在上三分之一处，与此处落位规则同源，
+    /// 不再另抄一份 MonitorFromPoint/GetMonitorInfo。</summary>
+    internal static Rect WorkAreaOf(Point anchorPhysicalPx)
     {
         var pt = new POINT { X = (int)Math.Round(anchorPhysicalPx.X), Y = (int)Math.Round(anchorPhysicalPx.Y) };
         var mon = MonitorFromPoint(pt, MonitorDefaultToNearest);
@@ -231,7 +233,7 @@ public class FluentPopupHost : Window
     /// MonitorFromPoint(TONEAREST)+GetDpiForMonitor(MDT_EFFECTIVE_DPI)；shcore 不可用或异常时
     /// 回退 <c>GetDpiForWindow</c>（单屏主 DPI 场景等价），再兜底 1.0。
     /// </summary>
-    private static double ScaleOfAnchor(Point anchorPhysicalPx, IntPtr fallbackHwnd)
+    internal static double ScaleOfAnchor(Point anchorPhysicalPx, IntPtr fallbackHwnd)
     {
         var pt = new POINT { X = (int)Math.Round(anchorPhysicalPx.X), Y = (int)Math.Round(anchorPhysicalPx.Y) };
         var mon = MonitorFromPoint(pt, MonitorDefaultToNearest);

@@ -198,6 +198,16 @@ internal static partial class NativeMethods
     public const int VkLControl = 0xA2, VkRControl = 0xA3;
     public const int VkLMenu = 0xA4, VkRMenu = 0xA5; // VK_LMENU/RMENU（左右 Alt 分别跟踪）
 
+    // 启动器热键的主键映射用（LauncherHotkey 的 KeyNames 表与此一一对应，见 App.Launcher.VirtualKeyMap）：
+    // 数字/字母按码位算（VK_A=0x41…、VK_0=0x30…），F1 起连续，导航键与 OEM 键各给一个常量。
+    public const int VkBack = 0x08, VkReturn = 0x0D, VkSpace = 0x20;
+    public const int VkPrior = 0x21, VkNext = 0x22, VkEnd = 0x23, VkHome = 0x24;
+    public const int VkF1 = 0x70;                                    // F1..F12 连续
+    public const int VkOemMinus = 0xBD, VkOemPlus = 0xBB, VkOemComma = 0xBC, VkOemPeriod = 0xBE;
+    public const int VkOem2 = 0xBF;          // VK_OEM_2 = 斜杠 "/"
+    public const int VkOem4 = 0xDB, VkOem5 = 0xDC, VkOem6 = 0xDD, VkOem7 = 0xDE, VkOem1 = 0xBA;
+
+
     // KBDLLHOOKSTRUCT 不在此声明：回调按偏移手工读字段（布局见 LowLevelKeyboardHook.Invoke 注释），
     // 结构体封送从未启用（评审附带：删除死声明）。LlkhfUp 同理删除——抬起判定用消息号不用标志位。
     public const uint LlkhfInjected = 0x10, LlkhfAltDown = 0x20;
@@ -263,6 +273,19 @@ internal static partial class NativeMethods
 
     [DllImport("user32.dll")] public static extern int GetSystemMetrics(int index); // SM_CYSCREEN=1；
     // v3 T1 起**不得**再用于条带/贴边几何（那只有主屏），仅保留给弹层最后兜底（FluentPopupHost）。
+
+    // ---------- 桌面壁纸（v3 T7 壁纸取色） ----------
+    // SystemParametersInfoW 的字符串参数按 SPI_GETDESKWALLPAPER 约定**必须由调用方预填满缓冲区**
+    // （缓冲区大小取返回的 uiParam），否则返回 FALSE；路径上限是 MAX_PATH。
+    // 取不到不等于没壁纸：Windows 壁纸幻灯片（WPP 文件）与"纯色桌面"下该值都是空串——
+    // 调用方（WallpaperAccentService）据此回落主题强调色并记录原因，绝不拿空串去解图。
+    // 这里只做**读**：程序从不改用户桌面（换壁纸是用户的权利，验收脚本用自己的 P/Invoke 临时改再还原）。
+    public const int SpiGetDeskWallpaper = 0x0073;
+    public const int MaxPath = 260;
+
+    [DllImport("user32.dll", CharSet = CharSet.Unicode)]
+    public static extern bool SystemParametersInfo(int uiAction, int uiParam, StringBuilder pvParam, int fWinIni);
+
 
     // ---------- DWM ----------
     public const int DwmwaCloaked = 14;

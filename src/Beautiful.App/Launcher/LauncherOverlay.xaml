@@ -1,0 +1,143 @@
+<UserControl x:Class="Beautiful.App.Launcher.LauncherOverlay"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             Focusable="False" IsTabStop="False"
+             AutomationProperties.Name="启动器面板"
+             TextOptions.TextFormattingMode="Ideal"
+             TextOptions.TextRenderingMode="Grayscale"
+             FontFamily="{DynamicResource ThemeFontFamily}"
+             Foreground="{DynamicResource ThemeTextPrimary}">
+
+    <!-- Spotlight 式启动器覆盖层（v3 T7）。
+         【材质与托盘菜单/控制中心同源，数值也刻意同值】宿主是 FluentPopupHost（分层窗口 + 显示前抓屏模糊），
+         叠放顺序 = Card.Background（抓屏模糊或实心卡底）→ Scrim（有模糊时压深色遮罩保对比）→
+         TintLayer（ThemeBackdropTint）→ InnerGlow（顶部内高光）。Shell.Margin 给自绘投影留位：
+         分层窗口上"没画到"就是能看穿到桌面的洞，两条分支都必须铺满整张卡。
+         这两份卡底画刷没有抽公共字典：抽出来要改已在用的 FluentMenu.xaml / ControlCenterPanel.xaml，
+         而 brief 明确不许动既有面板，于是按同一数值新增第三处，并在各自注释里互相指认。
+         【Card 定宽 + 内部星号行】宿主按 Measure(inf,inf) 同步量尺寸来决定落位与是否翻转，
+         定宽让结果行的换行在第一趟布局就定形（与 CalendarFlyout 同一教训）。 -->
+    <UserControl.Resources>
+        <LinearGradientBrush x:Key="CardFillSolid" StartPoint="0,0" EndPoint="0,1">
+            <GradientStop Color="#F82C2C2F" Offset="0"/>
+            <GradientStop Color="#FB1F1F23" Offset="1"/>
+        </LinearGradientBrush>
+        <LinearGradientBrush x:Key="CardFillBlur" StartPoint="0,0" EndPoint="0,1">
+            <GradientStop Color="#8A232327" Offset="0"/>
+            <GradientStop Color="#9919191C" Offset="1"/>
+        </LinearGradientBrush>
+        <DropShadowEffect x:Key="CardShadow" BlurRadius="36" ShadowDepth="10" Direction="270"
+                          Color="#000000" Opacity="0.62"/>
+
+        <!-- 结果行：整行是命中区（点哪行启动哪行），选中态用 ThemeAccent 的一层低透明度底 + 左缘 2px 亮条。
+             透明度而不是实心：强调色要压在抓屏模糊之上，实心会把图标与名称糊成一片；
+             而且强调色来自 DynamicResource，壁纸取色（v3 T7）打开时这一条会自己跟着变。
+             【不用 Effect/不加动画】本面板是瞬态表面，但行模板会被虚拟化重排：Effect 会把它推进
+             离屏滤镜管线（本项目对 Dock 的逐帧路径已裁定禁止），这里也无需引入第二套材质。 -->
+        <Style x:Key="RowStyle" TargetType="Border">
+            <Setter Property="Height" Value="40"/>
+            <Setter Property="CornerRadius" Value="8"/>
+            <Setter Property="Background" Value="Transparent"/>
+            <Setter Property="Padding" Value="9,0"/>
+            <Style.Triggers>
+                <DataTrigger Binding="{Binding IsSelected}" Value="True">
+                    <Setter Property="Background" Value="{DynamicResource ThemeAccent}"/>
+                    <Setter Property="Opacity" Value="0.92"/>
+                </DataTrigger>
+            </Style.Triggers>
+        </Style>
+
+        <!-- 搜索框：无边框、大字号、底色透明（玻璃卡上不画"输入控件的白盒子"）。 -->
+        <Style x:Key="SearchStyle" TargetType="TextBox">
+            <Setter Property="Foreground" Value="{DynamicResource ThemeTextPrimary}"/>
+            <Setter Property="CaretBrush" Value="{DynamicResource ThemeTextPrimary}"/>
+            <Setter Property="Background" Value="Transparent"/>
+            <Setter Property="BorderThickness" Value="0"/>
+            <Setter Property="FontSize" Value="20"/>
+            <Setter Property="VerticalContentAlignment" Value="Center"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="TextBox">
+                        <ScrollViewer x:Name="PART_ContentHost" VerticalAlignment="Center"/>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+    </UserControl.Resources>
+
+    <Grid x:Name="Shell" Margin="22,20,22,26">
+        <Border x:Name="Card" Width="620" CornerRadius="14" BorderThickness="1" BorderBrush="#2AFFFFFF"
+                Background="{StaticResource CardFillSolid}" Effect="{StaticResource CardShadow}">
+            <Grid>
+                <Border x:Name="Scrim" CornerRadius="13" IsHitTestVisible="False" Background="Transparent"/>
+                <Border x:Name="TintLayer" CornerRadius="13" IsHitTestVisible="False"
+                        Background="{DynamicResource ThemeBackdropTint}"/>
+                <Border x:Name="InnerGlow" CornerRadius="13" IsHitTestVisible="False">
+                    <Border.Background>
+                        <LinearGradientBrush StartPoint="0,0" EndPoint="0,1">
+                            <GradientStop Color="#14FFFFFF" Offset="0"/>
+                            <GradientStop Color="#05FFFFFF" Offset="0.35"/>
+                            <GradientStop Color="#00FFFFFF" Offset="1"/>
+                        </LinearGradientBrush>
+                    </Border.Background>
+                </Border>
+
+                <StackPanel>
+                    <!-- 搜索行：图标 + 输入框。键位提示放在结果区下方，避免与用户正在打的字抢位置。 -->
+                    <Grid Margin="15,13,15,9">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="Auto"/>
+                            <ColumnDefinition Width="*"/>
+                        </Grid.ColumnDefinitions>
+                        <TextBlock x:Name="SearchGlyph" Grid.Column="0" Text="&#xE721;" FontSize="18"
+                                   FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets"
+                                   VerticalAlignment="Center" Margin="2,0,11,0" Opacity="0.72"/>
+                        <TextBox x:Name="SearchBox" Grid.Column="1" Style="{StaticResource SearchStyle}"
+                                 AutomationProperties.Name="启动器搜索框"
+                                 TextChanged="Search_TextChanged"/>
+                    </Grid>
+
+                    <!-- 结果列表：行内是图标 + 名称 + 启动目标（真实路径，不是编的副标题）。
+                         没有结果时整块隐藏，由下面的 StatusText 说明原因（建索引中 / 没有匹配 / 共 N 条）。 -->
+                    <ItemsControl x:Name="Results" Margin="7,0,7,2"
+                                  AutomationProperties.Name="启动器结果列表">
+                        <ItemsControl.ItemTemplate>
+                            <DataTemplate>
+                                <Border Style="{StaticResource RowStyle}" MouseLeftButtonUp="Row_MouseUp"
+                                        ToolTip="{Binding LaunchPath}"
+                                        AutomationProperties.Name="{Binding Name}">
+                                    <Grid>
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="Auto"/>
+                                            <ColumnDefinition Width="*"/>
+                                            <ColumnDefinition Width="Auto"/>
+                                        </Grid.ColumnDefinitions>
+                                        <Image Grid.Column="0" Width="26" Height="26" Margin="0,0,10,0"
+                                               Source="{Binding Icon}"
+                                               RenderOptions.BitmapScalingMode="HighQuality"/>
+                                        <!-- 取不到图标的条目画一个空框而不是 ▣ 之类的假图标：
+                                             名字与路径已经足够指认，字形占位会被误读成"这就是它的图标"。 -->
+                                        <Border Grid.Column="0" Width="26" Height="26" Margin="0,0,10,0"
+                                                BorderBrush="#33FFFFFF" BorderThickness="1" CornerRadius="5"
+                                                Visibility="{Binding IconMissing}"/>
+                                        <TextBlock Grid.Column="1" Text="{Binding Name}" FontSize="14"
+                                                   VerticalAlignment="Center" TextTrimming="CharacterEllipsis"/>
+                                        <TextBlock Grid.Column="2" Text="{Binding Target}" FontSize="11"
+                                                   VerticalAlignment="Center" Margin="12,0,2,0" Opacity="0.55"
+                                                   MaxWidth="210" TextTrimming="CharacterEllipsis"/>
+                                    </Grid>
+                                </Border>
+                            </DataTemplate>
+                        </ItemsControl.ItemTemplate>
+                    </ItemsControl>
+
+                    <TextBlock x:Name="StatusText" Margin="17,2,17,4" FontSize="11.5" Opacity="0.72"
+                               TextTrimming="CharacterEllipsis"/>
+                    <Border Height="1" Margin="15,2,15,6" Background="#1AFFFFFF"/>
+                    <TextBlock x:Name="HintText" Margin="17,0,17,11" FontSize="11" Opacity="0.55"
+                               Text="Enter 启动 · ↑ ↓ 选择 · Esc 关闭"/>
+                </StackPanel>
+            </Grid>
+        </Border>
+    </Grid>
+</UserControl>
