@@ -13,6 +13,8 @@ using App = Beautiful.App.App;                   // 设置窗口在 Beautiful.Ap
 using Brush = System.Windows.Media.Brush;
 using Color = System.Windows.Media.Color;
 using ColorConverter = System.Windows.Media.ColorConverter;
+using ComboBox = System.Windows.Controls.ComboBox;                                 // 消歧：WinForms 隐式 using 带入同名控件
+using SelectionChangedEventArgs = System.Windows.Controls.SelectionChangedEventArgs; // 同上
 using MessageBox = System.Windows.MessageBox;
 using OpenFileDialog = Microsoft.Win32.OpenFileDialog;
 
@@ -22,11 +24,13 @@ namespace Beautiful.App.Settings;
 /// 设置窗口 v2（入口：托盘"设置"/托盘双击/顶栏"设置…"/--settings 命令行；App 侧单例管理）。
 /// 全部改动即时生效并持久化，无"确定/应用"按钮；非模态、非置顶，不遮挡 Dock。
 /// 分组：外观（主题/图标大小/放大强度/倒影/弹跳）· 系统（任务栏策略/顶栏/自启 + 退出提示）·
-/// 窗口切换器（接管开关/样式/全屏直通/应急键说明）· 媒体与歌词（胶囊/失焦收起/偏移/预览）· 固定应用。
+/// 显示器（Dock 与顶栏各自所在显示器，v3 T1）· 窗口切换器（接管开关/样式/全屏直通/应急键说明）·
+/// 媒体与歌词（胶囊/失焦收起/偏移/预览）· 固定应用。
 /// 各 live 目标：
 /// 主题 → ThemeManager.Apply（DockWindow 订阅 ThemeChanged 自行重落尺寸/放大/遮罩）；
 /// 图标大小/放大强度/倒影 → App.ApplyDockLayout（DockWindow 重排条目几何 + 覆盖 ThemeIconSize/遮罩 + 按需重排条带）；
 /// 任务栏 → TaskbarManager.Apply；顶栏 → App.SetTopBarEnabled；自启 → 注册表；
+/// 显示器选择 → App.ApplyDockLayout / App.ApplyTopBarGeometry（按新屏的 rcMonitor 与有效 DPI 重新协商条带并搬窗）；
 /// 切换器接管 → App.SetSwitcherEnabled；样式 → 持久化（面板下次呼出重读）；全屏直通 → App.ApplySwitcherHotkey；
 /// 偏移 → MediaViewModel.ApplyLyricsOffset；胶囊/失焦收起 → MediaViewModel 标志；
 /// 固定应用 → dock.json + DockViewModel.ReloadPinned。
@@ -35,7 +39,7 @@ namespace Beautiful.App.Settings;
 /// 悬停预览自 Task 13 起由 DWM 缩略图渲染（最小化窗口无可预览源，属 Windows 合成本身的限制）。
 /// 唯一无渲染项是 Dock 停靠边：未提供控件，底部注释已如实说明（底部 AppBar 专化）。
 /// 写入统一经 SettingsService.Update/UpdateAndSave（内部过 AppSettings.Normalized），内存态永不越界。
-/// 初始化期间 _loading 屏蔽 Checked/ValueChanged 处理器，避免构造期回写。
+/// 初始化期间 _loading 屏蔽 Checked/ValueChanged/SelectionChanged 处理器，避免构造期回写。
 /// </summary>
 public partial class SettingsWindow : Window
 {
@@ -111,6 +115,8 @@ public partial class SettingsWindow : Window
         MagnifySlider.Value = s.MagnificationStrength;
         OffsetSlider.Value = s.LyricsOffsetMs;
 
+        LoadMonitorSelectors();
+
         _pinned.Clear();
         foreach (var path in _pinnedStore.Load()) _pinned.Add(path);
 
@@ -146,6 +152,30 @@ public partial class SettingsWindow : Window
             "autohide" => "自动隐藏：光标移到屏幕底边即可唤出原生任务栏。",
             _ => "保留：不改动原生任务栏，Dock 悬停在其上方。"
         };
+    }
+
+    /// <summary>
+    /// 填充两个显示器下拉并回显当前设置。选项由 <see cref="MonitorGeometry.Options"/> 现场枚举
+    /// （auto / primary / 每一块屏的真实分辨率与原点）——序号只有在本次枚举里才有意义，
+    /// 所以标签必须把分辨率/原点写出来，用户才知道"显示器 2"是哪一块。
+    /// </summary>
+    private void LoadMonitorSelectors()
+    {
+        var s = SettingsService.Current;
+        FillMonitorBox(DockMonitorBox, s.DockMonitor);
+        FillMonitorBox(TopBarMonitorBox, s.TopBarMonitor);
+    }
+
+    private static void FillMonitorBox(ComboBox box, string selected)
+    {
+        box.DisplayMemberPath = nameof(MonitorOption.Label);
+        box.SelectedValuePath = nameof(MonitorOption.Value);
+        box.ItemsSource = MonitorGeometry.Options();
+        box.SelectedValue = selected;
+        // 设置里的序号指向一块已经不存在的屏（拔掉过显示器）：匹配不到项就把下拉显示成 auto，
+        // 但**不改写设置值**——运行时 MonitorGeometry 同样按 auto 解析，两边口径一致，
+        // 且插回那块屏后原选择自动恢复（而不是被一次打开设置悄悄抹掉）。
+        if (box.SelectedItem is null) box.SelectedIndex = 0;
     }
 
     // ---------- 外观 ----------
@@ -221,6 +251,32 @@ public partial class SettingsWindow : Window
         var on = AutostartCheck.IsChecked == true;
         SettingsService.UpdateAndSave(SettingsService.Current with { Autostart = on });
         SettingsService.SetAutostart(on);
+    }
+
+    // ---------- 显示器 ----------
+
+    /// <summary>
+    /// Dock 所在显示器变更：落盘 + 走与图标尺寸同一条重排路径（App.ApplyDockLayout →
+    /// DockWindow.RefreshLayoutFromSettings → ScheduleReposition 防抖 → PositionAsAppBar
+    /// 用新屏的 rcMonitor/有效 DPI 重新协商 ABE_BOTTOM 条带并搬窗）。
+    /// </summary>
+    private void DockMonitor_Changed(object sender, SelectionChangedEventArgs e)
+    {
+        if (_loading) return;
+        var value = DockMonitorBox.SelectedValue as string ?? "auto";
+        if (value == SettingsService.Current.DockMonitor) return;   // ItemsSource 重设等引起的重复选择事件不回写
+        SettingsService.UpdateAndSave(SettingsService.Current with { DockMonitor = value });
+        App.ApplyDockLayout();
+    }
+
+    /// <summary>顶栏所在显示器变更：落盘 + 顶栏按新屏重新协商 ABE_TOP 条带（离散下拉事件，无需防抖）。</summary>
+    private void TopBarMonitor_Changed(object sender, SelectionChangedEventArgs e)
+    {
+        if (_loading) return;
+        var value = TopBarMonitorBox.SelectedValue as string ?? "auto";
+        if (value == SettingsService.Current.TopBarMonitor) return;
+        SettingsService.UpdateAndSave(SettingsService.Current with { TopBarMonitor = value });
+        App.ApplyTopBarGeometry();
     }
 
     // ---------- 窗口切换器 ----------
@@ -313,6 +369,7 @@ public partial class SettingsWindow : Window
         _taskbar.Apply(SettingsService.PolicyOf(s));
         SettingsService.SetAutostart(s.Autostart);
         App.SetTopBarEnabled(s.TopBarEnabled);
+        App.ApplyTopBarGeometry();   // 恢复默认后 TopBarMonitor 回到 auto：已存在的顶栏须按新屏重算条带
         App.SetSwitcherEnabled(s.SwitcherEnabled);
         // 恢复默认后必须连同"触发键 + 全屏直通"整体重放（Task 16 评审 Important#2）：
         // SwitcherService.SetHookEnabled 仅在钩子**未启动**时才回读 Hook.FullscreenPassthrough，

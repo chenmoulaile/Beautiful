@@ -301,6 +301,12 @@ public partial class App : Application
     /// </summary>
     public static void ApplyDockLayout() => (Current as App)?._dock?.RefreshLayoutFromSettings();
 
+    /// <summary>
+    /// 设置页改动 <c>TopBarMonitor</c> 后的即时生效入口（v3 T1）：按新的目标显示器重新协商 ABE_TOP
+    /// 条带并把顶栏窗口搬过去。顶栏未启用/未创建时静默跳过（下次创建时 OnSourceInitialized 读同一设置）。
+    /// </summary>
+    public static void ApplyTopBarGeometry() => (Current as App)?._topBar?.RefreshLayoutFromSettings();
+
     /// <summary>设置页切换 PreviewEnabled 后的即时生效入口：关闭时立即收起正在显示的预览
     /// （开启无需动作——下一次悬停按新值放行）。让该开关不再是死控件。</summary>
     public static void ApplyPreviewEnabled() => (Current as App)?._dock?.ApplyPreviewSetting();

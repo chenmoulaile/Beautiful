@@ -11,6 +11,7 @@ using Beautiful.App.Interop;
 using Beautiful.App.MediaWidget;
 using Beautiful.App.Services;
 using Beautiful.App.Themes;
+using Beautiful.Core.Layout;
 using Beautiful.Core.Themes;
 using Beautiful.Core.TopBar;
 using Brush = System.Windows.Media.Brush;
@@ -57,6 +58,10 @@ public partial class TopBarWindow : AcrylicWindow
     private bool _appbarRegistered;
     private bool _closing;
     private HwndSource? _source;
+    // 最近一次协商出的**目标窗口矩形**（物理 px）。shell 在条带重排时会把顶栏窗口摆到"当前工作区顶边"
+    // ——也就是我们自己预留带的下方一个条带高（本机实测漂到 (0,30)-(1024,60)），这就是用户投诉的
+    // "顶栏不在最上方、上方露一截壁纸"。收到通知后按这个值重申一次，见 AssertWindowRect。
+    private PhysicalRect _windowTarget;
 
     // 前台应用名跟踪（Task 8；Task 11 起改用进程内共享的 ForegroundWatcher，不再自建第二条同款钩子）
     private IDisposable? _foregroundSubscription;
@@ -152,34 +157,103 @@ public partial class TopBarWindow : AcrylicWindow
         PositionAsAppBar();
     }
 
+    /// <summary>
+    /// ABE_TOP 条带定位（v3 T1）：几何唯一来源是<b>本窗口实际所在（或设置指定）的显示器</b>的
+    /// <c>rcMonitor</c> 与该屏有效 DPI（经 <see cref="MonitorGeometry"/> + <c>StripMath</c>），
+    /// 顶栏窗口矩形恒等于预留带 ⇒ <c>window.top == rcMonitor.top</c> 恒成立。
+    /// <para>
+    /// 【顺序是硬约束：先 WPF 属性，后物理 SetWindowPos】v2 先 <c>SetWindowPos</c> 再写
+    /// <c>Left/Top/Width/Height</c>，于是 WPF 在随后的布局帧里按自己的 DIP→物理换算把我们刚落好的
+    /// 矩形覆盖掉——100% DPI 看不出，125%/150% 就是"顶栏上方露出一截壁纸"的那几像素。
+    /// 现在四个 DIP 属性先写、<c>UpdateLayout()</c> 把重排同步做完，物理矩形最后落地。
+    /// </para>
+    /// <para>
+    /// 【QUERYPOS 的顶边仍然尊重 shell】用户的原生任务栏若就停在屏幕顶部，那里已有顶部条带，
+    /// shell 会把可用顶边下压；此时"贴边"的含义是贴 shell 允许的那条边，日志里的 <c>偏移 Npx</c>
+    /// 相对 <c>rcMonitor.top</c> 如实报出来，真机上一眼能判因。
+    /// </para>
+    /// </summary>
     private void PositionAsAppBar()
     {
         if (!_appbarRegistered) return;
-        var dpiScale = NativeMethods.GetDpiForWindow(_hwnd) / 96.0;
-        if (dpiScale <= 0) dpiScale = 1.0;
-        var stripH = (int)Math.Round(BarHeightDip * dpiScale);
-        var screenW = NativeMethods.GetSystemMetrics(0);
-        var screenH = NativeMethods.GetSystemMetrics(1);
+        var target = MonitorGeometry.ForEdge(_hwnd, StripEdge.Top, BarHeightDip, 0,
+                                             SettingsService.Current.TopBarMonitor);
+        if (target is null) return;   // 显示器取不到（拔屏瞬间）：保持上次几何，不写非法矩形
+        var t = target.Value;
+        var stripH = t.Reserve.Height;    // = round(BarHeightDip × 该屏 DPI)，与上报的条高同一个数
 
         _abd.uEdge = NativeMethods.AbeTop;
-        _abd.rc = new NativeMethods.RECT { Left = 0, Top = 0, Right = screenW, Bottom = stripH };
+        _abd.rc = MonitorGeometry.ToNative(t.Reserve);    // 该屏全宽 + 条高（SM_CXSCREEN 已退役）
         NativeMethods.SHAppBarMessage(NativeMethods.AbmQueryPos, ref _abd);
-        var availableTop = _abd.rc.Top;
-        _abd.rc.Bottom = availableTop + stripH;
+        var available = MonitorGeometry.ToCore(_abd.rc);
+        // 以 shell 给的可用顶边为准重建条带（宽度取返回矩形的左右缘 = 该屏全宽）：贴边不变量随之落到
+        // shell 允许的那条边上，高度恒等于期望条高（不让既有 AppBar 把顶栏压矮）。
+        var reserve = StripMath.Reserve(available, stripH, StripEdge.Top);
+        var expect = $"({reserve.Left},{reserve.Top})-({reserve.Right},{reserve.Bottom})";
+        _abd.rc = MonitorGeometry.ToNative(reserve);
         NativeMethods.SHAppBarMessage(NativeMethods.AbmSetPos, ref _abd);
-        var expect = $"(0,{availableTop})-({screenW},{availableTop + stripH})";
-        var actual = $"({_abd.rc.Left},{_abd.rc.Top})-({_abd.rc.Right},{_abd.rc.Bottom})";
-        Logger.Info($"顶栏 AppBar(ABE_TOP) QUERYPOS 可用顶边={availableTop}/screenH={screenH}" +
-                    $" SETPOS rc={actual} 期望={expect} {(actual == expect ? "一致" : "不一致")}");
-        NativeMethods.SetWindowPos(_hwnd, IntPtr.Zero,
-            _abd.rc.Left, _abd.rc.Top,
-            _abd.rc.Right - _abd.rc.Left, _abd.rc.Bottom - _abd.rc.Top,
+        var placed = MonitorGeometry.ToCore(_abd.rc);     // shell 最终预留的带——窗口以它为基准
+        var actual = $"({placed.Left},{placed.Top})-({placed.Right},{placed.Bottom})";
+        var window = StripMath.WindowRect(placed, 0, StripEdge.Top);   // 顶栏无越界生长：窗口 == 预留带
+
+        Logger.Info($"顶栏 AppBar(ABE_TOP) QUERYPOS 可用顶边={available.Top}/rcMonitor顶={t.MonitorRect.Top}" +
+                    $" 条高={stripH}px dpi={t.DpiScale:0.##} monitor=0x{t.Monitor.ToInt64():X}");
+        // 单独一行的 "AppBar SETPOS rc=(l,t)-(r,b)"：scripts/frametime.ps1 按这条正则取条带矩形
+        // （顶栏这行带着 "(ABE_TOP)" 前缀，正则不会误命中它，取到的一定是 Dock 的底边条带）。
+        Logger.Info($"顶栏 条带落位 rc={actual} 期望={expect} {(actual == expect ? "一致" : "不一致")}");
+
+        Left = StripMath.ToDip(window.Left, t.DpiScale);
+        Top = StripMath.ToDip(window.Top, t.DpiScale);
+        Width = Math.Max(1, StripMath.ToDip(window.Width, t.DpiScale));
+        Height = Math.Max(1, StripMath.ToDip(window.Height, t.DpiScale));
+        UpdateLayout();   // 把上面四个属性的重排就地做完，物理落位才真的是"最后一步"
+        _windowTarget = window;
+        ApplyPhysicalRect(window);
+
+        // 回读校验（v3 §1.C）：真机若仍偏移，这一行日志就是判因证据。
+        if (NativeMethods.GetWindowRect(_hwnd, out var back))
+        {
+            var offset = back.Top - t.MonitorRect.Top;
+            Logger.Info($"顶栏几何 window.top={back.Top} rcMonitor.top={t.MonitorRect.Top}" +
+                        $" {(offset == 0 ? "→ 贴边OK" : $"→ 偏移 {offset}px")}" +
+                        $" 预留={actual} 窗口=({back.Left},{back.Top})-({back.Right},{back.Bottom})" +
+                        $" {(SameRect(back, window) ? "落位一致" : $"落位被改写（目标 ({window.Left},{window.Top})-({window.Right},{window.Bottom})）")}");
+        }
+        else
+        {
+            Logger.Warn($"顶栏几何 回读 GetWindowRect 失败，无法校验贴边（目标 ({window.Left},{window.Top})-({window.Right},{window.Bottom})）");
+        }
+    }
+
+    /// <summary>把目标矩形落到物理层（写窗口位置的唯一出口，重申路径复用它）。</summary>
+    private void ApplyPhysicalRect(PhysicalRect window)
+        => NativeMethods.SetWindowPos(_hwnd, IntPtr.Zero, window.Left, window.Top, window.Width, window.Height,
             NativeMethods.SwpNozorder | NativeMethods.SwpNoactivate);
 
-        Left = _abd.rc.Left / dpiScale;
-        Top = _abd.rc.Top / dpiScale;
-        Width = Math.Max(1, (_abd.rc.Right - _abd.rc.Left) / dpiScale);
-        Height = Math.Max(1, (_abd.rc.Bottom - _abd.rc.Top) / dpiScale);
+    private static bool SameRect(NativeMethods.RECT a, PhysicalRect b)
+        => a.Left == b.Left && a.Top == b.Top && a.Right == b.Right && a.Bottom == b.Bottom;
+
+    /// <summary>
+    /// 把窗口矩形重申为 <see cref="_windowTarget"/>：只 <c>SetWindowPos</c>，<b>不</b>重发
+    /// <c>ABM_SETPOS</c>——预留带没变就不会再触发 shell 重排，因此不构成"重申 → 广播 → 再重申"的环
+    /// （与 Dock 里"WM_SETTINGCHANGE 不可重注册"同一条纪律）。矩形已等于目标时静默返回。
+    /// <para>
+    /// 【为什么必须有】本机实测：顶栏落位日志明明是 <c>window=(0,0)-(1024,30) 落位一致</c>，
+    /// 随后（任务栏 autohide 状态位变化 + Dock 重新 SETPOS 之后）窗口被移到 <c>(0,30)-(1024,60)</c>
+    /// ——正好是自己预留带下方一个条带高，即"按当前工作区顶边"摆的。用户看到的"顶栏上方露壁纸"
+    /// 就是这个漂移，与 DPI/渲染无关，属几何侧根因，必须在几何侧兜住。
+    /// </para>
+    /// </summary>
+    private void AssertWindowRect()
+    {
+        if (_closing || !_appbarRegistered) return;
+        if (_windowTarget.Width <= 0 || _windowTarget.Height <= 0) return;   // 尚未定位过（首帧前）
+        if (!NativeMethods.GetWindowRect(_hwnd, out var now)) return;
+        if (SameRect(now, _windowTarget)) return;
+        Logger.Info($"顶栏几何 窗口被移到 ({now.Left},{now.Top})-({now.Right},{now.Bottom})" +
+                    $" ≠ 目标 ({_windowTarget.Left},{_windowTarget.Top})-({_windowTarget.Right},{_windowTarget.Bottom})" +
+                    $"（偏移 {now.Top - _windowTarget.Top}px）→ 重申贴边");
+        ApplyPhysicalRect(_windowTarget);
     }
 
     private void UnregisterAppBar()
@@ -189,13 +263,30 @@ public partial class TopBarWindow : AcrylicWindow
         _appbarRegistered = false;
     }
 
+    /// <summary>
+    /// 设置页改动 <c>TopBarMonitor</c> 后的即时生效入口（App.ApplyTopBarGeometry 调用）：
+    /// 按新的目标显示器重算条带几何并把窗口搬过去。AppBar 句柄与回调注册不动，只重发
+    /// QUERYPOS/SETPOS——与 Dock 的 <c>RefreshLayoutFromSettings</c> 同语义，但不必像 Dock 那样
+    /// 防抖（显示器选择器是下拉框的离散事件，一次改动只来一发）。
+    /// </summary>
+    public void RefreshLayoutFromSettings()
+    {
+        if (_closing) return;
+        PositionAsAppBar();   // 未注册时自身 no-op（OnSourceInitialized 的首帧定位已用同一套几何）
+    }
+
     private IntPtr WndProc(IntPtr hwnd, int msg, IntPtr wParam, IntPtr lParam, ref bool handled)
     {
         if (_appbarMsg != 0 && msg == _appbarMsg)
         {
             handled = true;
+            // ABN_POSCHANGED：shell 重排了条带（实测会连带把本窗口摆到工作区顶边）→ 重申目标矩形。
+            if (wParam.ToInt32() == NativeMethods.AbnPosChanged) Dispatcher.BeginInvoke(AssertWindowRect);
             return IntPtr.Zero;
         }
+        // 任何来源的位置变化都过一遍比对。用 BeginInvoke 排到本次落位之后执行，所以自己写的
+        // SetWindowPos 在这里只命中"已等于目标"的静默分支，不会自激。
+        if (msg == NativeMethods.WmWindowPosChanged) Dispatcher.BeginInvoke(AssertWindowRect);
         if (_taskbarCreatedMsg != 0 && msg == _taskbarCreatedMsg)
         {
             handled = true;

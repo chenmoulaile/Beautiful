@@ -1,3 +1,5 @@
+using System.Globalization;
+
 namespace Beautiful.Core.Settings;
 
 /// <summary>
@@ -63,6 +65,15 @@ public sealed record AppSettings
     /// <summary>Dock 是否自动收起。</summary>
     public bool AutoHideDock { get; init; }
 
+    /// <summary>
+    /// Dock 所在显示器：auto = 启动时光标所在显示器（解析结果按进程粘住，重排不会因鼠标划过别屏而
+    /// 让 Dock 跳走）、primary = 主显示器、其余为设置面板列出的十进制序号（1 起）。
+    /// </summary>
+    public string DockMonitor { get; init; } = "auto";
+
+    /// <summary>顶栏所在显示器（取值口径同 <see cref="DockMonitor"/>；两条 surface 可以分处两屏）。</summary>
+    public string TopBarMonitor { get; init; } = "auto";
+
     /// <summary>合法主题标识（小写）。</summary>
     public static IReadOnlyList<string> KnownThemes { get; } = ["harmonyos", "macos", "linux"];
 
@@ -87,10 +98,21 @@ public sealed record AppSettings
     /// <summary>放大强度上限。</summary>
     public const double MaxMagnificationStrength = 2.5;
 
+    /// <summary>显示器选择器的关键字取值（序号形另由 <see cref="MaxMonitorIndex"/> 界定）。</summary>
+    public static IReadOnlyList<string> KnownMonitorKeywords { get; } = ["auto", "primary"];
+
+    /// <summary>
+    /// 显示器序号上限：Core 不知道在屏有几块显示器（那是运行时的事，由 App 侧 MonitorGeometry
+    /// 解析并在越界时回落 auto），这里只挡住"手改 JSON 写了个荒谬台数"的情况。
+    /// </summary>
+    public const int MaxMonitorIndex = 16;
+
     /// <summary>
     /// 加载侧规范化：数值字段钳制到合法区间（LyricsOffsetMs ±2000、DockIconSize 32..72、
     /// MagnificationStrength 1.0..2.5）；枚举串字段（主题/策略/切换器样式/停靠边）小写去空白后
     /// 比对白名单，未知值收敛为默认，避免手改配置把 App 侧映射打到兜底分支之外的未定义行为。
+    /// 显示器选择器（DockMonitor/TopBarMonitor）走 <see cref="MonitorSelectorOrDefault"/>：
+    /// 关键字（auto/primary）之外只接受 1..MaxMonitorIndex 的十进制序号。
     /// 热键是自由文本（改键由 App 侧解析并在注册失败时提示），只做 null/空白兜底。
     /// 手改 JSON 可能把字符串字段写成 null（System.Text.Json 会把 null 填进非可空 string 属性）
     /// 或空串/纯空白，一律兜默认，避免 NRE 漏出 Load 的自愈网；布尔字段无需规范化——JSON 里写成
@@ -106,7 +128,9 @@ public sealed record AppSettings
         SwitcherHotkey = HotkeyOrDefault(SwitcherHotkey, "alt+tab"),
         LauncherHotkey = HotkeyOrDefault(LauncherHotkey, "ctrl+space"),
         DockIconSize = Math.Clamp(DockIconSize, MinDockIconSize, MaxDockIconSize),
-        MagnificationStrength = Math.Clamp(MagnificationStrength, MinMagnificationStrength, MaxMagnificationStrength)
+        MagnificationStrength = Math.Clamp(MagnificationStrength, MinMagnificationStrength, MaxMagnificationStrength),
+        DockMonitor = MonitorSelectorOrDefault(DockMonitor),
+        TopBarMonitor = MonitorSelectorOrDefault(TopBarMonitor)
     };
 
     /// <summary>枚举串规范化：null/空白/大小写与首尾空白差异都归一为小写标识；不在白名单内取兜底。</summary>
@@ -114,6 +138,24 @@ public sealed record AppSettings
     {
         var value = (raw ?? fallback).Trim().ToLowerInvariant();
         return allowed.Contains(value) ? value : fallback;
+    }
+
+    /// <summary>
+    /// 显示器选择器规范化：null/空白/非法 → auto；关键字归小写；序号写成 "+2"/" 3 "/全角数字等
+    /// 都归一成裸十进制串（落盘与内存同源，App 侧 MonitorGeometry 只需 TryParse 一次）。
+    /// 序号是否**真的存在**只有运行时知道（在屏显示器数），越界由 App 侧回落 auto 并留日志，
+    /// 这里不做也无法做那一层校验。
+    /// </summary>
+    private static string MonitorSelectorOrDefault(string? raw)
+    {
+        var value = (raw ?? "auto").Trim().ToLowerInvariant();
+        if (KnownMonitorKeywords.Contains(value)) return value;
+        // NumberStyles.Number：允许前导 +/-、千位分隔与小数点——"2.0" 这类手写法也能落到序号 2，
+        // 但只有"整数且无小数余数"才认（(int)n != n 时是 2.5 之类的非法台数）。
+        if (double.TryParse(value, NumberStyles.Number, CultureInfo.InvariantCulture, out var parsed) &&
+            parsed >= 1 && parsed <= MaxMonitorIndex && Math.Abs(parsed - Math.Truncate(parsed)) < double.Epsilon)
+            return ((int)parsed).ToString(CultureInfo.InvariantCulture);
+        return "auto";
     }
 
     /// <summary>热键串规范化：保留用户自定义组合，仅 null/空白兜默认；统一小写便于解析与比对。</summary>

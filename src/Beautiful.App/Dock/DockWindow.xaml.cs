@@ -16,6 +16,7 @@ using Beautiful.App.Preview;
 using Beautiful.App.Services;
 using Beautiful.App.Themes;
 using Beautiful.Core.Dock;
+using Beautiful.Core.Layout;
 using Beautiful.Core.Themes;
 using Application = System.Windows.Application;
 using Color = System.Windows.Media.Color;
@@ -30,18 +31,22 @@ namespace Beautiful.App.Dock;
 /// + macOS 式放大（Task 6 重写）：条目交给 <see cref="DockSurface"/> 自绘——连续高斯放大场
 /// （真实物理光标坐标，非离散悬停索引）+ CompositionTarget.Rendering（vsync）驱动的指数阻尼，
 /// 逐帧只写 Canvas.Left/Top 与 RenderTransform，面板内零 Margin/LayoutTransform 改写。
-/// 条带比可见面板高 <see cref="StripHeadroomDip"/>（透明、点击穿透），放大后的图标才不被窗口上沿裁掉。
+/// 条带几何（v3 T1）：<b>上报 shell 的预留带 = 可见面板高</b>，真实窗口矩形在其之上再多出
+/// <see cref="StripHeadroomDip"/> 的透明带（Background={x:Null} 分层窗口不参与命中 → 点击穿透），
+/// 放大后的图标才不被窗口上沿裁掉、而工作区只让出面板那么多。
 /// 主题由 ThemeManager 驱动（Task 13，订阅时序见终审 I-6 注释）：OnSourceInitialized 显式 ApplyTheme(当前)
 /// 起步并订阅 ThemeChanged 重设亚克力/间距/放大参数（IconSize、Spacing、MaxScale、ShowMagnification 写入 DockSurface）。
 /// </summary>
 public partial class DockWindow : AcrylicWindow
 {
     // 面板可见高度与条带顶部透明余量随 DockIconSize / 放大强度动态计算（见 VisiblePanelDip / StripHeadroomDip），
-    // 不再是固定常量——图标尺寸是设置项（32..72），macOS 放大后图标会向上生长，条带必须容得下。
+    // 不再是固定常量——图标尺寸是设置项（32..72），macOS 放大后图标会向上生长，窗口必须容得下。
     // 行高几何（IconSize + 固定行内余量 + 倒影余量）唯一来源在 DockSurface.RowHeightDip（Task 15 起开启
     // 倒影后行高再加一截，供镜像渐变倒影占据图标下方空间）。主题默认 IconSize=44 且无倒影时行高=64、
     // VisiblePanelDip()=76，与原 DockHeightDip 完全一致；无放大时余量取 MinStripHeadroomDip=22，
-    // 与原 StripHeadroomDip 一致 → 未动设置时条带几何零变化（保住"贴底无缝"的实测结论）。
+    // 与原 StripHeadroomDip 一致 → 未动设置时**窗口**矩形零变化（保住"贴底无缝"的实测结论与
+    // DockSurface 的可用高度假设）；变的是 ABM_SETPOS 上报的预留带 = 只报面板 76 DIP（v3 §1.C），
+    // 那 22 DIP 的透明带重新还给工作区。
     private const double PanelMarginDip = 12;
     private const double MinStripHeadroomDip = 22;
     private const double SigmaInPitches = 2.0;  // 高斯 σ（单位 = 一个图标间距；控制器裁定：不随主题变化）
@@ -77,7 +82,9 @@ public partial class DockWindow : AcrylicWindow
     private uint _appbarMsg;
     private uint _taskbarCreatedMsg;
     private NativeMethods.APPBARDATA _abd;
-    private NativeMethods.RECT _screenRect; // AppBar 定位后的窗口物理矩形（物理光标校验用）
+    private NativeMethods.RECT _screenRect; // **窗口**物理矩形（含顶部放大余量），非 AppBar 预留带——物理光标校验用，见 IsCursorOutsideWindow
+    private PhysicalRect _windowTarget;     // 最近一次协商出的目标窗口矩形：shell 重排条带时用它重申落位（见 AssertWindowRect）
+    private PhysicalRect _monitorRect;      // 本 Dock 所在显示器的 rcMonitor（媒体面板水平钳制用，副屏原点可为负/非 0）
     private bool _appbarRegistered;
     private bool _closing; // OnClosing 起置位：阻止关闭前挂起的 BeginInvoke 重注册在 ABM_REMOVE 后复活 AppBar
     private HwndSource? _source;
@@ -203,17 +210,23 @@ public partial class DockWindow : AcrylicWindow
         ThemeManager.ApplyIconSize(icon, Application.Current);
     }
 
-    // ---------- 条带几何（随图标尺寸/放大强度动态） ----------
+    // ---------- 条带几何（随图标尺寸/放大强度动态；预留带 ≠ 窗口矩形） ----------
 
     /// <summary>可见面板高 = 行高（IconSize+20，开启倒影时另加倒影余量，见 DockSurface.RowHeightDip）+ 上下边距(6+6)。
-    /// 主题默认 IconSize=44 且无倒影时 = 76。</summary>
+    /// 主题默认 IconSize=44 且无倒影时 = 76。<b>这是上报 shell 的 AppBar 预留带高度</b>（v3 §1.C：
+    /// 停靠区只预留 Dock 本体）。</summary>
     private double VisiblePanelDip() => Surface.RowHeightDip + PanelMarginDip;
 
     /// <summary>
-    /// 条带在面板之上的透明余量，供放大后的图标向上生长不被窗口上沿裁切。
+    /// 窗口在面板之上的透明余量，供放大后的图标向上生长不被窗口上沿裁切。
     /// 无放大主题恒取 <see cref="MinStripHeadroomDip"/>（=22，与 v1 实测一致）；macOS 下按
     /// 图标尺寸与当前倍率算越出量（图标底边在面板内，放大后顶边越出 ≈ IconSize·(MaxScale−1)−16），
     /// 至少 22（IconSize=44/MaxScale=1.8 时越出 19.2 → 取 22，复现原几何）。
+    /// <para>
+    /// v3 T1 起这截余量<b>只在窗口矩形里</b>（<c>StripMath.WindowRect</c> 把窗口在预留带之上放大），
+    /// 不再进 ABM_SETPOS 的上报值 —— 窗口可以越出自己的 AppBar 预留带，预留带只决定工作区。
+    /// 于是 macOS 语义成立：放大后的图标越界生长到桌面/窗口之上，工作区不多让一个像素。
+    /// </para>
     /// </summary>
     private double StripHeadroomDip()
     {
@@ -221,8 +234,6 @@ public partial class DockWindow : AcrylicWindow
         var overflow = Surface.IconSize * (Surface.MaxScale - 1.0) - 16.0;
         return Math.Max(MinStripHeadroomDip, Math.Ceiling(overflow));
     }
-
-    private double StripHeightDip() => VisiblePanelDip() + StripHeadroomDip();
 
     /// <summary>
     /// 设置页改动 DockIconSize/MagnificationStrength 后的即时生效入口（App.ApplyDockLayout 调用）：
@@ -358,61 +369,126 @@ public partial class DockWindow : AcrylicWindow
     }
 
     /// <summary>
-    /// ABE_BOTTOM 全宽条带：QUERYPOS → 修正高度 → SETPOS → SetWindowPos，并同步 WPF 侧 DIP 布局属性。
+    /// ABE_BOTTOM 条带定位（v3 T1，裁定见 v3-plan §1.C）：<b>上报 shell 的预留带 = 可见面板高</b>
+    /// （<see cref="VisiblePanelDip"/>），真实窗口矩形 = 预留带 + 顶部放大余量
+    /// （<see cref="StripHeadroomDip"/>）。放大后的图标照样向上越界生长到桌面之上，但那截透明带
+    /// 不再从工作区里被划走——v2 把"面板+余量"整条报给 ABM_SETPOS，IconSize=44 时工作区白让了
+    /// 22 DIP（用户"我只需要 dock 的大小不需要额外的覆盖"的工作区侧含义）。
+    /// 窗口像素尺寸与 v2 完全一致，所以 DockSurface 的可用高度假设、面板 VerticalAlignment=Bottom
+    /// 贴条带底、两侧点击穿透全部原样保留。
     /// <para>
-    /// 底边以 <b>shell 给的可用底边</b> 为准（<c>rc.Top = rc.Bottom - stripH</c>）：任务栏策略为 Keep/AutoHide
-    /// 时那是任务栏上沿（Dock 悬在其上方，符合预期）；Hide 策略下 <see cref="TaskbarManager"/> 已用
-    /// ABM_SETSTATE(ABS_AUTOHIDE) 释放掉任务栏的条带预留，QUERYPOS 返回的 bottom 就是**真屏幕底边**，
-    /// 于是条带 = [0, screenH-stripH]-[screenW, screenH]，Dock 无缝贴底（实测 gap 48px → 0px，Task 7）。
+    /// 【几何来源】本窗口所在（或设置指定）显示器的 <c>rcMonitor</c> 与该屏有效 DPI
+    /// （<see cref="MonitorGeometry"/>），不再是 <c>GetSystemMetrics</c> 的主屏尺寸。
+    /// </para>
+    /// <para>
+    /// 【底边仍以 shell 给的可用底边为准】（Task 7 实测口径，勿回退）：Keep/AutoHide 策略下那是任务栏
+    /// 上沿（Dock 悬在其上方，符合预期）；Hide 策略下 <see cref="TaskbarManager"/> 已用
+    /// ABM_SETSTATE(ABS_AUTOHIDE) 释放掉任务栏的条带预留，QUERYPOS 返回的 bottom 就是**真显示器底边**，
+    /// 于是窗口底边 == rcMonitor.Bottom，Dock 无缝贴底（实测 gap 48px → 0px）。
+    /// </para>
+    /// <para>
+    /// 【顺序硬约束】先写 WPF 的 Left/Top/Width/Height（DIP）并 UpdateLayout，再落物理 SetWindowPos：
+    /// 反过来的话 WPF 会在随后的布局帧里按自己的 DIP→物理换算覆盖我们的物理矩形（高 DPI 屏上就是
+    /// 一条缝）。定位完回读 GetWindowRect 落一行校验日志——真机仍有偏差时那行就是判因证据。
     /// </para>
     /// </summary>
     private void PositionAsAppBar()
     {
         if (!_appbarRegistered) return;
-        var dpiScale = NativeMethods.GetDpiForWindow(_hwnd) / 96.0;
-        if (dpiScale <= 0) dpiScale = 1.0;
-        // 条带 = 可见面板高 + 放大余量（均随图标尺寸/放大强度动态，见 StripHeightDip）：面板 Grid
-        // VerticalAlignment=Bottom 贴条带底，多出的顶部透明带（Background={x:Null} 分层窗口不参与命中 →
-        // 仍点击穿透）供放大后的图标向上生长。
-        var stripH = (int)Math.Round(StripHeightDip() * dpiScale);
-        var screenW = NativeMethods.GetSystemMetrics(0);  // SM_CXSCREEN
-        var screenH = NativeMethods.GetSystemMetrics(1);  // SM_CYSCREEN
+        var target = MonitorGeometry.ForEdge(_hwnd, StripEdge.Bottom, VisiblePanelDip(), StripHeadroomDip(),
+                                             SettingsService.Current.DockMonitor);
+        if (target is null) return;   // 显示器取不到（拔屏瞬间）：保持上次几何，不写非法矩形
+        var t = target.Value;
+        _monitorRect = t.MonitorRect;                       // 媒体面板水平钳制要用**本屏**左右缘
+        var panelH = t.Reserve.Height;                        // 预留带高（上报 shell，决定工作区）
+        var headroomH = t.Window.Height - t.Reserve.Height;   // 向上越界生长的透明余量（不占工作区）
 
         _abd.uEdge = NativeMethods.AbeBottom;
-        _abd.rc = new NativeMethods.RECT { Left = 0, Top = screenH - stripH, Right = screenW, Bottom = screenH };
+        _abd.rc = MonitorGeometry.ToNative(t.Reserve);        // 该屏全宽 + 面板高（SM_CXSCREEN 已退役）
         NativeMethods.SHAppBarMessage(NativeMethods.AbmQueryPos, ref _abd);
-        var availableBottom = _abd.rc.Bottom;             // shell 允许我们占到的底边（= 既有 AppBar 的上沿）
-        _abd.rc.Top = availableBottom - stripH;           // 修正：底边让位既有 AppBar/任务栏，高度以期望为准
+        var available = MonitorGeometry.ToCore(_abd.rc);      // shell 允许我们占到的底边（= 既有 AppBar 的上沿）
+        // 修正：底边让位既有 AppBar/任务栏，高度以期望面板高为准
+        var reserve = StripMath.Reserve(available, panelH, StripEdge.Bottom);
+        var expect = $"({reserve.Left},{reserve.Top})-({reserve.Right},{reserve.Bottom})";
+        _abd.rc = MonitorGeometry.ToNative(reserve);
         NativeMethods.SHAppBarMessage(NativeMethods.AbmSetPos, ref _abd);
-        // 贴底判据（Task 7 实测口径，日志即证据）：availableBottom == screenH ⇔ 任务栏条带预留已释放 ⇔ Dock 真贴底；
-        // 未释放（Keep / 释放失败）时 availableBottom = 任务栏上沿，Dock 让位在其上方，此时"间隙"即用户看到的空档。
-        var gap = screenH - availableBottom;
-        var expect = $"(0,{availableBottom - stripH})-({screenW},{availableBottom})";
-        var actual = $"({_abd.rc.Left},{_abd.rc.Top})-({_abd.rc.Right},{_abd.rc.Bottom})";
-        Logger.Info($"AppBar QUERYPOS 可用底边={availableBottom}/screenH={screenH}" +
+        var placed = MonitorGeometry.ToCore(_abd.rc);         // shell 最终落地的预留带
+        var actual = $"({placed.Left},{placed.Top})-({placed.Right},{placed.Bottom})";
+        var window = StripMath.WindowRect(placed, headroomH, StripEdge.Bottom);
+        // 贴底判据（Task 7 实测口径，日志即证据）：available.Bottom == rcMonitor.Bottom ⇔ 任务栏条带
+        // 预留已释放 ⇔ Dock 真贴底；未释放（Keep / 释放失败）时 available.Bottom = 任务栏上沿，
+        // Dock 让位在其上方，此时"间隙"即用户看到的空档。
+        var gap = t.MonitorRect.Bottom - available.Bottom;
+        Logger.Info($"AppBar QUERYPOS 可用底边={available.Bottom}/rcMonitor底={t.MonitorRect.Bottom}" +
                     $" {(gap == 0 ? "→ 真屏幕底边（间隙 0px，条带预留已释放）" : $"→ 任务栏仍占 {gap}px")}" +
-                    $"（策略={_taskbar?.Current.ToString() ?? "N/A"}）SETPOS rc={actual} 期望={expect}" +
-                    $" {(actual == expect ? "一致" : "不一致")}");
-        NativeMethods.SetWindowPos(_hwnd, IntPtr.Zero,
-            _abd.rc.Left, _abd.rc.Top,
-            _abd.rc.Right - _abd.rc.Left, _abd.rc.Bottom - _abd.rc.Top,
-            NativeMethods.SwpNozorder | NativeMethods.SwpNoactivate);
-        _screenRect = _abd.rc;
+                    $"（策略={_taskbar?.Current.ToString() ?? "N/A"}）monitor=0x{t.Monitor.ToInt64():X}" +
+                    $" dpi={t.DpiScale:0.##} 面板={panelH}px 余量={headroomH}px");
+        // 单独成行的 "AppBar SETPOS rc=(l,t)-(r,b)"：scripts/frametime.ps1 正是按这条正则取 Dock 条带
+        // 矩形（v2 把 SETPOS 挤在 QUERYPOS 那行里，正则从来没命中过，探针只能猜 "$b.Bottom-100"）。
+        Logger.Info($"AppBar SETPOS rc={actual} 期望={expect} {(actual == expect ? "一致" : "不一致")}");
+        Logger.Info($"Dock 工作区 预留高={placed.Height}px（=面板）窗口高={window.Height}px 净得={window.Height - placed.Height}px");
 
-        // 同步 WPF 侧属性，避免 Show() 按内容重新计算窗口尺寸
-        Left = _abd.rc.Left / dpiScale;
-        Top = _abd.rc.Top / dpiScale;
-        Width = Math.Max(1, (_abd.rc.Right - _abd.rc.Left) / dpiScale);
-        Height = Math.Max(1, (_abd.rc.Bottom - _abd.rc.Top) / dpiScale);
+        Left = StripMath.ToDip(window.Left, t.DpiScale);
+        Top = StripMath.ToDip(window.Top, t.DpiScale);
+        Width = Math.Max(1, StripMath.ToDip(window.Width, t.DpiScale));
+        Height = Math.Max(1, StripMath.ToDip(window.Height, t.DpiScale));
+        UpdateLayout();   // 让上面四个 DIP 属性的重排先落地，物理矩形才是最后一步
+        _windowTarget = window;
+        // _screenRect 用**目标窗口矩形**（含顶部放大余量），不是预留带：光标命中范围必须覆盖那截
+        // 透明带，否则光标一越出面板上沿就判"离窗"、场回落、图标缩回 —— 放大自激振荡。
+        _screenRect = MonitorGeometry.ToNative(window);
+        ApplyPhysicalRect(window);
+
+        // 回读校验（v3 §1.C）：真机若仍偏移，这一行日志就是判因证据。
+        if (NativeMethods.GetWindowRect(_hwnd, out var read))
+        {
+            var offset = read.Bottom - t.MonitorRect.Bottom;
+            Logger.Info($"Dock 几何 window.bottom={read.Bottom} rcMonitor.bottom={t.MonitorRect.Bottom}" +
+                        $" {(offset == 0 ? "→ 贴底OK" : $"→ 偏移 {offset}px（策略未释放/被抢占）")}" +
+                        $" 预留={actual} 窗口=({read.Left},{read.Top})-({read.Right},{read.Bottom})");
+        }
+        else
+        {
+            Logger.Warn($"Dock 几何 回读 GetWindowRect 失败，无法校验贴底（目标 ({window.Left},{window.Top})-({window.Right},{window.Bottom})）");
+        }
+    }
+
+    /// <summary>把目标矩形落到物理层（写窗口位置的唯一出口，重申路径复用它）。</summary>
+    private void ApplyPhysicalRect(PhysicalRect window)
+        => NativeMethods.SetWindowPos(_hwnd, IntPtr.Zero, window.Left, window.Top, window.Width, window.Height,
+            NativeMethods.SwpNozorder | NativeMethods.SwpNoactivate);
+
+    /// <summary>
+    /// 把窗口矩形重申为 <see cref="_windowTarget"/>：只 <c>SetWindowPos</c>，<b>不</b>重发
+    /// <c>ABM_SETPOS</c>（预留带没变 → 不再触发 shell 重排 → 不构成"重申 → 广播 → 再重申"的环，
+    /// 与"WM_SETTINGCHANGE 不可在此重注册"同一条纪律）。已等于目标时静默返回。
+    /// 与顶栏同一套护栏：shell 重排条带时会把 AppBar 窗口摆到"当前工作区"边线上，
+    /// 对 Dock 就是把底边让给自己已经预留的那 102px（贴底无缝当场变成"底部悬空"）。
+    /// </summary>
+    private void AssertWindowRect()
+    {
+        if (_closing || !_appbarRegistered) return;
+        if (_windowTarget.Width <= 0 || _windowTarget.Height <= 0) return;   // 尚未定位过（首帧前）
+        if (!NativeMethods.GetWindowRect(_hwnd, out var now)) return;
+        if (now.Left == _windowTarget.Left && now.Top == _windowTarget.Top &&
+            now.Right == _windowTarget.Right && now.Bottom == _windowTarget.Bottom) return;
+        Logger.Info($"Dock 几何 窗口被移到 ({now.Left},{now.Top})-({now.Right},{now.Bottom})" +
+                    $" ≠ 目标 ({_windowTarget.Left},{_windowTarget.Top})-({_windowTarget.Right},{_windowTarget.Bottom})" +
+                    $"（偏移 {now.Bottom - _windowTarget.Bottom}px）→ 重申贴底");
+        ApplyPhysicalRect(_windowTarget);
     }
 
     private IntPtr WndProc(IntPtr hwnd, int msg, IntPtr wParam, IntPtr lParam, ref bool handled)
     {
         if (_appbarMsg != 0 && msg == _appbarMsg)
         {
-            handled = true; // ABN_* 通知：本任务无需响应（空间被抢占由重注册流程覆盖）
+            handled = true;
+            // ABN_POSCHANGED：shell 重排了条带 → 重申窗口落位（空间被真正抢占由重注册流程覆盖）。
+            if (wParam.ToInt32() == NativeMethods.AbnPosChanged) Dispatcher.BeginInvoke(AssertWindowRect);
             return IntPtr.Zero;
         }
+        // 任何来源的位置变化都比对一次；BeginInvoke 排在本次落位之后，自己写的移动只命中静默分支。
+        if (msg == NativeMethods.WmWindowPosChanged) Dispatcher.BeginInvoke(AssertWindowRect);
         if (_taskbarCreatedMsg != 0 && msg == _taskbarCreatedMsg)
         {
             handled = true; // explorer 重建任务栏 → ABM_REMOVE + 重注册；任务栏策略（隐藏/自动隐藏）一并重放
@@ -434,12 +510,15 @@ public partial class DockWindow : AcrylicWindow
 
     /// <summary>
     /// 物理光标是否已不在本窗口矩形内；AppBar 未就绪 / GetCursorPos 失败时视为"在窗内"（交由取样继续判断）。
+    /// <para>
+    /// <b>比较基准是 <see cref="_screenRect"/> = 窗口矩形，不是 AppBar 预留带矩形</b>（v3 T1 起两者不等：
+    /// 预留带只有面板高，窗口还含顶部放大余量）。收紧到预留带 = 光标一越出面板上沿就判"离窗"、放大场
+    /// 回落、图标缩回、光标又落回面板 —— 反复自激振荡，放大功能直接不可用。
+    /// </para>
+    /// <para>
     /// 保留 v1 守卫：WPF 会在布局变化后按"最后已知位置"合成 MouseMove，若以事件坐标为准，
     /// 光标跳跃离窗后这些陈旧事件会把放大状态钉住。v2 更进一步——动画每帧直接取真实光标，
     /// 事件只作"唤醒"信号，因此陈旧事件连唤醒语义都没有（离场即在下一帧回落）。
-    /// <para>
-    /// 注意这里**不**收紧到可见面板矩形：光标越出面板上沿（在顶部透明余量里、停在已放大的图标上）时
-    /// 必须继续跟踪，否则场一回落图标就缩回去、光标又落回面板 → 反复"放大/回落"自激振荡。
     /// 空闲摘钩改由 <see cref="DockSurface"/> 按条目行的水平影响范围判定（评审发现 #1）。
     /// </para>
     /// </summary>
@@ -762,7 +841,9 @@ public partial class DockWindow : AcrylicWindow
         return null;
     }
 
-    /// <summary>面板置于胶囊上方并水平居中（钳制在屏幕内）；胶囊中心经 PointToScreen（物理 px）→ DIP 换算。</summary>
+    /// <summary>面板置于胶囊上方并水平居中（钳制在<b>本 Dock 所在显示器</b>内）；胶囊中心经 PointToScreen
+    /// （物理 px）→ DIP 换算。停靠副屏时钳制边界跟着走（副屏原点可为负数或 1920+，主屏假设会把面板
+    /// 整个夹到错误的屏上去）。</summary>
     private void PositionMediaPanel()
     {
         const double panelW = 420, panelH = 520, edgeMargin = 8, gap = 6;
@@ -780,10 +861,14 @@ public partial class DockWindow : AcrylicWindow
             centerDipX = screenPt.X / dpi;
         }
 
-        var screenW = NativeMethods.GetSystemMetrics(0) / dpi; // SM_CXSCREEN
-        var left = Math.Clamp(centerDipX - panelW / 2, edgeMargin, Math.Max(edgeMargin, screenW - panelW - edgeMargin));
-        // 条带顶部有动态的放大余量（供放大图标生长），面板真正的上沿在 Top + StripHeadroomDip()：
-        // 用它算间距，余量尺寸变化时面板与 Dock 的视觉间隙保持一致。
+        // 左右边界取 rcMonitor（几何唯一来源，v3 T1）；AppBar 尚未定位过时 _monitorRect 为默认零矩形，
+        // 与 v2 的"主屏 0..SM_CXSCREEN"行为一致，不会更差。
+        var monLeft = _monitorRect.Left / dpi;
+        var monRight = _monitorRect.Right / dpi;
+        var leftMin = monLeft + edgeMargin;
+        var left = Math.Clamp(centerDipX - panelW / 2, leftMin, Math.Max(leftMin, monRight - panelW - edgeMargin));
+        // 窗口顶部有动态的放大余量（供放大图标生长），面板真正的上沿在 Top + StripHeadroomDip()
+        // （= 预留带上沿）：用它算间距，余量尺寸变化时面板与 Dock 的视觉间隙保持一致（v2 观感零变化）。
         var top = Math.Max(edgeMargin, Top + StripHeadroomDip() - panelH - gap);
         panel.Left = left;
         panel.Top = top;

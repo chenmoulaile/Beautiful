@@ -184,42 +184,58 @@ public sealed class TaskbarManager
     // ---------- 任务栏窗口 ----------
 
     /// <summary>
-    /// 留存还原基准：把当前**完整位于屏幕内**的任务栏窗口矩形记进 <see cref="_saved"/>（已有基准的不覆盖）。
+    /// 留存还原基准：把当前**完整位于自己那块屏内**的任务栏窗口矩形记进 <see cref="_saved"/>（已有基准的不覆盖）。
     /// 为什么要在动 autohide 状态位之前单独做：ABM_SETSTATE(ABS_AUTOHIDE) 一生效，shell 立刻把窗口挪到
     /// 停靠位（实测 (0,766)-(1024,814)，只露 2px），此时再取矩形就会把"隐藏态"当成还原基准，Restore 会把
     /// 任务栏摆回屏幕外。
+    /// <para>
+    /// 【屏幕内 = 该句柄所在显示器的 rcMonitor，不是 SM_CYSCREEN】v3 T1：v2 拿主屏底边与虚拟桌面底边
+    /// 取大来做这道判定，副屏任务栏（例如 1920,0 起、高 1080 的那块）的停靠位会被误判成"还在屏幕内"
+    /// 而采成还原基准——Restore 之后它就停在屏幕外。取不到所在显示器时**不采基准**（没有基准就没有
+    /// 几何复位，Restore 第 3 步自然跳过该句柄；比按错误的屏底边采一个错基准更可恢复）。
+    /// </para>
     /// </summary>
     private void CaptureOnScreenRects()
     {
-        var screenH = NativeMethods.GetSystemMetrics(1); // SM_CYSCREEN：主屏底边
-        // SM_YVIRTUALSCREEN(77) + SM_CYVIRTUALSCREEN(79) = 虚拟桌面底边：副屏比主屏更低时，
-        // 副屏任务栏的"屏幕内"判定要用虚拟桌面底，否则会被误判成隐藏态、丢掉还原基准。
-        var bottom = Math.Max(screenH, NativeMethods.GetSystemMetrics(77) + NativeMethods.GetSystemMetrics(79));
         foreach (var hwnd in FindTaskbars())
         {
-            if (_saved.ContainsKey(hwnd)) continue;
+            if (_saved.ContainsKey(hwnd)) continue;     // 首次屏幕内矩形为准：重复采集不覆盖（first-rect-wins）
             if (!NativeMethods.GetWindowRect(hwnd, out var rect)) continue;
-            if (rect.Bottom > bottom || rect.Top >= screenH)
+            if (!MonitorGeometry.TryMonitorBottom(hwnd, out var monitorBottom))
             {
-                Logger.Info($"CaptureOnScreenRects: hwnd=0x{hwnd.ToInt64():X} 矩形 ({rect.Left},{rect.Top})-({rect.Right},{rect.Bottom}) 不在屏幕内，不作基准");
+                Logger.Warn($"CaptureOnScreenRects: hwnd=0x{hwnd.ToInt64():X} 取不到所在显示器，不采基准（几何复位跳过该句柄）");
+                continue;
+            }
+            if (rect.Bottom > monitorBottom || rect.Top >= monitorBottom)
+            {
+                Logger.Info($"CaptureOnScreenRects: hwnd=0x{hwnd.ToInt64():X} 矩形 ({rect.Left},{rect.Top})-({rect.Right},{rect.Bottom}) " +
+                            $"不在本屏内（monitor.bottom={monitorBottom}），不作基准");
                 continue; // 已经处于隐藏/停靠态：不能当还原基准
             }
             _saved[hwnd] = rect;
-            Logger.Info($"CaptureOnScreenRects: hwnd=0x{hwnd.ToInt64():X} 基准=({rect.Left},{rect.Top})-({rect.Right},{rect.Bottom})");
+            Logger.Info($"CaptureOnScreenRects: hwnd=0x{hwnd.ToInt64():X} 基准=({rect.Left},{rect.Top})-({rect.Right},{rect.Bottom})" +
+                        $"（monitor.bottom={monitorBottom}）");
         }
     }
 
     private void HideAll()
     {
-        var screenH = NativeMethods.GetSystemMetrics(1); // SM_CYSCREEN
         foreach (var hwnd in FindTaskbars())
         {
+            // 所在显示器底边是这一步全部判定的基准（v3 T1，替代 v2 的 SM_CYSCREEN 主屏底边）。
+            // 放在最前面、连"孤立隐藏态认领"都在其后：取不到底边就不知道要把窗口摆到哪一行的下面，
+            // 此时宁可整块屏原样留着，也不要先把任务栏 Show 出来再藏不回去。
+            if (!MonitorGeometry.TryMonitorBottom(hwnd, out var monitorBottom))
+            {
+                Logger.Warn($"HideAll: hwnd=0x{hwnd.ToInt64():X} 取不到所在显示器，跳过（不移动、不登记 _saved/_swHidden）");
+                continue;
+            }
             // 【终审 I-5 · 孤立隐藏态回收】上一实例在 SW_HIDE 兜底路径被强杀时，任务栏停留在
             // SW_HIDE 态，而 _swHidden 是**进程内**集合——新实例无从得知，于是三重失灵：
-            // HideAll 见矩形仍在停靠位（top < screenH）却查不到隐藏记录；CaptureOnScreenRects
+            // HideAll 见矩形仍在停靠位（top < monitor.bottom）却查不到隐藏记录；CaptureOnScreenRects
             // 拒绝把停靠矩形当还原基准；Restore 第一步 iterate 空 _swHidden 什么都不做——
             // 任务栏被永久隐藏，README 限制 6 的"再次启动并正常退出即清掉"只对移出屏幕变体成立。
-            // 修复：HideAll 开头先 SW_SHOWNA（显示但不抢焦点）认领孤立隐藏态窗口，让本次
+            // 修复：先 SW_SHOWNA（显示但不抢焦点）认领孤立隐藏态窗口，让本次
             // 正常走"截图基准 → 移出屏幕/重新 SW_HIDE 并登记 _swHidden"链路，退出即可还原。
             if (!NativeMethods.IsWindowVisible(hwnd) && !_swHidden.Contains(hwnd))
             {
@@ -227,31 +243,32 @@ public sealed class TaskbarManager
                 Logger.Info($"HideAll: hwnd=0x{hwnd.ToInt64():X} 处于孤立隐藏态（先前实例遗留），已 SW_SHOWNA 认领，稍后按本进程策略重新隐藏以便退出还原");
             }
             if (!NativeMethods.GetWindowRect(hwnd, out var rect)) continue;
-            if (rect.Top >= screenH)
+            if (rect.Top >= monitorBottom)
             {
-                Logger.Info($"HideAll: hwnd=0x{hwnd.ToInt64():X} 已在屏幕外 (top={rect.Top})，跳过");
+                Logger.Info($"HideAll: hwnd=0x{hwnd.ToInt64():X} 已在本屏外 (top={rect.Top}/monitor.bottom={monitorBottom})，跳过");
                 continue;
             }
-            if (!_saved.ContainsKey(hwnd) && rect.Bottom <= screenH)
+            if (!_saved.ContainsKey(hwnd) && rect.Bottom <= monitorBottom)
                 _saved[hwnd] = rect; // 只记首次屏幕内矩形：重复 HideAll（Reassert）不覆盖还原基准
-            // 【多显示器已知缺陷（本机单屏无法实测，README 已知限制 5(d)）】
-            // 这里的 screenH 取的是 SM_CYSCREEN = **主屏**底边，没有按窗口所在显示器调 MonitorFromWindow
-            // 取该屏自己的底边。后果：副屏的 Shell_SecondaryTrayWnd（例如副屏在 1920,0 起、高 1080）
-            // 会被摆到 (0,768)-(1920,816) 这类**主屏那一行**上——任务栏跑到错误的显示器上，
-            // 副屏底部反而露出壁纸/或主屏底部多出一条不该在的东西，而副屏自己的条带预留仍需 autohide 释放。
-            // 还原不受这个缺陷影响：_saved 按句柄各自存屏幕内基准矩形，Restore 第 3 步用它复位回原显示器。
+            // 【v3 T1 修正的多显示器缺陷】v2 这里把窗口摆到 SM_CYSCREEN（**主屏**底边）那一行，
+            // 副屏的 Shell_SecondaryTrayWnd 于是被搬到主屏上（任务栏跑错显示器、副屏底部反而露壁纸，
+            // README 已知限制 5(d)/7）。现在按句柄所在显示器取自己的 rcMonitor.Bottom 往外推：
+            // 每块屏的任务栏停在**它自己**的下沿外，副屏的条带预留仍由 autohide（ReclaimBottomStrip）释放。
+            // 本 VM 只有 1024x768 单屏，这条分支的多屏效果无法截图验证，只有代码级与单屏回归验证。
             // 尝试 1：SWP_NOSENDCHANGING 绕过任务栏的 WM_WINDOWPOSCHANGING 回夹直接落位
-            var ok = NativeMethods.SetWindowPos(hwnd, IntPtr.Zero, rect.Left, screenH,
+            var ok = NativeMethods.SetWindowPos(hwnd, IntPtr.Zero, rect.Left, monitorBottom,
                 rect.Right - rect.Left, rect.Bottom - rect.Top,
                 NativeMethods.SwpNozorder | NativeMethods.SwpNoactivate | NativeMethods.SwpNoSendChanging);
             NativeMethods.GetWindowRect(hwnd, out var after);
-            if (after.Top >= screenH)
+            if (after.Top >= monitorBottom)
             {
-                Logger.Info($"HideAll: hwnd=0x{hwnd.ToInt64():X} 移出屏幕成功 after=({after.Left},{after.Top})-({after.Right},{after.Bottom})");
+                Logger.Info($"HideAll: hwnd=0x{hwnd.ToInt64():X} 移出本屏成功 after=({after.Left},{after.Top})-({after.Right},{after.Bottom})");
                 continue;
             }
             Logger.Info($"HideAll: hwnd=0x{hwnd.ToInt64():X} 移动被 shell 还原 (ok={ok} after=({after.Left},{after.Top})-({after.Right},{after.Bottom}))，降级 SW_HIDE");
-            // 尝试 2：整窗隐藏（Win11 XAML 任务栏对移动有回夹，对可见性没有）——还原时 SW_SHOWNA
+            // 尝试 2：整窗隐藏（Win11 XAML 任务栏对移动有回夹，对可见性没有）——还原时 SW_SHOWNA。
+            // 注意 _swHidden 与 _saved **各自独立登记**（见类型注释）：走到这里可能正因为 _saved 没有
+            // 这个句柄（基准被正确拒绝），可见性记录仍必须写下，否则退出后任务栏永久不可见。
             NativeMethods.ShowWindow(hwnd, NativeMethods.SwHide);
             _swHidden.Add(hwnd);
             Logger.Info($"HideAll: hwnd=0x{hwnd.ToInt64():X} SW_HIDE 完成");

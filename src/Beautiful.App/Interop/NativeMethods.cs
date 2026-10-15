@@ -52,6 +52,9 @@ internal static partial class NativeMethods
     // （shell 工作区 = 屏幕矩形逐条带裁剪所有已注册 AppBar，两条互不破坏）。
     public const uint AbeTop = 1, AbeBottom = 3;
     public const int AbsAutohide = 0x1, AbsAlwaysOnTop = 0x2;
+    // ABM_NEW/ABM_SETPOS 之后 shell 通过 uCallbackMessage 发来的通知（wParam）：
+    // POSCHANGED=1 表示"你的条带位置需要重新协商"（其它 AppBar 落位、任务栏状态位变化都会触发）。
+    public const int AbnNew = 0, AbnPosChanged = 1, AbnFullscreenApp = 2, AbnWindowArrange = 3;
 
     [StructLayout(LayoutKind.Sequential)]
     public struct APPBARDATA
@@ -92,6 +95,7 @@ internal static partial class NativeMethods
     // ---------- 窗口与消息 ----------
     public const int WmDisplayChange = 0x007E;
     public const int WmSettingChange = 0x001A;
+    public const int WmWindowPosChanged = 0x0047;   // 窗口位置/尺寸/层序已变（条带漂移的检测点）
     public const uint HshellWindowCreated = 1, HshellWindowDestroyed = 2,
                       HshellActivated = 4, HshellGetMinRect = 5, HshellRedraw = 6,
                       HshellAppCommand = 12;
@@ -225,8 +229,10 @@ internal static partial class NativeMethods
 
     public const uint KeyeventfExtendedkey = 0x1, KeyeventfKeyup = 0x2;
 
-    // ---------- 显示器（物理像素工作区，弹层边缘翻转定位用） ----------
-    public const uint MonitorDefaultToNearest = 2;
+    // ---------- 显示器（物理像素工作区，弹层边缘翻转定位与条带几何用） ----------
+    // MONITORINFO.dwFlags 位 0x1 = 主显示器（其 rcMonitor 左上角即物理原点 (0,0)）。
+    public const uint MonitorDefaultNull = 0, MonitorDefaultToPrimary = 1, MonitorDefaultToNearest = 2;
+    public const uint MonitorinfofPrimary = 0x1;
 
     [StructLayout(LayoutKind.Sequential)]
     public struct MONITORINFO
@@ -238,6 +244,19 @@ internal static partial class NativeMethods
     }
 
     [DllImport("user32.dll")] public static extern IntPtr MonitorFromPoint(POINT pt, uint flags);
+
+    // 条带（顶栏/Dock）几何的锚点：窗口**实际所在**的显示器。v2 用 GetSystemMetrics(SM_CXSCREEN/
+    // SM_CYSCREEN) 取"屏幕尺寸"，那是**只有主屏**的全局值，副屏（含 Left<0 的左置副屏）上的条带
+    // 宽度与贴边必然错位（v3 T1 起 SM_CX/SM_CYSCREEN 从几何路径退役）。
+    [DllImport("user32.dll")] public static extern IntPtr MonitorFromWindow(IntPtr hWnd, uint flags);
+
+    // 显示器枚举（设置项 DockMonitor/TopBarMonitor 的"第 N 台"与主屏判定用）。
+    // 回调委托必须长期持有（这里放静态 readonly 字段），且枚举顺序由显示驱动决定、不保证稳定，
+    // 所以序号只在**本次枚举**内有意义：设置面板每次打开都重新列出，日志同时打印该屏矩形供核对。
+    public delegate bool MonitorEnumProc(IntPtr hMonitor, IntPtr hdc, ref RECT lprcMonitor, IntPtr dwData);
+
+    [DllImport("user32.dll")]
+    public static extern bool EnumDisplayMonitors(IntPtr hdc, IntPtr lprcClip, MonitorEnumProc lpfnEnum, IntPtr dwData);
 
     [DllImport("user32.dll")] public static extern bool GetMonitorInfo(IntPtr hMonitor, ref MONITORINFO lpmi);
 
@@ -252,7 +271,8 @@ internal static partial class NativeMethods
     [DllImport("user32.dll")]
     public static extern uint GetWindowThreadProcessId(IntPtr hWnd, out uint processId);
 
-    [DllImport("user32.dll")] public static extern int GetSystemMetrics(int index); // SM_CYSCREEN=1
+    [DllImport("user32.dll")] public static extern int GetSystemMetrics(int index); // SM_CYSCREEN=1；
+    // v3 T1 起**不得**再用于条带/贴边几何（那只有主屏），仅保留给弹层最后兜底（FluentPopupHost）。
 
     // ---------- DWM ----------
     public const int DwmwaCloaked = 14;

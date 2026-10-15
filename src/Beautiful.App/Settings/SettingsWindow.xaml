@@ -128,6 +128,27 @@
                     </StackPanel>
                 </Border>
 
+                <!-- ============ 显示器（多屏 / 混合 DPI） ============ -->
+                <Border Style="{StaticResource SectionCard}">
+                    <StackPanel>
+                        <TextBlock Text="显示器" Style="{StaticResource SectionTitle}"/>
+
+                        <StackPanel Orientation="Horizontal">
+                            <TextBlock Text="Dock 所在显示器" Style="{StaticResource RowLabel}" Width="104"/>
+                            <ComboBox x:Name="DockMonitorBox" Width="300" VerticalAlignment="Center"
+                                      SelectionChanged="DockMonitor_Changed"/>
+                        </StackPanel>
+                        <StackPanel Orientation="Horizontal" Margin="0,8,0,0">
+                            <TextBlock Text="顶栏所在显示器" Style="{StaticResource RowLabel}" Width="104"/>
+                            <ComboBox x:Name="TopBarMonitorBox" Width="300" VerticalAlignment="Center"
+                                      SelectionChanged="TopBarMonitor_Changed"/>
+                        </StackPanel>
+
+                        <TextBlock Style="{StaticResource HintText}"
+                                   Text="条带的贴边、宽度与缩放一律按所选显示器的真实分辨率和 DPI 计算：顶栏贴该屏上沿、Dock 贴该屏下沿（Dock 的停靠区只预留面板高，放大余量越界生长到桌面上、不占工作区）。“自动”取启动时光标所在的那块屏，选定后按住的屏就粘住，之后改图标大小/换主题不会因鼠标划过别的显示器而跳走。"/>
+                    </StackPanel>
+                </Border>
+
                 <!-- ============ 窗口切换器 ============ -->
                 <Border Style="{StaticResource SectionCard}">
                     <StackPanel>

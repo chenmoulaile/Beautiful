@@ -137,6 +137,41 @@ public class AppSettingsTests
         Assert.Equal(2.5, bad.MagnificationStrength); // 放大强度上限
         Assert.Equal(2000, bad.LyricsOffsetMs);     // 歌词偏移上限
     }
+
+    [Fact]
+    public void v3默认值_Dock与顶栏显示器均为auto()
+    {
+        var s = new AppSettings();
+        Assert.Equal("auto", s.DockMonitor);
+        Assert.Equal("auto", s.TopBarMonitor);
+    }
+
+    [Fact]
+    public void 显示器选择器_关键字与序号归一_非法回落auto()
+    {
+        // 关键字：大小写与首尾空白归一
+        Assert.Equal("auto", new AppSettings { DockMonitor = "AUTO" }.Normalized().DockMonitor);
+        Assert.Equal("primary", new AppSettings { TopBarMonitor = "  Primary " }.Normalized().TopBarMonitor);
+        // 序号（1 起，与设置面板列出的顺序一致）："2 "/" 2" 归一成裸十进制串
+        Assert.Equal("2", new AppSettings { DockMonitor = " 2 " }.Normalized().DockMonitor);
+        Assert.Equal("3", new AppSettings { TopBarMonitor = "3" }.Normalized().TopBarMonitor);
+        Assert.Equal("16", new AppSettings { DockMonitor = "16" }.Normalized().DockMonitor);   // MaxMonitorIndex 边界
+        // 越界/非整数/未知词/null/空白 → auto（在屏几块显示器只有运行时知道，那层回落由 App 侧再做）
+        Assert.Equal("auto", new AppSettings { DockMonitor = "17" }.Normalized().DockMonitor);
+        Assert.Equal("auto", new AppSettings { DockMonitor = "0" }.Normalized().DockMonitor);
+        Assert.Equal("auto", new AppSettings { DockMonitor = "-1" }.Normalized().DockMonitor);
+        Assert.Equal("auto", new AppSettings { DockMonitor = "2.5" }.Normalized().DockMonitor);
+        Assert.Equal("auto", new AppSettings { DockMonitor = "second" }.Normalized().DockMonitor);
+        Assert.Equal("auto", new AppSettings { DockMonitor = null! }.Normalized().DockMonitor);
+        Assert.Equal("auto", new AppSettings { TopBarMonitor = "   " }.Normalized().TopBarMonitor);
+    }
+
+    [Fact]
+    public void 显示器选择器_Normalized幂等()
+    {
+        var once = new AppSettings { DockMonitor = " 2 ", TopBarMonitor = "PRIMARY" }.Normalized();
+        Assert.Equal(once, once.Normalized());
+    }
 }
 
 public class AppSettingsStoreTests : IDisposable
@@ -186,7 +221,9 @@ public class AppSettingsStoreTests : IDisposable
             ReflectionEnabled = true,
             FullscreenPassthrough = false,
             LauncherHotkey = "win+space",
-            AutoHideDock = true
+            AutoHideDock = true,
+            DockMonitor = "2",
+            TopBarMonitor = "primary"
         };
         _store.Save(original);
         Assert.Equal(original, _store.Load());
@@ -311,6 +348,32 @@ public class AppSettingsStoreTests : IDisposable
         Assert.Equal("macos", s.SwitcherStyle);
         Assert.Equal("bottom", s.DockPosition);
         Assert.Equal("macos", s.Theme);
+        Assert.True(File.Exists(Path.Combine(_dir, "settings.json")));
+    }
+
+    [Fact]
+    public void v2旧配置JSON_缺省v3显示器字段_加载取auto()
+    {
+        // 升级兼容：v2 用户的 settings.json 不含 v3 新字段，加载后须落在"auto"而不是 null/空串
+        Directory.CreateDirectory(_dir);
+        File.WriteAllText(Path.Combine(_dir, "settings.json"),
+            """{"Theme":"macos","DockIconSize":56}""");
+        var s = _store.Load();
+        Assert.Equal("auto", s.DockMonitor);
+        Assert.Equal("auto", s.TopBarMonitor);
+    }
+
+    [Fact]
+    public void 显示器选择器越界或null的JSON_收敛auto且不删文件()
+    {
+        // 值域问题由 Normalized 兜底，不是结构损坏 → 自愈网不得删掉用户的其余配置
+        Directory.CreateDirectory(_dir);
+        File.WriteAllText(Path.Combine(_dir, "settings.json"),
+            """{"DockMonitor":null,"TopBarMonitor":"999","Theme":"linux"}""");
+        var s = _store.Load();
+        Assert.Equal("auto", s.DockMonitor);
+        Assert.Equal("auto", s.TopBarMonitor);
+        Assert.Equal("linux", s.Theme);
         Assert.True(File.Exists(Path.Combine(_dir, "settings.json")));
     }
 
