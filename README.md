@@ -1,10 +1,45 @@
 # Beautiful
 
-Windows 11 桌面美化套件：悬浮 Dock（macOS 风格）+ macOS 顶栏 + Alt+Tab 替换切换器 + 悬停实时窗口预览。WPF + .NET 8，自包含发布，中文界面。
+Windows 11 桌面美化套件：悬浮 Dock（macOS 风格）+ macOS 顶栏 + Alt+Tab 替换切换器 + 悬停实时窗口预览 + Spotlight 启动器 + 控制中心。WPF + .NET 8，自包含发布，中文界面。**只想跑起来 → 看「本地运行」**；想知道 v3 改了什么 → 看「v3 变更（对着反馈的七条）」。
 
 > 界面截图不随仓库分发（`docs/` 为内部文档目录，已 .gitignore 排除）；观感以功能描述与发布包实运行为准。
 
 Beautiful 接管日常桌面三件套：屏幕底部是悬浮 Dock（应用固定与启动、连续高斯放大、媒体胶囊与双语歌词、悬停 DWM 实时缩略图预览），屏幕顶部是 macOS 风格菜单栏（logo 菜单、前台应用名、真实"窗口"菜单、时钟/日历、音量/网络/电量、媒体迷你项），Alt+Tab 被替换为 macOS Cmd+Tab 风格的应用切换器。原生任务栏可选择完全隐藏、自动隐藏或保留。
+
+## 本地运行（真正能跑的那份在哪）
+
+- **本机一键**：双击 `scripts\install-local.cmd`。它把应用发布到**固定目录**，结束时在屏幕上打印最终路径与 `Beautiful.exe` 大小：
+
+  `E:\Beautiful\dist\Beautiful\Beautiful.exe` ← **这就是真正软件的地址**，双击即运行。
+
+  `dist\Beautiful\` 是自包含产物（约 260 个文件，.NET 8 运行时随包附带），不需要另装运行时；`dist/` 已被 .gitignore 排除，重复运行脚本会先清空 `dist\Beautiful` 再重新发布（只动 `dist/` 里面的东西）。脚本里的 `dotnet publish` 参数与 `.github/workflows/release.yml` 的"发布自包含产物"步骤**逐字一致**（只有 `-o` 输出目录不同），所以 `dist\Beautiful\` 与 GitHub Release 里的 zip 是同一件产物。
+- **没克隆仓库的人**：下载 GitHub Release 的 `Beautiful-win-x64-v<版本>.zip`，解压后运行其中的 `Beautiful.exe`（同样自包含）。
+- **别拿构建产物当发布产物**：`src\Beautiful.App\bin\<配置>\...` 下那个 `Beautiful.exe` 是**框架依赖**版，脱离开发环境要设 `DOTNET_ROOT` 才起得来（弹 ".NET not found" 就是它）；面向使用的产物只有自包含那一份。
+- **一条命令出诊断块**：`powershell -NoProfile -ExecutionPolicy Bypass -File scripts\diag.ps1`（可加 `-Path <日志文件>` 覆盖）。它自动挑出**最新**的应用日志，把 v3 各项修复的判据行（顶栏几何 / Dock 几何 / AppBar / 背板 / 图标提取 / 启动器 / 掉帧 / 策略）、每一块显示器的 `rcMonitor` 与有效 DPI、以及当前 `config\settings.json` 打成一整段——整段复制回来即可排障。
+
+## v3 变更（对着反馈的七条）
+
+| 反馈 | 现在 | 证据（日志/截图可核） |
+| --- | --- | --- |
+| **顶栏没贴屏幕顶，上方露一截** | 条带几何改按**窗口所在显示器**取：`MonitorFromWindow`/`MonitorFromPoint` + `GetMonitorInfo` 的 `rcMonitor` + `GetDpiForMonitor`，不再用 `GetSystemMetrics`（只有主屏）。另外 shell 收到 AppBar 注册后会把自己的条带往下推一条带高度，故 `ABN_POSCHANGED`/`WM_WINDOWPOSCHANGED` 时重申窗口落位 | `顶栏几何 window.top=0 rcMonitor.top=0 → 贴边OK`；`顶栏几何 窗口被移到 (0,30)-(1024,60) ≠ 目标 (0,0)-(1024,30)（偏移 30px）→ 重申贴边` |
+| **Dock 只要 dock 那么大，不要一整条** | Dock 窗口是逐像素透明的分层窗口：可见面板收到图标行 + 分隔符 + 内边距，窗口矩形 = 预留带 + 放大生长余量，余量部分是透明的、点得穿 | `Dock 工作区 预留高=76px（=面板 76.0DIP，行高 60.0DIP，图标 48DIP…）窗口高=98px 余量=22px`；`Dock 几何 window.bottom=768 rcMonitor.bottom=768 → 贴底OK` |
+| **Alt+Tab 面板圆角不对** | 切换器改为分层窗口 + `Card` 自绘圆角（macOS 18 / Win11 8 / 鸿蒙胶囊），"玻璃"由显示前抓屏自绘模糊提供；v2 的 `SetWindowRgn` 裁形与 DWM 圆角属性两条路径整枝删除（真机上圆角缺口里照画深色块） | `SwitcherWindow.xaml.cs` 类型注释；三样式截图见 v3-t2/v3-t2b 系列 |
+| **缺少分隔符** | 三主题 Dock 原生还原：固定块与运行窗口块之间画分隔符，macOS/鸿蒙/Linux 各自的间距与收边分别对齐 | v3-t4-hover-sep 系列截图 |
+| **固定软件的行为** | 外部拖入即固定、块内拖拽排序、甩出 Dock 取消固定、回收站落点为显式 no-op（不删文件、不取消固定）；右键菜单仍是固定/取消固定 | `拖入固定：… → 固定块槽 N`、`Dock 排序：… 固定槽 A → B`、`甩出 Dock 取消固定：…` |
+| **图标糊** | 图标提取按 256px 取最大帧（不再被 32px 兜底），遮罩/内高光/alpha 投影一次性烘焙成图块并缓存，换主题或换尺寸才重烘 | `图标提取 explorer.exe: 层=ShellDef 尺寸=256×256 格式=Bgra32 请求=256`、`图标烘焙参数: 主题=HarmonyOS 尺寸=48DIP dpi=1 图块=48px 形状=Squircle …` |
+| **新增功能** | 控制中心（主题/任务栏策略/放大·倒影·媒体胶囊·壁纸取色砖块/真实系统音量）、Spotlight 式启动器（含 MSIX/UWP 条目、exe 名可直接搜）、壁纸取色强调色、Dock 显示器选择器 | 控制中心截图 v3-t8-cc-crop.png；`启动器：索引就绪，188 条可启动项`；`壁纸取色：… → #9BBBD4` |
+
+## 不同分辨率、DPI 与多屏
+
+几何的**唯一来源**是"这条带实际落在哪块屏"，不是主屏尺寸：
+
+1. **选屏**：设置项 `DockMonitor` / `TopBarMonitor` 决定，取值 `auto`（启动时光标所在显示器，解析结果按进程粘住，避免拖动滑杆时 Dock 整条跳到副屏）/ `primary` / 序号（设置面板的下拉标签里直接写着每块屏的真实分辨率与原点）。任何解析失败都往 `auto` 收敛，最终兜到"窗口所在屏 → 首块枚举屏"，宁可让条带待在一块合理的屏上，也不返回一个猜出来的尺寸。
+2. **取数**：`MonitorFromWindow`/`MonitorFromPoint` 拿显示器句柄 → `GetMonitorInfo` 拿 `rcMonitor`（贴边要用真边缘，不是 `rcWork`）→ `GetDpiForMonitor(MDT_EFFECTIVE_DPI)` 拿该屏有效缩放。`GetSystemMetrics(SM_CXSCREEN/SM_CYSCREEN)` 在几何路径上一次都不出现——那是 v2 "副屏错位 + 高 DPI 屏顶栏上方露壁纸" 的根因。混合 DPI 多屏下也不刚注册的窗口用 `GetDpiForWindow`（它返回的是**初置屏**的 DPI，副屏 150% 会把条带算成 2/3 高）。
+3. **预留与生长**：上报给 shell 的 `ABM_QUERYPOS/ABM_SETPOS` 只包含**可见面板**那一截，真实窗口矩形 = 预留带 + 越界生长余量（放大 headroom）。于是最大化窗口让位的是面板的高度，而放大时"长出来"的那部分画在预留带之外、盖在桌面上，不会把桌面重新挤一遍。
+4. **重申落位**：shell 处理 AppBar 注册时会把条带整体往下推一条带高度（顶栏表现为"贴在工作区顶而不是屏幕顶"），因此收到 `ABN_POSCHANGED` 与 `WM_WINDOWPOSCHANGED` 后按目标矩形重申一次 `SetWindowPos`——**只重摆窗口、不重发 `ABM_SETPOS`**（预留带没变 → 不会再触发 shell 重排 → 不构成"重申 → 广播 → 再重申"的环）。
+5. **副屏任务栏**：`TaskbarManager` 判"任务栏在不在自己那块屏"用的是它所在显示器的 `rcMonitor.Bottom`，把副屏的 `Shell_SecondaryTrayWnd` 推出**它自己的**屏幕，而不是主屏那一行。
+
+> 这些路径的**算术**（`StripMath`/`MagnificationField` 等）是 Core 纯函数、由单元测试覆盖；但本项目的开发机是**单显示器 1024×768 @100%**，所以"混合 DPI 多屏"的端到端呈现只有单元测试与代码路径级验证，**未在实机复验**。真机上请按「本地运行」里的 `scripts\diag.ps1` 出诊断块——`[显示器与 DPI]` 一节会列出每块屏的 `rcMonitor`/`rcWork`/有效 DPI/主屏标志，与 `[顶栏几何]`、`[Dock 几何]` 两节的数字对一眼就能定位是哪一块屏、哪一步算错。
 
 ## 功能特性
 
@@ -15,6 +50,7 @@ Beautiful 接管日常桌面三件套：屏幕底部是悬浮 Dock（应用固�
 - **图标倒影与启动弹跳**（v2）：倒影渐隐遮罩（macOS 主题下开启），启动固定应用播放 ~600ms ElasticOut 弹跳；均可在设置开关、即时生效
 - **悬停实时窗口预览**（v2）：悬停窗口条目 350ms 后弹出该窗口的 **DWM 实时缩略图**（纯 Win32 宿主窗口承载，规避 WPF airspace；缩略图句柄全路径注销不泄漏；源窗口消失/最小化自动收起）
 - 条目右键菜单为自绘 FluentMenu：固定/取消固定应用，固定清单持久化于 `config/dock.json`
+- **拖拽交互（v3）**：从资源管理器等外部窗口把应用拖进 Dock 即固定、块内拖动即排序、甩出 Dock 即取消固定；拖到回收站图标上是**显式 no-op**（既不删文件也不取消固定）。⚠ 诚实标注：本项在开发机上用**进程内 `FileDrop` 代理**（自己构造 `DragEventArgs` 喂给同一条处理路径）验证，**没有用真实 Explorer 拖拽**复验——真实拖拽的数据格式与 drop 效果回调可能有差异
 
 ### macOS 顶栏（v2）
 
@@ -22,7 +58,7 @@ Beautiful 接管日常桌面三件套：屏幕底部是悬浮 Dock（应用固�
 - 左区：**logo（Beautiful 应用菜单：关于/设置…/主题▸/重载 Dock/退出，全部真实动作）** + **前台应用名**（WinEventHook 跟踪）+ 文件/编辑/视图/**窗口**/帮助——"窗口"是按当前前台窗口实际执行最小化/还原/关闭的**真实窗口菜单**
 - 右区：**媒体迷你**（有 SMTC 会话时显示标题，点击展开面板）· **时钟**（点击弹出日历浮层）· **音量**（点击打开系统混音器）· **网络**（联网状态指示）· **电量**（`GetSystemPowerStatus`，仅在存在电池时显示）；共用一条每分钟定时器对账，空闲零开销
 - **控制中心**（v3）：右区最末图标唤出的快速设置面板（同一套分层弹层 + 抓屏模糊背板）。内含主题三选一、系统任务栏策略三选一、放大/倒影/媒体胶囊三个开关砖块、**真实系统音量滑杆 + 静音**（Core Audio `IAudioEndpointVolume`，手写 interop、无第三方包），以及"打开设置…/重载 Dock"两个动作。每一项都走与设置页/托盘菜单同一条落地路径；打开时读真值（主题、策略、开关、端点实际音量），再点一次/Esc/点面板外均收起。音频端点不可用时音量行**置灰并写明原因**（可用 `BEAUTIFUL_NOAUDIO=1` 自检该形态），不伪造读数
-- 走 Win11 系统背板（Mica/Acrylic，见下）
+- 顶栏自绘半透明底（tint + 顶部内高光 + 下缘亮边），**不做实时抓屏背板**（常驻表面重抓会把自己的像素抓进背板 = 鬼影，见「菜单与背板」）
 
 ### Alt+Tab 替换切换器（v2）
 
@@ -32,10 +68,12 @@ Beautiful 接管日常桌面三件套：屏幕底部是悬浮 Dock（应用固�
 - **全屏直通**：前台为全屏应用（游戏/独占全屏）时自动放行原生 Alt+Tab，可在设置关闭
 - **应急停用 Win+Alt+K**：任何时刻按下即在进程内卸载接管、恢复原生 Alt+Tab（只认真实体键；不改设置值，重开在设置中操作）
 
-### 菜单与背板（v2）
+### 菜单与背板（v3 重写）
 
-- **自绘 FluentMenu 统一所有菜单**：托盘右键菜单、顶栏全部菜单/浮层、Dock 条目右键——同一套 macOS 质感弹层（DWM 背板 + 激活式弹出 + 键盘可达 + DPI 锚点屏换算）
-- **Win11 系统背板**：`DWMWA_SYSTEMBACKDROP_TYPE(38)`（Mica/Acrylic，22H2+）→ 未公开 `DWMWA_MICA_EFFECT(1029)` → 旧 `SetWindowCompositionAttribute` 亚克力，三级自动降级；使用背板的窗口为非分层（`AllowsTransparency=false`）+ 圆角由 `DWMWA_WINDOW_CORNER_PREFERENCE` 提供，Dock 分层点击穿透窗体仍走旧亚克力
+- **自绘 FluentMenu 统一所有菜单**：托盘右键菜单、顶栏全部菜单/浮层、Dock 条目右键——同一套 macOS 质感弹层（激活式弹出 + 键盘可达 + 锚点屏 DPI 换算 + 抓屏模糊背板）
+- **弹层的"玻璃"是我们自己抓屏算出来的高斯模糊，不是系统 Mica/Acrylic**：显示前把面板下方的屏幕内容取回 → 1/4 降采样 → 三次盒式模糊 → 用 `Viewbox` 瞄准"面板在捕获区里的那一块"交回画刷（面板长大时只是露出旁边已抓好的内容，不重抓屏也不重缩放）。抓屏失败 / 取不到显示器 / 全零帧一律返回 null → 内容自铺**实心**卡底，不变黑也不开洞；`BEAUTIFUL_NOBLUR=1` 可整体自检降级形态。日志可查：`背板=抓屏模糊 面板=… 区=… 图=138×153 半径=8×4`、`背板=实心降级（抓屏未产出）`
+- **常驻表面（顶栏、Dock）不做实时抓屏，自绘半透明底**：它们本来就画在屏幕上，实时重抓会把**自己的像素**抓进背板（鬼影），而为了抓屏先隐藏一帧就是可见的闪烁。顶栏是三层自绘底（tint + 顶部内高光 + 下缘亮边），Dock 是 `ThemeDockBackground` + 1px 亮边；系统模糊只作为**增强**（DWM 认账就有额外糊感，不认账看到的仍是自绘底，两种结果都不落黑）。抓屏路径只给"显示一次"的瞬态表面（切换器 / 菜单弹层 / 媒体面板）
+- **v2 的"系统背板协商"路径已删除**：`DWMWA_SYSTEMBACKDROP_TYPE(38)`（Mica/Acrylic）与未公开的 `DWMWA_MICA_EFFECT(1029)` 在本项目已不再调用——`hr==0` 只证明属性被接受，不证明屏幕上真糊了，协商结果在真机上会骗人。**仍保留两处 best-effort**（都不是可见性前提）：① Dock 这类分层窗口另发一次旧 `SetWindowCompositionAttribute(ACCENT_ENABLE_ACRYLICBLURBEHIND)` 当增强，系统认账就有额外糊感、不认账看到的仍是自绘底（`AcrylicWindow.ApplyTintFallback`）；② 悬停预览的 Win32 宿主窗口用 `DWMWA_WINDOW_CORNER_PREFERENCE(33)` 要圆角
 
 ### 三套主题（默认鸿蒙）
 
@@ -95,10 +133,12 @@ Beautiful.sln
 │                            # 顶栏时钟格式化/主题定义/设置模型（net8.0，可单测）
 ├── src/Beautiful.App/       # WPF 壳层：Dock（自绘 DockSurface）/TopBar/Switcher/Preview(DWM 缩略图)/
 │                            # Controls(FluentMenu)/MediaWidget/Settings/Shell(托盘)/Services/Interop
-├── tests/Beautiful.Core.Tests/  # Core 单元测试（151 项）
-├── scripts/                 # env.sh / publish.cmd / release.ps1 / shot.ps1 / 探针脚本
+├── tests/Beautiful.Core.Tests/  # Core 单元测试（484 项）
+├── scripts/                 # env.sh / install-local.cmd（本机发布到 dist\）/ diag.ps1（诊断块）/
+│                            # publish.cmd / release.ps1 / shot.ps1 / 探针脚本
 ├── .github/workflows/       # release.yml（推 v* 标签云端发布）
-├── publish/                 # 发布产物（gitignore，由 publish.cmd 生成）
+├── dist/                    # 本机可运行产物（gitignore，由 install-local.cmd 生成）
+├── publish/                 # 历史发布目录（gitignore，由 publish.cmd 生成）
 ├── Directory.Build.props    # 版本号单一来源（<Version>）
 └── THIRD-PARTY-NOTICES.md
 ```
@@ -110,19 +150,19 @@ Beautiful.sln
 . ./scripts/env.sh && dotnet test tests/Beautiful.Core.Tests
 ```
 
-**本地发布产物**：
+**本地产物（推荐给使用者）**：
 
 ```cmd
-scripts\publish.cmd
+scripts\install-local.cmd
 ```
 
-脚本内部使用本机仓库自带的 SDK 与 NuGet 缓存（`.dotnet/`、`.nuget/`，均已 gitignore，不随仓库分发，且路径按本机布局硬编码为 `E:\Beautiful`）。如果你的环境没有这两个目录或仓库位于其他位置，请安装 .NET 8 SDK 后手动执行：
+双击即可。它把应用发布到**固定目录** `dist\Beautiful\`（重复运行会先清空该目录，只动 `dist/` 里面），结束时打印最终路径与 `Beautiful.exe` 大小。脚本用 `%~dp0..` 推仓库根，因此不依赖 `E:\Beautiful` 这个具体盘符；仓库自带的 `.dotnet\`、`.nuget\` 存在时就用它们（构建产物与缓存都不落 C 盘），不存在则回落到系统 `dotnet`。它执行的发布命令与 CI 逐字一致，只有输出目录不同：
 
 ```bash
-dotnet publish src/Beautiful.App -c Release -r win-x64 --self-contained true -p:PublishSingleFile=false -o publish
+dotnet publish src/Beautiful.App -c Release -r win-x64 --self-contained true -p:PublishSingleFile=false -p:UseAppHost=true -o dist/Beautiful
 ```
 
-产物输出在 `publish/`（约 200MB，自包含运行时占大头），入口为 `publish\Beautiful.exe`。
+产物约 260 个文件（自包含运行时占大头），入口为 `dist\Beautiful\Beautiful.exe`。`scripts\publish.cmd` 仍保留（输出到历史目录 `publish/`），但**面向使用的产物请以 `dist\Beautiful\` 为准**——`src\Beautiful.App\bin\` 下那份是框架依赖构建，需要 `DOTNET_ROOT` 才起得来。
 
 ## 发布（v2）
 
@@ -133,34 +173,38 @@ dotnet publish src/Beautiful.App -c Release -r win-x64 --self-contained true -p:
 
 ## 使用说明
 
-- **首次启动**：双击 `publish\Beautiful.exe`。顶栏出现在屏幕顶部、Dock 出现在屏幕底部（默认任务栏策略为"隐藏"，可在设置更改）；系统托盘出现 Beautiful 图标。
+- **首次启动**：双击 `dist\Beautiful\Beautiful.exe`（由 `scripts\install-local.cmd` 生成；没自己构建就下载 Release 的 zip 解压，内容同一件产物）。顶栏出现在屏幕顶部、Dock 出现在屏幕底部（默认任务栏策略为"隐藏"，可在设置更改）；系统托盘出现 Beautiful 图标。
 - **退出路径**：顶栏 logo 菜单"退出"，或托盘菜单"退出"（任务栏策略为"隐藏"时原生托盘不可见——**顶栏就是逃生入口**），或设置窗口。
 - **切换器**：按住 Alt+Tab 弹出面板，同应用多窗口可展开选择，松开提交、Esc 取消。若接管行为异常，按 **Win+Alt+K** 立即应急停用（原生 Alt+Tab 当场恢复；重新启用去设置里打开开关）。
 - **悬停预览**：鼠标在 Dock 窗口条目上停留 350ms 即弹出该窗口的实时缩略图；可在设置中关闭。
 - **固定应用**：右键 Dock 图标选择"固定/取消固定"；固定清单保存在 `config/dock.json`，也可直接编辑该文件（应用列表）。
 - **托盘菜单**：设置 / 主题（鸿蒙、macOS、Linux 子菜单）/ 重载 Dock / 退出；双击托盘图标直接打开设置。
 - **歌词说明**：媒体胶囊依赖播放器注册 SMTC 会话。双语歌词优先取网易云翻译（tlyric），取不到时回退 LRCLIB（lrclib.net），两者皆无时显示"暂无歌词"；歌词结果按曲目缓存于 `cache/`。歌词偏移可在设置中微调。
-- **日志排查**：运行日志位于 `logs/`，包含启动流程、会话发现、背板降级路径与异常记录。
+- **日志排查**：运行日志位于 `<运行入口>\logs\Beautiful-yyyyMM.log`（自包含产物就是 `dist\Beautiful\logs\`），包含启动流程、条带几何与落位回读、会话发现、背板降级路径与异常记录。不用手抄：`powershell -NoProfile -ExecutionPolicy Bypass -File scripts\diag.ps1` 自动挑最新日志，连同每块屏的 `rcMonitor`/有效 DPI 与当前设置打成一整段（可 `-Path` 指定日志）。
 
 ## 已知限制
 
 1. **QQ音乐 Win32 客户端与 PotPlayer 不注册 SMTC**，因此不会出现媒体胶囊，顶栏也没有媒体迷你项（QQ 音乐 Win32、PotPlayer 均未接入系统媒体控制）。
 2. **网易云音乐 Win32 客户端需 SMTC 桥接插件**（如 [inflink-rs](https://github.com/apoint123/inflink-rs)）才会注册会话；注册后即可即插即用。
 3. **网易云接口为非官方接口**，仅供个人使用，不保证可用性；请勿用于商业用途。
-4. **真机复验项**：本项目的开发与验证在**不合成 DWM 背板与 DWM 缩略图**的虚拟机上进行——"真模糊"（Mica/Acrylic 系统背板的实际模糊效果）与"实时缩略图画面"（悬停预览里显示的窗口实时内容）两项在开发机上**视觉未验证**；两者的代码路径、HRESULT 判定、句柄生命周期与布局已验证（日志可查背板降级档与缩略图注册/注销计数）。需在正常合成的实机 Win11 上确认最终视觉。
+4. **真机复验项（v3 更新）**：本项目的开发与验证在**不合成 DWM 背板与 DWM 缩略图**的虚拟机上进行，因此两项视觉**仍未验证**：① **DWM 实时缩略图悬停预览**里实际显示的画面（代码路径、HRESULT 判定、句柄注册/注销计数与布局已验证）；② 系统 DWM 模糊作为**增强**叠在自绘底之上时实机呈现如何（v3 弹层的玻璃是自己抓屏算的高斯模糊，这一项在开发机上已目视验证，日志 `背板=抓屏模糊`）。系统 Mica/Acrylic 属性路径（`DWMWA_SYSTEMBACKDROP_TYPE` / `DWMWA_MICA_EFFECT`）在 v3 已不再调用，不是任何表面的可见性前提；Dock 上那一次旧 `SetWindowCompositionAttribute` 只是 best-effort 增强，其在实机上的呈现同样未验证。
 5. **隐藏任务栏后原生托盘不可见**：策略为"隐藏"时托盘图标随任务栏消失，退出需经**顶栏 logo 菜单"退出"**或设置窗口（启动时可用 `--settings` 参数直接打开）——顶栏即是逃生入口。
 6. **强杀进程的 autohide 残留**：本进程被强杀时任务栏窗口由 explorer 自行摆回屏幕，但系统 autohide 位可能留在"开"——表现为任务栏缩到屏幕外、**把指针顶到屏幕最底行即可唤出**（不是卡死，无需重启 `explorer.exe`）；再次启动 Beautiful 并正常退出/切"保留"即清掉（只清这一位）。若用户自身的原生 autohide 偏好恰为"开"，退出 Beautiful 会一并清掉，可在系统设置重开。
-7. **多显示器为单显示器假设**：`HideAll` 把任务栏窗口摆到**主屏**底边那一行，副屏 `Shell_SecondaryTrayWnd` 会被挪到主屏上（跑错显示器），副屏条带预留是否被一并释放未实测；还原不受影响（各窗口基准矩形按句柄留存）。且 **Dock 与顶栏按构造仅覆盖主屏**——两条 AppBar 的条带几何都取 `GetSystemMetrics(SM_CXSCREEN/SM_CYSCREEN)`（主屏尺寸），未按窗口所在显示器定位，多屏机器上它们只会出现/铺满主屏。多屏机器暂用"自动隐藏"或"保留"策略规避。
+7. **多屏与混合 DPI：代码已按屏取数，实机未复验**：v3 已把条带几何与副屏任务栏的判定全部改成按窗口所在显示器取（`MonitorFromWindow`/`MonitorFromPoint` + `GetMonitorInfo` + `GetDpiForMonitor`，见「不同分辨率、DPI 与多屏」），v2 那条"Dock 与顶栏按构造仅覆盖主屏 / `HideAll` 把副屏任务栏挪到主屏"的限制在代码层面已消除；但开发机是**单显示器 1024×768 @100%**，混合 DPI、非零原点副屏、拔屏等路径**只有单元测试与代码路径级验证**。真机上先跑 `scripts\diag.ps1`：`[显示器与 DPI]` 一节列每块屏的 `rcMonitor`/`rcWork`/有效 DPI/主屏标志，`[顶栏几何]`、`[Dock 几何]`、`[AppBar]` 三节给落位与协商数字，两边一对就能定位是哪一块屏、哪一步算错。
 8. **Alt+Tab 接管的系统边界**：低级键盘钩子在 **UAC 安全桌面**（提权确认弹窗）收不到按键——此时切换器不出现、原生行为不受影响；提权窗口场景存在同类系统限制。游戏/独占全屏已做**全屏直通**（前台全屏时放行原生 Alt+Tab，可关）。如接管出现任何异常，**Win+Alt+K** 应急停用。
-9. **悬停放大动画与部分主题视觉在受限环境下未逐一实机验证**（多显示器缩放、不同 DPI 等），效果可能因机器而异；放大场/弹跳/倒影/预览均有代码级与单测级验证。
+9. **只有"单显示器 @100%"这一条路径做过端到端目视**：不同 DPI 缩放（125%/150%）、原点非零的副屏、把 Dock 与顶栏分到两块屏（`DockMonitor`/`TopBarMonitor`）这些组合在这台开发机上根本产生不出来，属**单元测试 only**；悬停放大动画与部分主题视觉在受限环境下未逐一实机验证，效果可能因机器而异。放大场/弹跳/倒影/预览/条带几何算术均有代码级与单测级验证。
 10. **流畅度验收口径如实声明**：本项目对放大动画的验收门槛是"帧间隔 max < 32ms"。开发虚拟机实测 P95 帧间隔 **36.1ms**（丝滑重写后由 65.7ms 改进而来），**该门槛在本 VM 上未达标**，归因于 VM 分层窗口（WS_EX_LAYERED）合成路径的呈现下限；此数据**未在真实 DWM 合成的实体机上复验**，实机帧时间通常应优于 VM，但不保证。
+
+11. **MSIX/UWP 启动器条目没有图标**：当前 Windows SDK 投影（19041）不暴露 logo 路径，取不到就是空框——不伪造、也不错画成资源管理器图标（条目本身可搜可启动）。
+12. **Dock 拖拽交互由进程内 `FileDrop` 代理验证**：拖入固定 / 块内排序 / 甩出取消固定的处理路径由自己构造的 `DragEventArgs` 喂进同一条代码路径并逐项留日志，**没有用真实 Explorer 拖拽**复验。真机上若"拖进去没反应"，差异大概率出在 shell 侧的数据格式或 drop 效果回调，请把 `logs` 里的 `拖入固定` / `Dock 排序` 行发回来。
+13. **壁纸取色在这台 VM 上只验到"读得到壁纸"这一半**：`UseWallpaperAccent=true` 实测日志为 `壁纸取色：c:\windows\web\wallpaper\windows\img0.jpg → #9BBBD4`（取到有效强调色、非黑非白、无异常）。"读不到壁纸路径（纯色桌面 / 壁纸幻灯片）→ 沿用主题强调色"与"灰阶图 → 判不可取"两条降级分支由代码路径与单元测试（`DominantColorTests`）保证，**未在这台 VM 上实机触发**（它本来就有可读壁纸）。
 
 ### 未实现（有意延后）
 
-以下能力 v2.0.0 **未实现**（避免"看起来像清单遗漏"的误解，明确列出）：
+以下能力 v3 **仍未实现**（避免"看起来像清单遗漏"的误解，明确列出）：
 
-- Dock 停靠边可配置（当前 Dock 固定底边、顶栏固定顶边）
-- Dock 图标拖拽排序
+- Dock 停靠边可配置：`AppSettings.DockPosition` 只是模型字段，设置页与运行时都未接线（当前 Dock 固定底边、顶栏固定顶边）
+- Dock 自动隐藏：`AppSettings.AutoHideDock` 同上，只有模型字段，未接线
 - 中键关闭窗口
 - 切换器按窗口显示实时缩略图列表（当前为按应用归并的图标列表）
 - 控制中心的**屏幕亮度**：需要 `WmiMonitorBrightness` 系 WMI 类（.NET 侧要额外引 `System.Management` 包，本仓库 src 侧目前零第三方包），且无背光硬件的机器（虚拟机/台式机）上只能永远停在"置灰"形态——按"不放死滑杆"的裁定整项不做，音量与网络/电量维持原样
