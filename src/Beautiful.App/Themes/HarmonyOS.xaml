@@ -3,7 +3,9 @@
                     xmlns:sys="clr-namespace:System;assembly=mscorlib">
 
     <!-- HarmonyOS 主题 token（调研值）：默认深色玻璃（浅色变体 #59FFFFFF 由 Task 17 系统主题跟随提供）。
-         ThemeIconClip（squircle 遮罩几何）由 ThemeManager 以 Superellipse 采样在运行时注入，勿在此声明。 -->
+         ThemeIconClip（squircle 遮罩几何）由 ThemeManager 以 Superellipse 采样在运行时注入，勿在此声明。
+         原生鸿蒙 dock 是连续列表 + 超级椭圆胶囊（圆角 28），**无分隔符、无倒影**：
+         ThemeDefinition.DockSeparatorsEnabled=false / ReflectionDefault=false。 -->
 
     <!-- 鸿蒙蓝强调色：运行指示点 -->
     <SolidColorBrush x:Key="ThemeAccent" Color="#0A59F7"/>
@@ -13,6 +15,8 @@
     <SolidColorBrush x:Key="ThemeTextPrimary" Color="#FFFFFFFF"/>
     <!-- 浮层面板（媒体胶囊）底色 -->
     <SolidColorBrush x:Key="ThemePanelBackground" Color="#26FFFFFF"/>
+    <!-- 分隔符线色（本主题不生成分隔符条目，键留着让模板在主题开关改变时仍解析得到） -->
+    <SolidColorBrush x:Key="ThemeDockSeparatorFill" Color="#33FFFFFF"/>
     <!-- 浮层（托盘菜单/媒体面板）主题 tint 覆盖层：Win11 系统背板（Mica/Acrylic）的取色由系统决定，
          应用写不进去 → 主题的 AcrylicTint（#61000000）改以内容层叠加体现，取 30% alpha 的叠加强度 -->
     <SolidColorBrush x:Key="ThemeBackdropTint" Color="#4D000000"/>

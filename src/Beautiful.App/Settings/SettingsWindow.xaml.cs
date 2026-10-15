@@ -104,7 +104,9 @@ public partial class SettingsWindow : Window
         TopBarCheck.IsChecked = s.TopBarEnabled;
         SwitcherCheck.IsChecked = s.SwitcherEnabled;
         FullscreenPassthroughCheck.IsChecked = s.FullscreenPassthrough;
-        ReflectionCheck.IsChecked = s.ReflectionEnabled;
+        // 倒影是三态设置：用户没显式动过（null）时显示**当前主题默认**（现代 macOS/GNOME/鸿蒙都无倒影），
+        // 勾/去勾一次就写入显式值，此后切主题不再冲掉用户的选择（AppSettings.ReflectionEnabledFor）。
+        ReflectionCheck.IsChecked = s.ReflectionEnabledFor(SettingsService.ThemeDefinitionOf(s).ReflectionDefault);
         BounceCheck.IsChecked = s.BounceEnabled;
         CapsuleCheck.IsChecked = s.ShowMediaCapsule;
         HidePanelCheck.IsChecked = s.HidePanelOnDeactivate;

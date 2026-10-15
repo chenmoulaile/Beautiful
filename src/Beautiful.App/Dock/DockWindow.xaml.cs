@@ -39,15 +39,14 @@ namespace Beautiful.App.Dock;
 /// </summary>
 public partial class DockWindow : AcrylicWindow
 {
-    // 面板可见高度与条带顶部透明余量随 DockIconSize / 放大强度动态计算（见 VisiblePanelDip / StripHeadroomDip），
+    // 面板可见高度与条带顶部透明余量随图标尺寸/主题几何/放大强度动态计算（见 VisiblePanelDip / StripHeadroomDip），
     // 不再是固定常量——图标尺寸是设置项（32..72），macOS 放大后图标会向上生长，窗口必须容得下。
-    // 行高几何（IconSize + 固定行内余量 + 倒影余量）唯一来源在 DockSurface.RowHeightDip（Task 15 起开启
-    // 倒影后行高再加一截，供镜像渐变倒影占据图标下方空间）。主题默认 IconSize=44 且无倒影时行高=64、
-    // VisiblePanelDip()=76，与原 DockHeightDip 完全一致；无放大时余量取 MinStripHeadroomDip=22，
-    // 与原 StripHeadroomDip 一致 → 未动设置时**窗口**矩形零变化（保住"贴底无缝"的实测结论与
-    // DockSurface 的可用高度假设）；变的是 ABM_SETPOS 上报的预留带 = 只报面板 76 DIP（v3 §1.C），
-    // 那 22 DIP 的透明带重新还给工作区。
-    private const double PanelMarginDip = 12;
+    // 【v3 T4：竖向几何全部主题驱动】行内余量（DockSurface.RowInsetDip）与面板内边距取自 ThemeDefinition，
+    // 于是"面板贴图标"成为原生各自的值而不是统一 20+12：IconSize=44 时 macOS 行 54 / 面板 66 DIP
+    // （原 64 / 76；倒影显式开启时仍复原为 83.2 / 95.2，见 DockRowMath 推导）。
+    // 算术本体在 Core（Dock.DockRowMath，单测覆盖），本窗口只负责"把主题参数喂进去 + 读结果"：
+    // 条带预留 = 可见面板高、窗口 = 面板 + 放大余量、媒体面板锚定、点击穿透几何都读同一来源，
+    // 不允许出现第二条算术路径（v3 §1.C 的裁定，T1 刚建立的不变量）。
     private const double MinStripHeadroomDip = 22;
     private const double SigmaInPitches = 2.0;  // 高斯 σ（单位 = 一个图标间距；控制器裁定：不随主题变化）
         // 尺度说明（评审发现：旧注释撒谎）：Core 的场是标准差形式 exp(-d²/(2σ²))，v1 的 Magnifier 是
@@ -95,7 +94,10 @@ public partial class DockWindow : AcrylicWindow
         _smtc = new SmtcService();
         _mediaVm = new MediaViewModel(_smtc, Dispatcher); // 先于 InitializeComponent：XAML 模板可能经 RelativeSource 绑定 MediaVm
         InitializeComponent();
-        _vm = new DockViewModel(_tracker);
+        // 分隔符初值取**设置指向的那个主题**（与下面 ThemeManager.Apply 同一表达式），不读 ThemeManager.Current：
+        // 此刻本窗口还没应用主题，读 Current 会拿到上一/默认主题 → 首帧少画/多画一道细线。
+        _vm = new DockViewModel(_tracker,
+            separatorsEnabled: SettingsService.ThemeDefinitionOf(SettingsService.Current).DockSeparatorsEnabled);
         DataContext = _vm;
         WireSurface();
         // 【终审 I-6】ThemeChanged 静态订阅移出构造函数（原 :94）：构造期任何一步抛异常都会留下
@@ -184,6 +186,9 @@ public partial class DockWindow : AcrylicWindow
         // 见 ApplySurfaceLayoutParams。尺寸变化会改条带高度 → 顺带重排 AppBar（若尚未注册则 no-op，
         // OnSourceInitialized 的 RegisterAndPositionAppBar 会用同一套几何完成首帧定位）。
         ApplySurfaceLayoutParams();
+        // 分隔符开关也是主题参数（macOS 有 / GNOME 与鸿蒙没有），"插在哪两块之间"由 Core 规则推导，
+        // 渲染器里没有任何 if (theme == mac) —— 这就是"不同风格的 dock 完美还原原生显示方式"的落点。
+        _vm.ApplySeparatorPolicy(theme.DockSeparatorsEnabled);
         Surface.Refresh();
         ScheduleReposition();
     }
@@ -201,26 +206,43 @@ public partial class DockWindow : AcrylicWindow
         var icon = (double)s.DockIconSize;
         Surface.IconSize = icon;
         Surface.Spacing = theme.ItemSpacing;
+        // 行内余量（主题 DockRowInsetDip）：面板贴不贴图标由它决定，写死 20 时三主题都是"半空黑框"。
+        Surface.RowInsetDip = theme.DockRowInsetDip;
         Surface.ShowMagnification = theme.ShowMagnification;
         Surface.MaxScale = theme.ShowMagnification ? s.MagnificationStrength : 1.0;
-        // 倒影开关（Task 15 起有渲染器）：DockSurface 订阅本 DP 变更即时增删倒影并加长条目行，
-        // 行高变化会体现在 VisiblePanelDip → 条带重排由本方法调用方（RefreshLayoutFromSettings）负责触发。
-        Surface.ReflectionEnabled = s.ReflectionEnabled;
+        // 倒影：设置项是**三态**（null = 跟随主题默认，现代 macOS/GNOME/鸿蒙都关），用户显式开过的
+        // true/false 永远优先于主题——切主题不会把用户的选择冲掉，也不再让 macOS 默认长出 31 DIP 倒影带。
+        Surface.ReflectionEnabled = s.ReflectionEnabledFor(theme.ReflectionDefault);
+        // 面板内边距：XAML 里 Surface.Margin / DockPanelRoot.Padding 是同一组主题值，
+        // VisiblePanelDip() 算的也是它 —— 视觉与"上报 shell 的预留带"必须来自同一个数（v3 §1.C）。
+        var padding = new Thickness(theme.DockPanelPaddingXDip, theme.DockPanelPaddingYDip,
+                                    theme.DockPanelPaddingXDip, theme.DockPanelPaddingYDip);
+        Surface.Margin = padding;
+        DockPanelRoot.Padding = padding;
+        // 图标宽高 + 遮罩 + 分隔符几何（线粗/高度/盒宽）随尺寸与主题重注入主题字典（冻结/数值，非逐帧路径）。
         ThemeManager.ApplyIconSize(icon, Application.Current);
     }
 
     // ---------- 条带几何（随图标尺寸/放大强度动态；预留带 ≠ 窗口矩形） ----------
 
-    /// <summary>可见面板高 = 行高（IconSize+20，开启倒影时另加倒影余量，见 DockSurface.RowHeightDip）+ 上下边距(6+6)。
-    /// 主题默认 IconSize=44 且无倒影时 = 76。<b>这是上报 shell 的 AppBar 预留带高度</b>（v3 §1.C：
-    /// 停靠区只预留 Dock 本体）。</summary>
-    private double VisiblePanelDip() => Surface.RowHeightDip + PanelMarginDip;
+    /// <summary>
+    /// 可见面板高 = 行高（IconSize + 主题行内余量，开启倒影时另加倒影余量，见 DockSurface.RowHeightDip）
+    /// + 主题上下内边距各一（XAML 里 Surface.Margin / DockPanelRoot.Padding 由 <see cref="ApplySurfaceLayoutParams"/>
+    /// 写成同一组主题值，所以这里不是第二条算术路径而是同一来源的两次消费）。
+    /// <b>这是上报 shell 的 AppBar 预留带高度</b>（v3 §1.C：停靠区只预留 Dock 本体）。
+    /// IconSize=44 时：macOS 66 DIP、Linux 70、鸿蒙 72（v2 统一 76，倒影开启 95.2）。
+    /// </summary>
+    private double VisiblePanelDip()
+        => DockRowMath.PanelHeightDip(Surface.RowHeightDip, ThemeManager.Current.DockPanelPaddingYDip);
 
     /// <summary>
     /// 窗口在面板之上的透明余量，供放大后的图标向上生长不被窗口上沿裁切。
     /// 无放大主题恒取 <see cref="MinStripHeadroomDip"/>（=22，与 v1 实测一致）；macOS 下按
-    /// 图标尺寸与当前倍率算越出量（图标底边在面板内，放大后顶边越出 ≈ IconSize·(MaxScale−1)−16），
-    /// 至少 22（IconSize=44/MaxScale=1.8 时越出 19.2 → 取 22，复现原几何）。
+    /// 图标尺寸与当前倍率算越出量。旧写法是 <c>IconSize·(MaxScale−1) − 16</c>，那个 16 是
+    /// "旧统一行内余量 20 的一半 + 旧的 6 DIP 面板边距"；v3 T4 把行内余量交给主题（macOS 10）之后
+    /// 常量就不成立了——面板收紧 10 DIP，放大后的图标顶边会被窗口上沿切掉一截。
+    /// 现在越出量由 <see cref="DockRowMath.MagnificationHeadroomDip"/> 用同一组主题值算：
+    /// IconSize=44/MaxScale=1.8/余量 10/边距 6 → 24.2 → 取 25（≥22 的下限保住"贴底无缝"的实测结论）。
     /// <para>
     /// v3 T1 起这截余量<b>只在窗口矩形里</b>（<c>StripMath.WindowRect</c> 把窗口在预留带之上放大），
     /// 不再进 ABM_SETPOS 的上报值 —— 窗口可以越出自己的 AppBar 预留带，预留带只决定工作区。
@@ -229,9 +251,11 @@ public partial class DockWindow : AcrylicWindow
     /// </summary>
     private double StripHeadroomDip()
     {
-        if (!ThemeManager.Current.ShowMagnification) return MinStripHeadroomDip;
-        var overflow = Surface.IconSize * (Surface.MaxScale - 1.0) - 16.0;
-        return Math.Max(MinStripHeadroomDip, Math.Ceiling(overflow));
+        var theme = ThemeManager.Current;
+        if (!theme.ShowMagnification) return MinStripHeadroomDip;
+        return DockRowMath.MagnificationHeadroomDip(Surface.IconSize, Surface.MaxScale,
+                                                    theme.DockRowInsetDip, theme.DockPanelPaddingYDip,
+                                                    MinStripHeadroomDip);
     }
 
     /// <summary>
@@ -425,7 +449,11 @@ public partial class DockWindow : AcrylicWindow
         // 单独成行的 "AppBar SETPOS rc=(l,t)-(r,b)"：scripts/frametime.ps1 正是按这条正则取 Dock 条带
         // 矩形（v2 把 SETPOS 挤在 QUERYPOS 那行里，正则从来没命中过，探针只能猜 "$b.Bottom-100"）。
         Logger.Info($"AppBar SETPOS rc={actual} 期望={expect} {(actual == expect ? "一致" : "不一致")}");
-        Logger.Info($"Dock 工作区 预留高={placed.Height}px（=面板）窗口高={window.Height}px 净得={window.Height - placed.Height}px");
+        // 面板 DIP 一并落日志：真机反馈"dock 还有一段黑框"时，这一行就能判定是面板没贴图标
+        // （行高 ≈ IconSize + 主题余量）还是别的问题，不必再靠截图目测。
+        Logger.Info($"Dock 工作区 预留高={placed.Height}px（=面板 {VisiblePanelDip():F1}DIP，行高 {Surface.RowHeightDip:F1}DIP，" +
+                    $"图标 {Surface.IconSize:F0}DIP，倒影 {(Surface.ReflectionEnabled ? "开" : "关")}）" +
+                    $"窗口高={window.Height}px 净得={window.Height - placed.Height}px");
 
         Left = StripMath.ToDip(window.Left, t.DpiScale);
         Top = StripMath.ToDip(window.Top, t.DpiScale);

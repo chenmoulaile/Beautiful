@@ -90,12 +90,42 @@ public static class MagnificationField
     {
         if (baseCenters is null) throw new ArgumentNullException(nameof(baseCenters));
         if (scales is null) throw new ArgumentNullException(nameof(scales));
-        if (sigmaDip <= 0)
-            throw new ArgumentOutOfRangeException(nameof(sigmaDip), sigmaDip, "sigma 必须为正的 DIP 半径");
         if (scales.Length < baseCenters.Count)
             throw new ArgumentException($"缓冲区长度 {scales.Length} < 项数 {baseCenters.Count}", nameof(scales));
+        ComputeScalesInto(cursorX, baseCenters, baseCenters.Count, maxScale, sigmaDip, scales);
+    }
 
-        FillScales(cursorX, baseCenters, maxScale, sigmaDip, scales);
+    /// <summary>
+    /// 同上，但**只算前 <paramref name="count"/> 个中心**：UI 侧的场缓冲区按条目数一次性预分配
+    /// （<see cref="DockRowLayout"/> 只填前 count 项），长度不必每帧精确匹配，于是重排之外的逐帧路径
+    /// 一个字节都不分配。
+    /// </summary>
+    /// <param name="cursorX">光标 X（DIP，未放大基准坐标系）。</param>
+    /// <param name="baseCenters">未放大中心 X 缓冲区（升序），只看前 <paramref name="count"/> 项。</param>
+    /// <param name="count">参与计算的项数（&gt; 0 且 ≤ baseCenters.Count 且 ≤ scales.Length）。</param>
+    /// <param name="maxScale">正对光标项的最大倍率。</param>
+    /// <param name="sigmaDip">高斯衰减半径（DIP），必须为正。</param>
+    /// <param name="scales">输出缓冲区，长度须 &gt;= <paramref name="count"/>；只写前 count 项。</param>
+    /// <exception cref="ArgumentOutOfRangeException">sigmaDip &lt;= 0 或 count 越出缓冲区。</exception>
+    /// <exception cref="ArgumentNullException">baseCenters 或 scales 为 null。</exception>
+    public static void ComputeScalesInto(
+        double cursorX,
+        IReadOnlyList<double> baseCenters,
+        int count,
+        double maxScale,
+        double sigmaDip,
+        double[] scales)
+    {
+        if (baseCenters is null) throw new ArgumentNullException(nameof(baseCenters));
+        if (scales is null) throw new ArgumentNullException(nameof(scales));
+        if (sigmaDip <= 0)
+            throw new ArgumentOutOfRangeException(nameof(sigmaDip), sigmaDip, "sigma 必须为正的 DIP 半径");
+        if (count < 0 || count > baseCenters.Count)
+            throw new ArgumentOutOfRangeException(nameof(count), count, $"项数须落在 0..{baseCenters.Count}");
+        if (scales.Length < count)
+            throw new ArgumentOutOfRangeException(nameof(count), count, $"缓冲区长度 {scales.Length} < 项数 {count}");
+
+        FillScales(cursorX, baseCenters, count, maxScale, sigmaDip, scales);
     }
 
     /// <summary>高斯本体：<c>scale_i = 1 + (maxScale-1)·exp(-(cursorX-center_i)²/(2σ²))</c>（不做分配，可被两条 API 复用）。</summary>
@@ -105,9 +135,19 @@ public static class MagnificationField
         double maxScale,
         double sigmaDip,
         double[] scales)
+        => FillScales(cursorX, baseCenters, baseCenters.Count, maxScale, sigmaDip, scales);
+
+    /// <summary>高斯本体（显式项数版本）：只写前 count 项，调用方缓冲区可以是容量而非精确长度。</summary>
+    private static void FillScales(
+        double cursorX,
+        IReadOnlyList<double> baseCenters,
+        int count,
+        double maxScale,
+        double sigmaDip,
+        double[] scales)
     {
         var twoSigmaSq = 2.0 * sigmaDip * sigmaDip;
-        for (var i = 0; i < baseCenters.Count; i++)
+        for (var i = 0; i < count; i++)
         {
             var d = cursorX - baseCenters[i];
             scales[i] = 1.0 + (maxScale - 1.0) * Math.Exp(-(d * d) / twoSigmaSq);

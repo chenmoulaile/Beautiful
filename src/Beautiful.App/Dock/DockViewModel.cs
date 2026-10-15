@@ -4,40 +4,67 @@ using System.ComponentModel;
 using System.IO;
 using Beautiful.App.Interop;
 using Beautiful.App.Services;
+using Beautiful.Core.Dock;
 
 namespace Beautiful.App.Dock;
 
 /// <summary>
 /// Dock 数据源：合并 固定应用（PinnedAppsStore → config/dock.json，缺失时代码默认）
-/// + WindowTracker 运行窗口（实时增删）+ 回收站 + 媒体胶囊占位。
-/// 布局顺序固定为：Pinned… | Window… | 回收站 | 媒体；窗口块始终连续，映射下标 = 固定项数 + 跟踪集合下标。
+/// + WindowTracker 运行窗口（实时增删）+ 回收站 + 媒体胶囊占位，并按主题插入**分隔符**条目。
+/// <para>
+/// 语义序列（不含分隔符）固定为：Pinned… → Window… → 回收站 → 媒体。分隔符不是一份第二套数据，
+/// 而是**每次由 Core 的 <see cref="DockSeparatorPlan"/> 从语义序列推导出来**（macOS 主题开、其余关），
+/// 所以窗口块增删、固定块重载、主题切换三条路径都不会让细线插错位置或插两道。
+/// </para>
+/// <para>
+/// 写回 <see cref="Items"/> 走"公共前缀/后缀对齐"的最小差异：只有真正变化的区段才发集合事件，
+/// 标题刷新仍发 Replace（<see cref="DockSurface"/> 的快路径只换 DataContext、不重建可视树）。
+/// 分隔符用固定实例（每个角色一个），位置没变就不会产生集合事件。
+/// </para>
 /// 所有事件均在 UI 线程到达（WindowTracker 保证），无需加锁。
 /// </summary>
 public sealed class DockViewModel
 {
     private readonly WindowTracker _tracker;
     private readonly PinnedAppsStore _pinnedStore;
-    private int _pinnedCount; // 可变：ReloadPinned 重建固定块后更新（窗口块映射下标随之平移）
+
+    /// <summary>语义块：固定项（dock.json 现值）。</summary>
+    private readonly List<DockItem> _pinned = new();
+
+    /// <summary>语义块：运行窗口，与 <see cref="WindowTracker.Windows"/> 下标一一对应。</summary>
+    private readonly List<DockItem> _windows = new();
+
+    // 后缀槽各一个固定实例：回收站 + 媒体胶囊（胶囊无会话时由模板把宽度收成 0）
+    private readonly DockItem _recycleBin = CreateRecycleBinItem();
+    private readonly DockItem _media = CreateMediaItem();
+
+    // 分隔符同样是固定实例（角色 → 实例）：槽位不变时 Reconcile 不产生任何集合事件
+    private readonly DockItem _appsSeparator = MakeSeparator(DockSeparatorRole.AppsBoundary);
+    private readonly DockItem _trashSeparator = MakeSeparator(DockSeparatorRole.TrashBoundary);
+
+    private bool _separatorsEnabled;
+
+    /// <summary>最近一次落到 Items 的分隔符槽位（语义下标 → 实际下标的换算依据）。</summary>
+    private IReadOnlyList<DockSeparatorSlot> _slots = Array.Empty<DockSeparatorSlot>();
 
     public ObservableCollection<DockItem> Items { get; } = new();
 
-    public DockViewModel(WindowTracker tracker, PinnedAppsStore? pinnedStore = null)
+    /// <param name="separatorsEnabled">初始分隔符开关（来自主题 DockSeparatorsEnabled；主题切换经 <see cref="ApplySeparatorPolicy"/> 重放）。</param>
+    public DockViewModel(WindowTracker tracker, PinnedAppsStore? pinnedStore = null, bool separatorsEnabled = false)
     {
         _tracker = tracker;
         _pinnedStore = pinnedStore ?? new PinnedAppsStore();
+        _separatorsEnabled = separatorsEnabled;
 
-        foreach (var path in _pinnedStore.Load()) Items.Add(MakePinned(path));
-        _pinnedCount = Items.Count;
-
-        // 先放回收站/媒体占位，再插入窗口：保证下方 Items.Count - SuffixCount 在构造期
-        // 也恒指向固定块之后的窗口区起点（构造期窗口集合即可能非空，索引不能落入固定块）。
-        Items.Add(CreateRecycleBinItem());
-        Items.Add(CreateMediaItem());
-
-        foreach (var w in tracker.Windows) InsertWindowItem(Items.Count - SuffixCount, w);
+        foreach (var path in _pinnedStore.Load()) _pinned.Add(MakePinned(path));
+        foreach (var w in tracker.Windows)
+        {
+            w.PropertyChanged += OnWindowItemPropertyChanged;
+            _windows.Add(ToDockItem(w));
+        }
+        Reconcile();
 
         tracker.Windows.CollectionChanged += OnWindowsChanged;
-        // 初始窗口的 PropertyChanged 已在上方 InsertWindowItem 内逐个挂接，勿再 HookWindowItems 重复订阅
     }
 
     /// <summary>解除全部事件订阅（DockWindow 关闭时调用，随后 tracker.Dispose）。</summary>
@@ -47,18 +74,31 @@ public sealed class DockViewModel
         UnhookWindowItems();
     }
 
+    // ---------- 主题：分隔符策略 ----------
+
+    /// <summary>
+    /// 主题落地分隔符开关（macOS 开、GNOME/鸿蒙关）：变化时重排 Items。
+    /// 【为什么由主题而不是渲染器决定】"原生 Dock 有没有分隔符"是主题参数，不是 if (theme == mac)；
+    /// 插在哪一段之间由 Core 规则算，主题只给"要不要"。
+    /// </summary>
+    public void ApplySeparatorPolicy(bool enabled)
+    {
+        if (_separatorsEnabled == enabled) return;
+        _separatorsEnabled = enabled;
+        Reconcile();
+    }
+
     // ---------- 固定项 / 占位项 ----------
 
     /// <summary>
-    /// 按 dock.json 现值重建固定块（设置窗口编辑 / 右键固定变更后调用）：
-    /// 移除旧固定块后按下标 0..n 插入新块，窗口块整体后移保持连续。
+    /// 按 dock.json 现值重建固定块（设置窗口编辑 / 右键固定变更后调用）：固定块整体换实例后，
+    /// 分隔符槽位（"固定→运行"边界）可能整体平移甚至消失，故一律走 <see cref="Reconcile"/> 重导。
     /// </summary>
     public void ReloadPinned()
     {
-        var paths = _pinnedStore.Load();
-        for (var i = _pinnedCount - 1; i >= 0; i--) Items.RemoveAt(i);
-        for (var i = 0; i < paths.Count; i++) Items.Insert(i, MakePinned(paths[i]));
-        _pinnedCount = paths.Count;
+        _pinned.Clear();
+        foreach (var path in _pinnedStore.Load()) _pinned.Add(MakePinned(path));
+        Reconcile();
     }
 
     /// <summary>将 exe 路径加入固定列表（已固定则无操作），写回 dock.json 并重载固定块。</summary>
@@ -126,9 +166,18 @@ public sealed class DockViewModel
     private static DockItem CreateMediaItem()
         => new(Id: "media", Label: "媒体", Icon: null, Kind: DockItemKind.Media, LaunchPath: string.Empty);
 
-    // ---------- 运行窗口（实时增删 + 标题刷新） ----------
+    /// <summary>
+    /// 分隔符条目：无图标、无启动路径，Id 带角色（同一角色永远同一个实例，见字段注释）。
+    /// Label 留空——它不进工具提示（不悬停、不命中）。
+    /// </summary>
+    private static DockItem MakeSeparator(DockSeparatorRole role)
+        => new(Id: "separator:" + role, Label: string.Empty, Icon: null,
+               Kind: DockItemKind.Separator, LaunchPath: string.Empty);
 
-    private int SuffixCount => 2; // 回收站 + 媒体胶囊
+    private DockItem SeparatorFor(DockSeparatorRole role)
+        => role == DockSeparatorRole.AppsBoundary ? _appsSeparator : _trashSeparator;
+
+    // ---------- 运行窗口（实时增删 + 标题刷新） ----------
 
     private static DockItem ToDockItem(WindowItem w)
         => new(Id: w.Handle.ToString(),
@@ -138,46 +187,61 @@ public sealed class DockViewModel
                LaunchPath: w.ExePath,
                WindowHandle: w.Handle);
 
-    private void InsertWindowItem(int index, WindowItem w)
-    {
-        w.PropertyChanged += OnWindowItemPropertyChanged;
-        Items.Insert(index, ToDockItem(w));
-    }
-
     private void OnWindowsChanged(object? sender, NotifyCollectionChangedEventArgs e)
     {
         switch (e.Action)
         {
             case NotifyCollectionChangedAction.Add:
                 if (e.NewItems is null) break;
-                for (int i = 0; i < e.NewItems.Count; i++)
-                    InsertWindowItem(_pinnedCount + e.NewStartingIndex + i, (WindowItem)e.NewItems[i]!);
+                for (var i = 0; i < e.NewItems.Count; i++)
+                {
+                    var w = (WindowItem)e.NewItems[i]!;
+                    w.PropertyChanged += OnWindowItemPropertyChanged;
+                    // _windows 与 tracker.Windows 下标对齐（与固定块在 Items 里的位置无关）
+                    var at = Math.Clamp(e.NewStartingIndex + i, 0, _windows.Count);
+                    _windows.Insert(at, ToDockItem(w));
+                }
+                Reconcile();
                 break;
 
             case NotifyCollectionChangedAction.Remove:
                 if (e.OldItems is null) break;
-                for (int i = e.OldItems.Count - 1; i >= 0; i--)
+                for (var i = e.OldItems.Count - 1; i >= 0; i--)
                 {
                     var w = (WindowItem)e.OldItems[i]!;
                     w.PropertyChanged -= OnWindowItemPropertyChanged;
-                    Items.RemoveAt(_pinnedCount + e.OldStartingIndex + i);
+                    var idx = e.OldStartingIndex + i;
+                    if (idx < _windows.Count) _windows.RemoveAt(idx);
                 }
+                Reconcile();
                 break;
 
             case NotifyCollectionChangedAction.Replace:
                 if (e.OldItems is null || e.NewItems is null) break;
-                var old = (WindowItem)e.OldItems[0]!;
-                old.PropertyChanged -= OnWindowItemPropertyChanged;
-                var replacement = (WindowItem)e.NewItems[0]!;
-                replacement.PropertyChanged += OnWindowItemPropertyChanged;
-                Items[_pinnedCount + e.NewStartingIndex] = ToDockItem(replacement);
+                {
+                    var old = (WindowItem)e.OldItems[0]!;
+                    old.PropertyChanged -= OnWindowItemPropertyChanged;
+                    var replacement = (WindowItem)e.NewItems[0]!;
+                    replacement.PropertyChanged += OnWindowItemPropertyChanged;
+                    var idx = e.NewStartingIndex;
+                    if (idx < _windows.Count) _windows[idx] = ToDockItem(replacement);
+                }
+                Reconcile();
+                break;
+
+            case NotifyCollectionChangedAction.Move:
+                Reconcile();   // 顺序由 tracker.Windows 决定，语义块跟着它的下标走，这里只需重导
                 break;
 
             case NotifyCollectionChangedAction.Reset:
                 UnhookWindowItems();
-                // 移除整个窗口块后按当前集合重挂
-                while (Items.Count > SuffixCount) Items.RemoveAt(_pinnedCount);
-                foreach (var w in _tracker.Windows) InsertWindowItem(Items.Count - SuffixCount, w);
+                _windows.Clear();
+                foreach (var w in _tracker.Windows)
+                {
+                    w.PropertyChanged += OnWindowItemPropertyChanged;
+                    _windows.Add(ToDockItem(w));
+                }
+                Reconcile();
                 break;
         }
     }
@@ -185,19 +249,77 @@ public sealed class DockViewModel
     private void OnWindowItemPropertyChanged(object? sender, PropertyChangedEventArgs e)
     {
         if (e.PropertyName != nameof(WindowItem.Title) || sender is not WindowItem w) return;
-        var handle = w.Handle;
-        for (int i = _pinnedCount; i < Items.Count - SuffixCount; i++)
-        {
-            if (Items[i].WindowHandle == handle)
-            {
-                Items[i] = ToDockItem(w); // record 不可变 → 原位替换新实例
-                return;
-            }
-        }
+        var i = _windows.FindIndex(it => it.WindowHandle == w.Handle);
+        if (i < 0) return;
+        var replacement = ToDockItem(w); // record 不可变 → 原位替换新实例
+        _windows[i] = replacement;
+        // 仍走 Replace（不是先删后插）：DockSurface 的 Replace 快路径只换 DataContext，避免整树重建闪烁
+        var real = ToRealIndex(_pinned.Count + i);
+        if (real >= 0 && real < Items.Count && Items[real].Kind == DockItemKind.Window) Items[real] = replacement;
+        else Reconcile();
     }
 
     private void UnhookWindowItems()
     {
         foreach (var w in _tracker.Windows) w.PropertyChanged -= OnWindowItemPropertyChanged;
+    }
+
+    // ---------- 组合：语义序列 → Items（插入分隔符 + 最小差异写回） ----------
+
+    /// <summary>
+    /// 语义下标（不含分隔符的序列位置）→ <see cref="Items"/> 实际下标：
+    /// 加上所有"插在本位置之前或本位置"的槽位数。槽位下标是语义坐标系里的，故 ≤ 本下标的都算。
+    /// </summary>
+    private int ToRealIndex(int semanticIndex)
+    {
+        var real = semanticIndex;
+        foreach (var s in _slots)
+            if (s.Index <= semanticIndex) real++;
+        return real;
+    }
+
+    /// <summary>
+    /// 由三个语义块 + 后缀槽重导 Items：算槽位 → 生目标序列 → 与现有 Items 做前缀/后缀对齐，
+    /// 只把中间差异段删插。集合事件数 = 真正变化的条目数（运行窗口增删时恒 1）。
+    /// </summary>
+    private void Reconcile()
+    {
+        // ① 语义序列（无分隔符）
+        var semantic = new List<DockItem>(_pinned.Count + _windows.Count + 2);
+        var kinds = new List<DockItemKind>(semantic.Count);
+        AddBlock(semantic, kinds, _pinned);
+        AddBlock(semantic, kinds, _windows);
+        semantic.Add(_recycleBin); kinds.Add(_recycleBin.Kind);
+        semantic.Add(_media); kinds.Add(_media.Kind);
+
+        // ② 主题决定的分隔符槽位（Core 纯函数，可单测）
+        _slots = DockSeparatorPlan.Slots(kinds, _separatorsEnabled);
+        var target = new List<DockItem>(semantic.Count + _slots.Count);
+        var at = 0;
+        foreach (var s in _slots)
+        {
+            while (at < s.Index) target.Add(semantic[at++]);
+            target.Add(SeparatorFor(s.Role));
+        }
+        while (at < semantic.Count) target.Add(semantic[at++]);
+
+        // ③ 最小差异写回（引用相等比较：条目实例与分隔符实例都固定，未动的区段零事件）
+        var common = 0;
+        while (common < Items.Count && common < target.Count && ReferenceEquals(Items[common], target[common])) common++;
+        var suffix = 0;
+        while (suffix < Items.Count - common && suffix < target.Count - common &&
+               ReferenceEquals(Items[Items.Count - 1 - suffix], target[target.Count - 1 - suffix])) suffix++;
+
+        for (var i = Items.Count - common - suffix; i > 0; i--) Items.RemoveAt(common);
+        for (var i = common; i < target.Count - suffix; i++) Items.Insert(i, target[i]);
+    }
+
+    private static void AddBlock(List<DockItem> target, List<DockItemKind> kinds, List<DockItem> block)
+    {
+        foreach (var item in block)
+        {
+            target.Add(item);
+            kinds.Add(item.Kind);
+        }
     }
 }

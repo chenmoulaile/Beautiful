@@ -5,6 +5,12 @@ namespace Beautiful.Core.Themes;
 /// <summary>
 /// 主题参数对象（spec 4.2 表）：布局引擎唯一读取源，主题 = 参数 + 资源字典。
 /// Color 用 System.Drawing.Color（Core 无 WPF 依赖；App 侧再转 Media.Color 传亚克力 tint）。
+/// <para>
+/// v3 T4 起 Dock 的**行/面板竖向几何与分隔符样式都是主题数据**：用户"下方的 dock 栏有一段黑框，
+/// 我只需要 dock 的大小"与"macOS Dock 没有原生分隔符"两条不满，根因都是这些量曾被写死成
+/// 全局常量（行内余量 20、无分隔符）。原生差异（macOS 紧贴图标 + 两道分隔符、GNOME dash 宽松方角无分隔符、
+/// 鸿蒙胶囊最松无分隔符）只能由参数表达，不能在渲染器里 <c>if (theme == mac)</c>。
+/// </para>
 /// </summary>
 public sealed record ThemeDefinition(
     string Id, string DisplayName,
@@ -18,14 +24,31 @@ public sealed record ThemeDefinition(
     double MaxScale,              // 1=无放大
     string IndicatorStyle,        // "dot" | "bar" | "none"
     string AccentHex,             // 鸿蒙 #0A59F7
-    string FontFamily)            // "HarmonyOS Sans" / "Segoe UI Variable" / "Segoe UI"
+    string FontFamily,            // "HarmonyOS Sans" / "Segoe UI Variable" / "Segoe UI"
+    // ---------- v3 T4：Dock 行/面板竖向几何（DIP，见 Core Dock.DockRowMath） ----------
+    double DockRowInsetDip,       // 行高在图标之上的余量（图标上下各一半）：决定"面板贴不贴图标"
+    double DockPanelPaddingXDip,  // 面板水平内边距（图标块左右留白）
+    double DockPanelPaddingYDip,  // 面板竖向内边距：可见面板高 = 行高 + 2×本值 = AppBar 预留带高
+    bool ReflectionDefault,       // 倒影主题默认值（现代 macOS/GNOME/鸿蒙 dock 都无倒影；用户显式开关优先）
+    // ---------- v3 T4：分隔符（原生 macOS Dock 的结构语义） ----------
+    bool DockSeparatorsEnabled,   // 仅 macOS 原生 Dock 有分隔符；GNOME dash / 鸿蒙是连续列表
+    double DockSeparatorWidthDip,      // 竖线粗细
+    double DockSeparatorHeightRatio,   // 竖线高占**行高**比例（0.6~0.7）
+    double DockSeparatorSideInsetDip)  // 竖线左右对称留白（条目盒宽 = 粗细 + 2×本值）
 {
     /// <summary>控制器裁定：MaxScale&gt;1 才启用高斯放大（鸿蒙/Linux 无放大）。</summary>
     public bool ShowMagnification => MaxScale > 1.0;
 
     /// <summary>
+    /// 分隔符条目盒宽（DIP）：线粗 + 两侧对称留白。模板把它写成 ThemeSeparatorBoxWidthDip，
+    /// 行内还各侧再加一个 ItemSpacing，合计约两个图标间距——正是 macOS Dock 分隔符处的视觉留白。
+    /// </summary>
+    public double DockSeparatorBoxWidthDip => DockSeparatorWidthDip + 2.0 * DockSeparatorSideInsetDip;
+
+    /// <summary>
     /// 鸿蒙：深色玻璃 #61000000（默认深色；浅色变体 #59FFFFFF 由 Task 17 系统主题跟随提供），
     /// squircle 连续圆角（Superellipse nExp=4.4），无放大（胶囊悬浮反馈，Task 15 实装）。
+    /// 原生鸿蒙 dock 是一条连续列表（无分隔符），胶囊留白最松。
     /// </summary>
     public static ThemeDefinition HarmonyOs() => new(
         Id: "HarmonyOS", DisplayName: "鸿蒙",
@@ -39,9 +62,21 @@ public sealed record ThemeDefinition(
         MaxScale: 1.0,
         IndicatorStyle: "dot",
         AccentHex: "#0A59F7",
-        FontFamily: "HarmonyOS Sans");
+        FontFamily: "HarmonyOS Sans",
+        DockRowInsetDip: 12,          // 图标上下各 6：胶囊观感 roomy（原生比 macOS 松）
+        DockPanelPaddingXDip: 12,
+        DockPanelPaddingYDip: 8,      // IconSize=44 → 面板 44+12+16 = 72 DIP
+        ReflectionDefault: false,     // 鸿蒙 dock 无倒影
+        DockSeparatorsEnabled: false, // 连续列表，无分隔符
+        DockSeparatorWidthDip: 0,
+        DockSeparatorHeightRatio: 0,
+        DockSeparatorSideInsetDip: 0);
 
-    /// <summary>macOS：暗色亚克力 #B4202020（tint 同底色）、系统蓝 #0A84FF、抛物线放大 MaxScale=1.8、底部圆点、图标原样。</summary>
+    /// <summary>
+    /// macOS：暗色亚克力 #B4202020（tint 同底色）、系统蓝 #0A84FF、抛物线放大 MaxScale=1.8、
+    /// 指示点=图标下方小圆点。原生 Dock **紧贴图标**（行内只留约 10 DIP 呼吸）、
+    /// 有「固定应用 | 正在运行 | 废纸篓」两道分隔符、现代 macOS **无倒影**。
+    /// </summary>
     public static ThemeDefinition MacOs() => new(
         Id: "MacOS", DisplayName: "macOS",
         DockBackground: Argb("#B4202020"),
@@ -54,9 +89,21 @@ public sealed record ThemeDefinition(
         MaxScale: 1.8,
         IndicatorStyle: "dot",
         AccentHex: "#0A84FF",
-        FontFamily: "Segoe UI Variable");
+        FontFamily: "Segoe UI Variable",
+        DockRowInsetDip: 10,          // 图标上下各 5：面板 44+10+12 = 66 DIP（原 76，倒影开时 95）
+        DockPanelPaddingXDip: 10,
+        DockPanelPaddingYDip: 6,
+        ReflectionDefault: false,     // 现代 macOS Dock 无倒影（用户显式打开仍生效）
+        DockSeparatorsEnabled: true,  // 唯一有分隔符的主题（原生结构）
+        DockSeparatorWidthDip: 1,
+        DockSeparatorHeightRatio: 0.65,
+        DockSeparatorSideInsetDip: 5);
 
-    /// <summary>Linux(GNOME)：#E61C1C1C 实底（BlurEnabled=false 禁用亚克力）、accent #3584E4、无放大、左侧短条、圆角方形图标（半径 8）。</summary>
+    /// <summary>
+    /// Linux(GNOME)：#E61C1C1C 实底（BlurEnabled=false 禁用亚克力）、accent #3584E4、无放大、
+    /// 左侧短条指示、圆角方形图标（半径 8）。dash-to-dock 是**连续列表**（应用文件夹也在同一列里），
+    /// 无分隔符；面板比方角 macOS 略松一点，但仍远紧于 v2 的统一余量。
+    /// </summary>
     public static ThemeDefinition Linux() => new(
         Id: "Linux", DisplayName: "Linux (GNOME)",
         DockBackground: Argb("#E61C1C1C"),
@@ -69,7 +116,15 @@ public sealed record ThemeDefinition(
         MaxScale: 1.0,
         IndicatorStyle: "bar",
         AccentHex: "#3584E4",
-        FontFamily: "Segoe UI");
+        FontFamily: "Segoe UI",
+        DockRowInsetDip: 16,          // dash 给图标四周留白（左侧短条也在这格里）
+        DockPanelPaddingXDip: 8,
+        DockPanelPaddingYDip: 5,      // IconSize=44 → 面板 44+16+10 = 70 DIP
+        ReflectionDefault: false,
+        DockSeparatorsEnabled: false,
+        DockSeparatorWidthDip: 0,
+        DockSeparatorHeightRatio: 0,
+        DockSeparatorSideInsetDip: 0);
 
     /// <summary>#RRGGBB / #AARRGGBB → Color（内置解析：System.Drawing.Common 的 ColorTranslator 不在 net8.0 基础包内）。</summary>
     private static Color Argb(string hex)

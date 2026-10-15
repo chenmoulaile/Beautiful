@@ -52,7 +52,7 @@ public class AppSettingsTests
         Assert.Equal("bottom", s.DockPosition);
         Assert.True(s.PreviewEnabled);
         Assert.True(s.BounceEnabled);
-        Assert.False(s.ReflectionEnabled);
+        Assert.Null(s.ReflectionEnabled);   // v3 T4 三态：null = 跟随主题默认（不再由设置硬关/硬开）
         Assert.True(s.FullscreenPassthrough);
         Assert.Equal("ctrl+space", s.LauncherHotkey);
         Assert.False(s.AutoHideDock);
@@ -314,7 +314,7 @@ public class AppSettingsStoreTests : IDisposable
         Assert.Equal("bottom", s.DockPosition);
         Assert.True(s.PreviewEnabled);
         Assert.True(s.BounceEnabled);
-        Assert.False(s.ReflectionEnabled);
+        Assert.Null(s.ReflectionEnabled);   // v3 T4 三态：null = 跟随主题默认（不再由设置硬关/硬开）
         Assert.True(s.FullscreenPassthrough);
         Assert.Equal("ctrl+space", s.LauncherHotkey);
         Assert.False(s.AutoHideDock);

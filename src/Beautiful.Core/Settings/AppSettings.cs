@@ -53,8 +53,15 @@ public sealed record AppSettings
     /// <summary>启动固定项时是否播放弹跳动画。</summary>
     public bool BounceEnabled { get; init; } = true;
 
-    /// <summary>是否绘制 Dock 倒影（默认关，macOS 主题下手动开）。</summary>
-    public bool ReflectionEnabled { get; init; }
+    /// <summary>
+    /// 是否绘制 Dock 倒影。**三态**：null = 跟随主题默认（<c>ThemeDefinition.ReflectionDefault</c>），
+    /// true/false = 用户在设置页显式选择（优先级更高，切主题不再把它冲掉）。
+    /// v3 T4：现代 macOS / GNOME / 鸿蒙 dock 都没有倒影，主题默认一律关；真机用户已开过的仍照旧生效。
+    /// </summary>
+    public bool? ReflectionEnabled { get; init; }
+
+    /// <summary>倒影实际取值：用户未显式选择时落主题默认。</summary>
+    public bool ReflectionEnabledFor(bool themeDefault) => ReflectionEnabled ?? themeDefault;
 
     /// <summary>前台为全屏应用时是否放行原生 Alt+Tab（游戏兜底）。</summary>
     public bool FullscreenPassthrough { get; init; } = true;

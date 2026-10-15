@@ -3,13 +3,18 @@
                     xmlns:sys="clr-namespace:System;assembly=mscorlib">
 
     <!-- macOS 主题 token：暗色亚克力 #B4202020（窗口级 tint 同底色）、图标原样不遮罩 +
-         底部圆点 + 倒影开启（倒影随媒体组件 Task 15 实装）。ThemeIconClip 键由 ThemeManager
-         按需注入；本主题 IconCornerRadiusRatio=0 → 不注入 → 图标无遮罩。 -->
+         图标下方圆点指示 + **分隔符**（原生 Dock 的「固定应用 | 正在运行 | 废纸篓」结构）。
+         ThemeIconClip 键由 ThemeManager 按需注入；本主题 IconCornerRadiusRatio=0 → 不注入 → 图标无遮罩。
+         分隔符的线粗/高度/盒宽是**主题参数**（ThemeDefinition），由 ThemeManager 注入数值键，
+         条目模板只 DynamicResource 读它们 → 渲染器里没有 if (theme == mac)，也没有硬编码像素。
+         倒影默认关：现代 macOS Dock 没有倒影（用户仍可在设置页显式打开，设置优先于主题默认）。 -->
 
     <SolidColorBrush x:Key="ThemeAccent" Color="#0A84FF"/>
     <SolidColorBrush x:Key="ThemeDockBackground" Color="#B4202020"/>
     <SolidColorBrush x:Key="ThemeTextPrimary" Color="#FFFFFFFF"/>
     <SolidColorBrush x:Key="ThemePanelBackground" Color="#26FFFFFF"/>
+    <!-- Dock 分隔符：约 20% 不透明的亮线（macOS 原生是一道很淡的竖向发丝线，不是实色描边） -->
+    <SolidColorBrush x:Key="ThemeDockSeparatorFill" Color="#33FFFFFF"/>
     <!-- 浮层主题 tint 覆盖层：系统背板取色不可写，主题 AcrylicTint(#B4202020) 以 30% 叠加体现 -->
     <SolidColorBrush x:Key="ThemeBackdropTint" Color="#4D202020"/>
     <sys:String x:Key="ThemeIndicatorStyle">dot</sys:String>

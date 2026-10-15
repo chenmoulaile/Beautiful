@@ -60,12 +60,16 @@ public sealed class DockSurface : Canvas
     private const double WidthFollowStepDip = 0.25;
 
     /// <summary>
-    /// 条目行高在图标尺寸之上的余量（DIP）：44+20=64，加上 XAML 的 <c>Margin="10,6"</c> 正好等于
-    /// 可见面板高 76（= DockHeightDip）。行内条目**垂直居中**放置（<see cref="ApplyGeometry"/>），
-    /// 于是图标底边落在底板内容区内、与内描边留出约 9 DIP，运行指示点不再压线（与 v1 一致）；
-    /// 顶部余量则供放大后的图标向上生长（配合 DockWindow 的 StripHeadroomDip）。
+    /// 行高在图标尺寸之上的**主题**余量默认值（DIP，见 <see cref="RowInsetDipProperty"/>）：
+    /// 图标在行内垂直居中，故上下各得一半。v3 T4 前它是写死的 20——IconSize=44 时行高 64、面板 76，
+    /// 面板里约一半是不装东西的深色带，正是用户"下方的 dock 栏有一段黑框，我只需要 dock 的大小"的来源。
+    /// 现在由主题给出（macOS 10 / 鸿蒙 12 / GNOME 16），DockWindow.ApplySurfaceLayoutParams 写入。
+    /// 顶部那半同时是放大图标在面板内的生长起点，底部那半容纳运行指示点（不压内描边）。
     /// </summary>
-    private const double RowInsetDip = 20;
+    private const double DefaultRowInsetDip = 20;
+
+    /// <summary>图标基准边长默认值（DIP，与 IconSizeProperty 默认一致，仅用于 _rowHeight 初值）。</summary>
+    private const double DefaultIconSizeDip = 44;
 
     /// <summary>倒影带间隙（DIP）：镜像顶边与图标底边的距离（macOS Dock 倒影留一道细缝）。</summary>
     private const double ReflectionGapDip = 2;
@@ -100,8 +104,34 @@ public sealed class DockSurface : Canvas
     private readonly List<FrameworkElement?> _containers = new();
     private readonly List<DockItem?> _items = new();
 
-    /// <summary>倒影元素（与 _containers 同下标；null = 该项无倒影：媒体槽/无图标回退项/倒影关闭）。</summary>
+    /// <summary>倒影元素（与 _containers 同下标；null = 该项无倒影：媒体槽/无图标回退项/倒影关闭/分隔符）。</summary>
     private readonly List<FrameworkElement?> _reflections = new();
+
+    /// <summary>逐帧几何状态（下标 = 条目下标，与 _containers 对齐）。</summary>
+    private double[] _cur = Array.Empty<double>();     // 当前（阻尼后）scale
+    private double[] _tgt = Array.Empty<double>();     // 目标 scale（来自放大场）
+    private double[] _baseLefts = Array.Empty<double>(); // 未放大左缘
+    private double[] _lefts = Array.Empty<double>();     // 本帧**绘制**（像素）左缘：命中测试/媒体面板定位读它
+    private double[] _layoutLefts = Array.Empty<double>(); // 本帧写给 Canvas.Left 的布局左缘（= drawn + extra/2）
+    private double[] _widths = Array.Empty<double>();  // 未放大宽（模板 DesiredSize，胶囊 124 / 图标 44）
+    private double[] _heights = Array.Empty<double>();
+    private double[] _bounceRemaining = Array.Empty<double>(); // 启动弹跳剩余时长（秒；0=空闲）
+    private double[] _bounceY = Array.Empty<double>();         // 本帧弹跳纵向偏移（DIP，负=上移）
+
+    /// <summary>
+    /// 放大场输入：仅**可见且可放大**的项参与（隐藏胶囊不占位也不产生"幽灵鼓包"；分隔符占位宽但
+    /// 中心不进场 → 缩放恒 1，规则见 Core 的 <c>DockSeparatorPlan.IsMagnifiable</c>）。长度按条目数
+    /// 预分配，实际有效前 <see cref="_fieldCount"/> 项，交给场函数时用 AsSpan 精确截断（不分配、不装箱）。
+    /// </summary>
+    private double[] _fieldCenters = Array.Empty<double>();
+    private int[] _fieldToItem = EmptyInts;
+    private bool[] _magnifiable = Array.Empty<bool>();  // 基准排布的"是否参与放大场"掩码（与 _widths 同长度）
+    private double[] _fieldScales = Array.Empty<double>();   // 场输出缓冲区（逐帧零分配，见 MagnificationField.ComputeScalesInto）
+    private int _fieldCount;
+
+    private double _naturalWidth;    // 未放大总宽
+    private double _rowHeight = DockRowMath.RowHeightDip(DefaultIconSizeDip, DefaultRowInsetDip, false,
+                                                          ReflectionGapDip, ReflectionHeightRatio);
 
     /// <summary>
     /// 倒影垂直遮罩（冻结共享）：渐变**在镜像变换后的局部坐标**里定义——倒影元素的 RenderTransform
@@ -120,24 +150,6 @@ public sealed class DockSurface : Canvas
         return brush;
     }
 
-    // 逐帧几何状态（下标 = 条目下标，与 _containers 对齐）
-    private double[] _cur = Array.Empty<double>();     // 当前（阻尼后）scale
-    private double[] _tgt = Array.Empty<double>();     // 目标 scale（来自放大场）
-    private double[] _baseLefts = Array.Empty<double>(); // 未放大左缘
-    private double[] _lefts = Array.Empty<double>();     // 本帧**绘制**（像素）左缘：命中测试/媒体面板定位读它
-    private double[] _layoutLefts = Array.Empty<double>(); // 本帧写给 Canvas.Left 的布局左缘（= drawn + extra/2）
-    private double[] _widths = Array.Empty<double>();  // 未放大宽（模板 DesiredSize，胶囊 124 / 图标 44）
-    private double[] _heights = Array.Empty<double>();
-    private double[] _bounceRemaining = Array.Empty<double>(); // 启动弹跳剩余时长（秒；0=空闲）
-    private double[] _bounceY = Array.Empty<double>();         // 本帧弹跳纵向偏移（DIP，负=上移）
-
-    // 放大场输入：仅**可见**项参与（隐藏胶囊不占位也不产生"幽灵鼓包"）
-    private double[] _fieldCenters = Array.Empty<double>();
-    private int[] _fieldToItem = EmptyInts;
-    private double[] _fieldScales = Array.Empty<double>();   // 场输出缓冲区（逐帧零分配，见 MagnificationField.ComputeScalesInto）
-
-    private double _naturalWidth;    // 未放大总宽
-    private double _rowHeight = RowInsetDip;
     private double _lastReportedTotal = double.NaN;
     private double _lastCursorX = double.NaN;
 
@@ -177,6 +189,18 @@ public sealed class DockSurface : Canvas
     public static readonly DependencyProperty SpacingProperty = DependencyProperty.Register(
         nameof(Spacing), typeof(double), typeof(DockSurface),
         new FrameworkPropertyMetadata(6.0, FrameworkPropertyMetadataOptions.AffectsMeasure, OnGeometryParameterChanged));
+
+    /// <summary>
+    /// 行高在图标之上的余量（DIP，主题 DockRowInsetDip；图标行内垂直居中 → 上下各一半）。
+    /// 【v3 T4】它原本是写死的常量 20，于是三种主题的"面板厚度"完全一样且远超图标本身
+    /// （IconSize=44 → 行 64 / 面板 76，用户看到的黑框）。主题参数才是正解：macOS 原生 Dock 紧贴图标
+    /// （10），GNOME dash 稍松（16），鸿蒙胶囊最松（12）。变更走 AffectsMeasure，行高随之变 →
+    /// DockWindow 的可见面板高/预留带/放大余量全部读同一来源（<see cref="RowHeightDip"/>）。
+    /// </summary>
+    public static readonly DependencyProperty RowInsetDipProperty = DependencyProperty.Register(
+        nameof(RowInsetDip), typeof(double), typeof(DockSurface),
+        new FrameworkPropertyMetadata(DefaultRowInsetDip, FrameworkPropertyMetadataOptions.AffectsMeasure,
+            OnGeometryParameterChanged));
 
     /// <summary>正对光标项的最大倍率（1 = 等效关闭放大）。</summary>
     public static readonly DependencyProperty MaxScaleProperty = DependencyProperty.Register(
@@ -237,6 +261,13 @@ public sealed class DockSurface : Canvas
         set => SetValue(SpacingProperty, value);
     }
 
+    /// <summary>行高在图标之上的余量（DIP，主题驱动，见 <see cref="RowInsetDipProperty"/>）。</summary>
+    public double RowInsetDip
+    {
+        get => (double)GetValue(RowInsetDipProperty);
+        set => SetValue(RowInsetDipProperty, value);
+    }
+
     public double MaxScale
     {
         get => (double)GetValue(MaxScaleProperty);
@@ -268,23 +299,13 @@ public sealed class DockSurface : Canvas
     }
 
     /// <summary>
-    /// 条目行高（DIP）= IconSize + 行内余量 20 + 倒影余量（仅 ReflectionEnabled 时非零）。
-    /// 【DockWindow 条带几何的唯一来源】可见面板高 = 本值 + Surface 上下 Margin(6+6)，
-    /// 倒影开启时条带随之一致加高，AppBar 协商仍贴底无缝。
+    /// 条目行高（DIP）= IconSize + 主题行内余量 + 倒影余量（仅 ReflectionEnabled 时非零）。
+    /// 【DockWindow 条带几何的唯一来源】可见面板高 = 本值 + 2×主题竖向内边距，
+    /// 倒影开启时条带随之一致加高，AppBar 协商仍贴底无缝。算术本体在 Core（<c>DockRowMath</c>，可单测），
+    /// 这里只提供"当前控件参数"这一层。
     /// </summary>
-    public double RowHeightDip => IconSize + RowInsetDip + ReflectionExtraDip();
-
-    /// <summary>倒影几何在行底需要的额外高度：静止态"间隙 + 倒影高"完整落入行内（推导见注释）。</summary>
-    private double ReflectionExtraDip()
-    {
-        if (!ReflectionEnabled) return 0;
-        // 图标在加高后的行里仍垂直居中：倒影底缘 = containerBottom + 间隙 + 倒影高，其中
-        // containerBottom = (IconSize + 20 + X + IconSize)/2 = IconSize + (20+X)/2。要求
-        // IconSize + (20+X)/2 + gap + 0.4·IconSize ≤ IconSize + 20 + X  →  X ≥ 2·gap + 0.8·IconSize − 20。
-        // 取等号 = 倒影恰好填满行底，不多占条带一个像素。（评审自查修正：初版多减了一个 IconSize，
-        // X 恒 0 → 静止倒影下探行底 9.6 DIP，被条带下缘裁掉大半。）
-        return Math.Max(0.0, 2.0 * ReflectionGapDip + 0.8 * IconSize - RowInsetDip);
-    }
+    public double RowHeightDip => DockRowMath.RowHeightDip(IconSize, RowInsetDip, ReflectionEnabled,
+                                                            ReflectionGapDip, ReflectionHeightRatio);
 
     // ---------- 外部协作点（由 DockWindow 注入） ----------
 
@@ -480,7 +501,7 @@ public sealed class DockSurface : Canvas
 
         if (_layoutDirty || _widths.Length != n) RecomputeBaseLayout();
 
-        _rowHeight = RowHeightDip;   // 倒影开启时自动加长（ReflectionExtraDip），DockWindow 条带读同一来源
+        _rowHeight = RowHeightDip;   // 倒影开启时自动加长（DockRowMath.ReflectionExtraDip），DockWindow 条带读同一来源
         // AutoWidth：期望尺寸 = 当前放大总宽（逐帧由 ApplyGeometry 触发 InvalidateMeasure）；
         // 否则恒为未放大总宽 → 放大过程完全不触发布局。
         var width = AutoWidth ? _naturalWidth + CurrentExtraWidth() : _naturalWidth;
@@ -495,7 +516,14 @@ public sealed class DockSurface : Canvas
         return base.ArrangeOverride(arrangeSize);
     }
 
-    /// <summary>未放大基准排布：左缘/中心/可见项场中心。仅在集合或模板尺寸变化时重算。</summary>
+    /// <summary>
+    /// 未放大基准排布：左缘/中心/可见项场中心。仅在集合或模板尺寸变化时重算。
+    /// <para>
+    /// 【分隔符】宽度照常占位（行进宽），但 <c>DockSeparatorPlan.IsMagnifiable</c> 给 false →
+    /// 中心不进放大场、下标映射里也没有它 → 它的目标缩放恒 1：邻居图标长大时竖线不被拉伸，
+    /// 也不作为"可拉伸图标"参与前缀和推挤（相邻像素间距仍恒等于 Spacing，见 Core 单测）。
+    /// </para>
+    /// </summary>
     private void RecomputeBaseLayout()
     {
         var n = _containers.Count;
@@ -524,9 +552,13 @@ public sealed class DockSurface : Canvas
         }
         _structureDirty = false;
 
-        var centers = new List<double>(n);
-        var map = new List<int>(n);
-        var acc = 0.0;
+        // 场缓冲区按条目数一次性给足容量（Core 只填前 FieldCount 项）：条目增删时不重新精确分配，
+        // 逐帧路径读的也只有那 FieldCount 项 → 既零分配又不会读到陈旧尾巴。
+        _magnifiable = EnsureLength(_magnifiable, n, true);
+        _fieldCenters = EnsureLength(_fieldCenters, n, 0.0);
+        _fieldToItem = EnsureIntLength(_fieldToItem, n);
+        if (_fieldScales.Length < n) _fieldScales = new double[Math.Max(1, n)];
+
         for (var i = 0; i < n; i++)
         {
             var fe = _containers[i];
@@ -534,28 +566,20 @@ public sealed class DockSurface : Canvas
             if (double.IsNaN(w) || w < 0) w = 0;
             _widths[i] = w;
             _heights[i] = fe?.DesiredSize.Height ?? 0;
-            if (w > MinVisibleWidthDip)
-            {
-                _baseLefts[i] = acc;
-                centers.Add(acc + w / 2);
-                map.Add(i);
-                acc += w + Spacing;
-            }
-            else
-            {
-                _baseLefts[i] = acc;             // 隐藏槽：不占位（下一个可见项紧接其后）
-            }
+            // 非 DockItem 的未知源按图标处理（宁可多算一场也不让条目画歪）；分隔符明确排除出放大场
+            var item = _items[i];
+            _magnifiable[i] = item is null || DockSeparatorPlan.IsMagnifiable(item.Kind);
         }
 
-        _naturalWidth = Math.Max(0, acc - (centers.Count > 0 ? Spacing : 0));
-        _fieldCenters = centers.ToArray();
-        _fieldToItem = map.ToArray();
-        if (_fieldScales.Length != centers.Count) _fieldScales = new double[Math.Max(1, centers.Count)];
+        var layout = DockRowLayout.Compute(_widths, _magnifiable, Spacing, MinVisibleWidthDip,
+                                           _baseLefts, _fieldCenters, _fieldToItem);
+        _naturalWidth = layout.NaturalWidth;
+        _fieldCount = layout.FieldCount;
         _layoutDirty = false;
         _settled = false;
         if (structural)
-            Logger.Info($"DockSurface 排布: 容器={n} 可见={centers.Count} 自然宽={_naturalWidth:F0} " +
-                        $"IconSize={IconSize} Spacing={Spacing} MaxScale={MaxScale} ShowMag={ShowMagnification}");
+            Logger.Info($"DockSurface 排布: 容器={n} 可见={layout.VisibleCount} 入场={_fieldCount} 自然宽={_naturalWidth:F0} " +
+                        $"IconSize={IconSize} Spacing={Spacing} RowInset={RowInsetDip} MaxScale={MaxScale} ShowMag={ShowMagnification}");
     }
 
     private static double[] EnsureLength(double[] arr, int n, double fill)
@@ -563,6 +587,24 @@ public sealed class DockSurface : Canvas
         if (arr.Length == n) return arr;
         var next = new double[n];
         Array.Fill(next, fill);
+        Array.Copy(arr, next, Math.Min(arr.Length, n));
+        return next;
+    }
+
+    /// <summary>bool 版缓冲增长：新位补"可放大"（默认按图标处理，宁可多算一场也不让条目画歪）。</summary>
+    private static bool[] EnsureLength(bool[] arr, int n, bool fill)
+    {
+        if (arr.Length == n) return arr;
+        var next = new bool[n];
+        Array.Fill(next, fill);
+        Array.Copy(arr, next, Math.Min(arr.Length, n));
+        return next;
+    }
+
+    private static int[] EnsureIntLength(int[] arr, int n)
+    {
+        if (arr.Length == n) return arr;
+        var next = new int[n];
         Array.Copy(arr, next, Math.Min(arr.Length, n));
         return next;
     }
@@ -604,6 +646,7 @@ public sealed class DockSurface : Canvas
     /// </summary>
     public void StartBounce(DockItem item)
     {
+        if (!DockSeparatorPlan.IsInteractive(item.Kind)) return;   // 分隔符不弹（不是图标）
         var i = _items.IndexOf(item);
         if (i < 0 || i >= _bounceRemaining.Length) return;
         _bounceRemaining[i] = BounceDurationSeconds;
@@ -661,7 +704,7 @@ public sealed class DockSurface : Canvas
         var cursorX = CursorProvider?.Invoke();
         var baseX = double.NaN;
         var active = false;
-        if (cursorX is { } x && ShowMagnification && MaxScale > 1.0 && _fieldCenters.Length > 0)
+        if (cursorX is { } x && ShowMagnification && MaxScale > 1.0 && _fieldCount > 0)
         {
             baseX = ToBaseCoordinate(x);
             // NaN 守卫：WPF 布局期间 visual offset 未就绪时 TranslatePoint 可能返回 NaN，
@@ -749,11 +792,13 @@ public sealed class DockSurface : Canvas
         var sigmaDip = Math.Max(1.0, Sigma * (IconSize + Spacing));
         // 只要 Scales：场函数用 MagnificationField.ComputeScalesInto 写进复用的 _fieldScales，
         // 逐帧零分配（旧写法每帧 new 两个数组 + 跑一轮用不到的 centered 平移，评审发现 #4）。
+        // 项数取 _fieldCount（= 可见且可放大项数）：分隔符占位宽却不入场，缩放恒 1，
+        // 于是"邻居长大时竖线不跟着拉伸、也不被当作可拉伸图标推挤"（Core DockRowLayout 单测）。
         // 几何由本控件按**阻尼后**的 scale 重新前缀和（见 ApplyGeometry），
         // 这样像素永远与当前帧的 scale 自洽（不会出现"目标已移位、图标还在缩放"的错位/重叠）。
-        MagnificationField.ComputeScalesInto(baseX, _fieldCenters, MaxScale, sigmaDip, _fieldScales);
+        MagnificationField.ComputeScalesInto(baseX, _fieldCenters, _fieldCount, MaxScale, sigmaDip, _fieldScales);
         Array.Fill(_tgt, 1.0);
-        for (var k = 0; k < _fieldToItem.Length && k < _fieldScales.Length; k++)
+        for (var k = 0; k < _fieldCount; k++)
             _tgt[_fieldToItem[k]] = _fieldScales[k];
     }
 
@@ -822,6 +867,10 @@ public sealed class DockSurface : Canvas
     /// 用**放大后**的绘制矩形做命中（drawn 左缘 + width·scale，纵向自条目底边向上），
     /// 取代 v1"最近基准中心"权宜法——连续场没有离散索引可抖，无需绕。
     /// 读的必须是 drawn（像素）左缘而非槽位左缘，否则放大态下 1.8× 图标左半会被判给邻居（评审发现 #2）。
+    /// <para>
+    /// 分隔符**不参与命中**：它占着行宽、却不是可交互条目（不悬停、不可点击），命中到它会把右键菜单/
+    /// 预览/激活挂在一个细线上。命中返回 null 后，事件自然落到底板/桌面（面板区域内仍是透明命中区）。
+    /// </para>
     /// </summary>
     public DockItem? HitTestItem(Point p)
     {
@@ -829,6 +878,7 @@ public sealed class DockSurface : Canvas
         {
             var item = _items[i];
             if (item is null || _widths[i] <= MinVisibleWidthDip) continue;
+            if (!DockSeparatorPlan.IsInteractive(item.Kind)) continue;   // 分隔符：有宽度、无交互
             var w = _widths[i] * _cur[i];
             var left = _lefts[i];
             if (p.X < left || p.X >= left + w) continue;

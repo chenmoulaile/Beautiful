@@ -3,12 +3,16 @@
                     xmlns:sys="clr-namespace:System;assembly=mscorlib">
 
     <!-- Linux(GNOME) 主题 token：#E61C1C1C 实底（BlurEnabled=false，亚克力禁用，无 blur tint）、
-         左侧短条指示、圆角方形图标（遮罩矩形半径 8，由 ThemeManager 注入 ThemeIconClip）。 -->
+         左侧短条指示、圆角方形图标（遮罩矩形半径 8，由 ThemeManager 注入 ThemeIconClip）。
+         原生 dash-to-dock 是**一条连续列表**（应用文件夹也并在同一列里）→ 无分隔符：
+         ThemeDefinition.DockSeparatorsEnabled=false，DockViewModel 一条分隔符条目都不会生成。
+         ThemeDockSeparatorFill 仍给出（模板共用，主题一旦开启也不会画成 invisible）。倒影同 macOS：无。 -->
 
     <SolidColorBrush x:Key="ThemeAccent" Color="#3584E4"/>
     <SolidColorBrush x:Key="ThemeDockBackground" Color="#E61C1C1C"/>
     <SolidColorBrush x:Key="ThemeTextPrimary" Color="#FFFFFFFF"/>
     <SolidColorBrush x:Key="ThemePanelBackground" Color="#26FFFFFF"/>
+    <SolidColorBrush x:Key="ThemeDockSeparatorFill" Color="#33FFFFFF"/>
     <!-- 浮层主题 tint 覆盖层：本主题禁模糊（分层窗口自铺实底），tint 仍作为叠加层与另两主题区分 -->
     <SolidColorBrush x:Key="ThemeBackdropTint" Color="#4D1C1C1C"/>
     <sys:String x:Key="ThemeIndicatorStyle">bar</sys:String>
