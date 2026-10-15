@@ -106,7 +106,8 @@ public sealed class DockViewModel
     {
         if (string.IsNullOrWhiteSpace(path)) return;
         var paths = _pinnedStore.Load();
-        if (paths.Contains(path, StringComparer.OrdinalIgnoreCase)) return;
+        // 按"解析后的目标"判重：.lnk 与其目标 exe 视为同一个应用，不再各占一格（旧的按原串 Contains 会漏判）。
+        if (DockPinOps.IndexOfTarget(paths, ResolveTarget(path), ResolveTarget) >= 0) return;
         paths.Add(path);
         _pinnedStore.Save(paths);
         ReloadPinned();
@@ -117,10 +118,79 @@ public sealed class DockViewModel
     {
         if (string.IsNullOrWhiteSpace(path)) return;
         var paths = _pinnedStore.Load();
-        var next = paths.Where(p => !string.Equals(p, path, StringComparison.OrdinalIgnoreCase)).ToList();
-        if (next.Count == paths.Count) return;
-        _pinnedStore.Save(next);
+        if (!DockPinOps.Remove(paths, path, ResolveTarget)) return;   // 用目标匹配：右键/拖出取消固定能删掉 .lnk 写法那条
+        _pinnedStore.Save(paths);
         ReloadPinned();
+    }
+
+    // ---------- 拖放落位（外部拖入 / 内部排序 / 甩出取消固定）----------
+
+    /// <summary>固定块当前项数（DockSurface 的槽位坐标系与 dock.json 顺序一一对应，此值是钳制上界）。</summary>
+    public int PinnedCount => _pinned.Count;
+
+    /// <summary>
+    /// 外部拖入的落位裁定结果（供 DockWindow 写日志 + 决定是否 no-op，渲染器不关心这些语义）。
+    /// </summary>
+    public enum PinDropResult { Inserted, MovedExisting, Rejected }
+
+    /// <summary>
+    /// 把拖来的文件在固定块 slot 处固定。<paramref name="slot"/> 为固定块插入槽（越界由 Core 钳制）。
+    /// 规则：不可固定的源（文件夹/非 .exe .lnk）→ Rejected 带原因；目标已固定 → 把既有条目移到落点
+    /// （MovedExisting，绝不加第二条）；否则插入（Inserted）。全部写回 dock.json 并重载。
+    /// </summary>
+    public PinDropResult DropPinAt(string filePath, int slot, out string reason)
+    {
+        reason = string.Empty;
+        if (!CanPin(filePath, out reason)) return PinDropResult.Rejected;
+
+        var paths = _pinnedStore.Load();
+        var idx = DockPinOps.Insert(paths, filePath, slot, ResolveTarget, out var added);
+        if (!added) DockPinOps.MoveToSlot(paths, idx, slot);   // 重复：挪到落点高亮，而不是堆第二条
+        _pinnedStore.Save(DockPinOps.Normalize(paths, ResolveTarget));
+        ReloadPinned();
+        return added ? PinDropResult.Inserted : PinDropResult.MovedExisting;
+    }
+
+    /// <summary>固定块内部排序：把 from 项移到 slot。from 非法返回 false（不改表）。</summary>
+    public bool MovePinned(int from, int slot)
+    {
+        var paths = _pinnedStore.Load();
+        if (!DockPinOps.MoveToSlot(paths, from, slot)) return false;
+        _pinnedStore.Save(paths);
+        ReloadPinned();
+        return true;
+    }
+
+    /// <summary>
+    /// 判定一个拖放源能否固定：仅已存在的 .exe / .lnk 可固定。文件夹 / 其它扩展名 / 不存在 → 拒绝并给原因
+    /// （Finder-style 文件夹格本模型不支持，宁可拒绝也不"静默钉一个启动即坏的条目"）。
+    /// </summary>
+    public static bool CanPin(string path, out string reason)
+    {
+        reason = string.Empty;
+        if (string.IsNullOrWhiteSpace(path)) { reason = "空路径"; return false; }
+        try
+        {
+            if (Directory.Exists(path)) { reason = $"文件夹不能固定到 Dock：{path}"; return false; }
+            if (!File.Exists(path)) { reason = $"文件不存在：{path}"; return false; }
+            var ext = Path.GetExtension(path).ToLowerInvariant();
+            if (ext is ".exe" or ".lnk") return true;
+            reason = $"仅支持固定 .exe / .lnk，收到“{(ext.Length == 0 ? "无扩展名" : ext)}”：{path}";
+            return false;
+        }
+        catch (Exception ex) { reason = ex.Message; return false; }
+    }
+
+    /// <summary>解析 dock.json 条目 / 拖放文件到"去重用的目标"：.lnk 取其真实目标 exe，其余原样。</summary>
+    private static string ResolveTarget(string path)
+    {
+        if (!path.EndsWith(".lnk", StringComparison.OrdinalIgnoreCase)) return path;
+        try
+        {
+            var target = ShellLink.Resolve(path).TargetPath;
+            return string.IsNullOrEmpty(target) ? path : target;
+        }
+        catch { return path; }   // 坏快捷方式退回原路径（DockPinOps 亦会 try/catch，双保险不丢项）
     }
 
     private static DockItem MakePinned(string path)

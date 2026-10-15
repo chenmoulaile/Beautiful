@@ -5,6 +5,7 @@ using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
 using System.Windows.Media;
+using System.Windows.Shapes;
 using Beautiful.App.Services;
 using Beautiful.Core.Dock;
 // UseWindowsForms=true + ImplicitUsings 引入了 System.Drawing 全局命名空间，
@@ -16,6 +17,8 @@ using Brush = System.Windows.Media.Brush;   // 同上消歧（倒影遮罩字段
 using Color = System.Windows.Media.Color;
 using Panel = System.Windows.Controls.Panel;
 using Image = System.Windows.Controls.Image;
+using Rectangle = System.Windows.Shapes.Rectangle;         // 拖放指示条；消歧 System.Drawing.Rectangle
+using MouseEventArgs = System.Windows.Input.MouseEventArgs; // 拖拽 MouseMove；消歧 System.Windows.Forms.MouseEventArgs
 
 namespace Beautiful.App.Dock;
 
@@ -159,6 +162,50 @@ public sealed class DockSurface : Canvas
     private bool _hooked;
     private long _lastTick;
 
+    // ---------- 拖放（固定 / 排序 / 拖出取消固定）----------
+    // 指示条是**唯一一个常驻元素**：建一次、逐帧只改 Canvas.Left/Width/Top + Visibility，绝不在
+    // DragOver/MouseMove 里新建（那些事件是连续高频的，新建 Freezable/visual 会污染帧预算并触发排布）。
+    // 它的画法对齐分隔符：一条竖细线，accent 色取主题字典（DynamicResource 随主题换）。
+    private readonly Rectangle _dropBar = new()
+    {
+        Width = 2.0,
+        IsHitTestVisible = false,
+        Visibility = Visibility.Collapsed,
+        SnapsToDevicePixels = true,
+    };
+
+    // 指示条当前落点（-1 = 隐藏）。逐帧 ApplyGeometry 在拖放期间按最新绘制左缘复算它的 X，
+    // 空闲时只多一个整数比较即跳过（不进入扫描循环）。
+    private int _dropSlot = -1;
+
+    private const double DropBarHeightRatio = 0.62;   // 竖线高占行高比（对齐分隔符的"明显短于图标行"）
+
+    /// <summary>按下到进入拖拽的最小位移（DIP）：小于它视作点击（走激活），不启动拖放。</summary>
+    private const double DragStartThresholdDip = 5.0;
+
+    private DockItem? _dragCandidate;   // 左键按下的可拖条目（Pinned/Window）；未达阈值前只是候选
+    private Point _dragStartPoint;
+    private bool _dragging;
+
+    // ---------- 拖放协作点（由 DockWindow 注入策略；渲染器不决定"该转成固定还是取消"）----------
+    /// <summary>进入拖拽态：DockWindow 收起悬停预览（拖动的图标不该同时弹预览）。</summary>
+    public Action<DockItem>? DragStarted { get; set; }
+    /// <summary>拖拽中释放仍在条带内：给出被拖条目 + 落点探针（固定块槽位 / 是否压在回收站上）。</summary>
+    public Action<DockItem, DropProbe>? ItemDroppedInside { get; set; }
+    /// <summary>拖拽中释放越出条带（"甩出去"）：DockWindow 据此取消固定（仅对固定项有意义）。</summary>
+    public Action<DockItem>? ItemDraggedOut { get; set; }
+
+    /// <summary>是否正在内部拖拽：DockWindow 的预览 MouseMove 据此早退，避免拖动时缩略图乱弹。</summary>
+    public bool IsDragging => _dragging;
+
+    /// <summary>
+    /// 一次落点探测的结果（值类型，扫描 _items 一趟即得，零堆分配）。
+    /// </summary>
+    /// <param name="PinnedSlot">固定块插入槽（0..固定项数，光标越界即钳到端点）。</param>
+    /// <param name="OverTrash">光标是否正压在回收站格上（任何落此的拖放都是"删除？不"的 no-op）。</param>
+    /// <param name="WithinPinnedRegion">光标水平位置是否落在固定块区间内（决定窗口项拖入是否转固定）。</param>
+    public readonly record struct DropProbe(int PinnedSlot, bool OverTrash, bool WithinPinnedRegion);
+
     public DockSurface()
     {
         ClipToBounds = false;                       // 放大后允许画出自身 bounds（顶部余量区）
@@ -166,8 +213,14 @@ public sealed class DockSurface : Canvas
         IsHitTestVisible = true;
         SnapsToDevicePixels = false;
 
+        // 指示条一次性入可视树（不参与逐帧排布、不命中）；accent 随主题字典动态解析。
+        _dropBar.SetResourceReference(Shape.FillProperty, "ThemeAccent");
+        Children.Add(_dropBar);
+
         MouseMove += (_, _) => Wake();              // 仅作"醒来"信号：真实位置每帧由 CursorProvider 取
         MouseEnter += (_, _) => Wake();
+        MouseLeftButtonDown += OnDragMouseDown;
+        MouseMove += OnDragMouseMove;
         MouseLeftButtonUp += OnMouseLeftButtonUp;
         PreviewMouseRightButtonUp += OnPreviewMouseRightButtonUp;
         Unloaded += (_, _) => StopLoop();
@@ -418,6 +471,9 @@ public sealed class DockSurface : Canvas
         // 倒影元素随树重建重挂（容器是新对象，旧倒影已随 Children.Clear 消失，_reflections 已清空为占位）
         SyncReflections();
 
+        // 指示条是常驻元素，不随条目走：Children.Clear() 把它一并摘掉了，这里重新挂回最上层（后 Add = 后画）。
+        Children.Add(_dropBar);
+
         _structureDirty = true;   // 条目增删/换源：整树重建 → 场状态一并重置
         _layoutDirty = true;
         InvalidateMeasure();
@@ -498,6 +554,7 @@ public sealed class DockSurface : Canvas
         var constraint = new Size(double.PositiveInfinity, IconSize);
         for (var i = 0; i < n; i++)
             _containers[i]?.Measure(constraint);   // 已量过且约束未变 → WPF 内部短路，几乎零成本
+        _dropBar.Measure(new Size(double.PositiveInfinity, double.PositiveInfinity));   // 常驻指示条：非约束量，尊重其动态 Height
 
         if (_layoutDirty || _widths.Length != n) RecomputeBaseLayout();
 
@@ -856,6 +913,9 @@ public sealed class DockSurface : Canvas
                 InvalidateMeasure();
             }
         }
+
+        // 拖放进行中：指示条按最新绘制左缘每帧跟随放大推移（_dropSlot<0 时一次整数比较即跳过，空闲零成本）。
+        if (_dropSlot >= 0) PositionDropBar(IndicatorXForSlot(_dropSlot));
     }
 
     /// <summary>条目底边所在 Y（surface 本地）：与 ApplyGeometry 的居中放置严格一致，命中测试/边界共用。</summary>
@@ -902,8 +962,149 @@ public sealed class DockSurface : Canvas
 
     private void OnMouseLeftButtonUp(object sender, MouseButtonEventArgs e)
     {
-        var item = HitTestItem(e.GetPosition(this)) ?? (e.Source as FrameworkElement)?.DataContext as DockItem;
+        var p = e.GetPosition(this);
+        // 拖拽释放：优先于点击激活。甩出条带 → ItemDraggedOut（仅固定项会真的取消固定）；
+        // 落在条带内 → ItemDroppedInside（携带落点探针，DockWindow 决定排序 / 转固定 / 回收站 no-op）。
+        if (_dragging)
+        {
+            var dragged = _dragCandidate!;
+            FinishDrag();
+            if (IsInsideRow(p)) ItemDroppedInside?.Invoke(dragged, ProbeDrop(p));
+            else ItemDraggedOut?.Invoke(dragged);
+            e.Handled = true;
+            return;
+        }
+        _dragCandidate = null;
+        var item = HitTestItem(p) ?? (e.Source as FrameworkElement)?.DataContext as DockItem;
         if (item is not null) Activated?.Invoke(item);
+    }
+
+    private void OnDragMouseDown(object sender, MouseButtonEventArgs e)
+    {
+        var p = e.GetPosition(this);
+        var item = HitTestItem(p);
+        // 只有固定项 / 运行窗口项可拖；媒体胶囊 / 回收站 / 分隔符不启动拖拽（保持各自的点击/静态语义）。
+        if (item is not { Kind: DockItemKind.Pinned or DockItemKind.Window }) { _dragCandidate = null; return; }
+        _dragCandidate = item;
+        _dragStartPoint = p;   // 先记候选，未越过阈值前不捕获鼠标（否则吞掉本次点击）
+    }
+
+    private void OnDragMouseMove(object sender, MouseEventArgs e)
+    {
+        if (_dragCandidate is null) return;
+        var p = e.GetPosition(this);
+        if (!_dragging)
+        {
+            if (Math.Abs(p.X - _dragStartPoint.X) < DragStartThresholdDip &&
+                Math.Abs(p.Y - _dragStartPoint.Y) < DragStartThresholdDip) return;
+            _dragging = true;
+            CaptureMouse();               // 越出窗口也要收到 Move/Up，甩出检测与干净取消都依赖它
+            DragStarted?.Invoke(_dragCandidate);
+        }
+        ShowInsertionIndicator(ProbeDrop(p).PinnedSlot);   // 复用常驻指示条，仅改几何，零分配
+    }
+
+    private void FinishDrag()
+    {
+        _dragCandidate = null;
+        _dragging = false;
+        ReleaseMouseCapture();
+        HideInsertionIndicator();
+    }
+
+    /// <summary>释放点是否仍在条目行内（水平 ±1 图标间距容差、纵向在行高内）；否则视为"甩出 Dock"。</summary>
+    private bool IsInsideRow(Point p)
+    {
+        var pitch = IconSize + Spacing;
+        return p.X >= -pitch && p.X <= _naturalWidth + pitch && p.Y >= 0 && p.Y <= _rowHeight;
+    }
+
+    // ---------- 拖放指示条（常驻单元素，逐帧只改几何） ----------
+
+    /// <summary>显示/移动插入指示条到固定块的第 slot 槽（0..固定项数）。slot 越界不钳——调用方已钳。</summary>
+    public void ShowInsertionIndicator(int slot)
+    {
+        _dropSlot = slot;
+        PositionDropBar(IndicatorXForSlot(slot));
+        if (_dropBar.Visibility != Visibility.Visible) _dropBar.Visibility = Visibility.Visible;
+        Wake();   // 拖拽期间保持钩子：放大场随光标推移时指示条每帧跟随（见 ApplyGeometry 末尾）
+    }
+
+    /// <summary>收起插入指示条（拖放完成/取消/离开一律走这里，绝不留残影）。</summary>
+    public void HideInsertionIndicator()
+    {
+        _dropSlot = -1;
+        if (_dropBar.Visibility != Visibility.Collapsed) _dropBar.Visibility = Visibility.Collapsed;
+    }
+
+    private void PositionDropBar(double x)
+    {
+        var h = _rowHeight * DropBarHeightRatio;
+        _dropBar.Height = h;
+        SetLeft(_dropBar, x - _dropBar.Width / 2.0);
+        SetTop(_dropBar, (_rowHeight - h) / 2.0);   // 与分隔符/图标同一条垂直居中线
+    }
+
+    /// <summary>
+    /// 落点探针：一次扫描给出固定块插入槽 / 是否压在回收站上 / 是否落在固定块区间内。
+    /// 值类型返回，不重建条目列表、不分配（DragOver 连续触发时也安全）。
+    /// </summary>
+    public DropProbe ProbeDrop(Point p)
+    {
+        var count = 0;
+        var slot = 0;
+        var firstLeft = double.NaN;
+        var lastRight = double.NaN;
+        var pitch = IconSize + Spacing;
+        for (var i = 0; i < _items.Count && i < _widths.Length; i++)
+        {
+            if (_items[i] is not { Kind: DockItemKind.Pinned } || _widths[i] <= MinVisibleWidthDip) continue;
+            var left = _lefts[i];
+            var right = left + _widths[i] * _cur[i];
+            if (double.IsNaN(firstLeft)) firstLeft = left;
+            lastRight = right;
+            count++;
+            var center = (left + right) / 2.0;
+            if (p.X > center) slot = count;   // 光标越过第 count 个固定项中心 → 落点在其之后
+        }
+        var withinPinned = !double.IsNaN(firstLeft) &&
+                           p.X >= firstLeft - pitch && p.X <= lastRight + pitch;
+        var overTrash = HitTestItem(p)?.Kind == DockItemKind.RecycleBin;
+        return new DropProbe(slot, overTrash, withinPinned);
+    }
+
+    /// <summary>被拖条目在固定块中的下标（用于排序的 from）；非固定项或找不到返回 -1。</summary>
+    public int PinnedIndexOf(DockItem item)
+    {
+        if (item.Kind != DockItemKind.Pinned) return -1;
+        var idx = 0;
+        for (var i = 0; i < _items.Count; i++)
+        {
+            if (_items[i] is null) continue;
+            if (_items[i]!.Kind != DockItemKind.Pinned) continue;
+            if (ReferenceEquals(_items[i], item)) return idx;
+            idx++;
+        }
+        return -1;
+    }
+
+    /// <summary>固定块第 slot 槽（用绘制后左缘算）在 surface 本地 X；无固定项时钳到 0。</summary>
+    private double IndicatorXForSlot(int slot)
+    {
+        var pitch = IconSize + Spacing;
+        var seen = 0;
+        var prevRight = double.NaN;
+        for (var i = 0; i < _items.Count && i < _widths.Length; i++)
+        {
+            if (_items[i] is not { Kind: DockItemKind.Pinned } || _widths[i] <= MinVisibleWidthDip) continue;
+            var left = _lefts[i];
+            if (seen == slot)
+                return double.IsNaN(prevRight) ? left - pitch * 0.5 : (prevRight + left) * 0.5;
+            prevRight = left + _widths[i] * _cur[i];
+            seen++;
+        }
+        // slot == 固定项数（末尾槽）；或没有任何固定项 → 落到首项左缘之前 / 0
+        return double.IsNaN(prevRight) ? 0 : prevRight + pitch * 0.5;
     }
 
     private void OnPreviewMouseRightButtonUp(object sender, MouseButtonEventArgs e)

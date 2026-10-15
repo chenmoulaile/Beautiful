@@ -23,6 +23,9 @@ using Color = System.Windows.Media.Color;
 using Point = System.Windows.Point;
 using Rect = System.Windows.Rect;
 using MouseEventArgs = System.Windows.Input.MouseEventArgs;   // 与 System.Windows.Forms.MouseEventArgs 歧义（UseWindowsForms）
+using DragEventArgs = System.Windows.DragEventArgs;           // 拖放落位（v3 T5）：消歧 System.Windows.Forms.DragEventArgs
+using DragDropEffects = System.Windows.DragDropEffects;
+using DataFormats = System.Windows.DataFormats;
 
 namespace Beautiful.App.Dock;
 
@@ -138,7 +141,7 @@ public partial class DockWindow : AcrylicWindow
         ShowMediaPanel();
     }
 
-    /// <summary>DockSurface 接线：光标取样 + 左键激活 + 右键条目菜单 + 悬停预览（Task 13）。</summary>
+    /// <summary>DockSurface 接线：光标取样 + 左键激活 + 右键条目菜单 + 悬停预览（Task 13）+ 拖放固定/排序（v3 T5）。</summary>
     private void WireSurface()
     {
         Surface.Sigma = SigmaInPitches;
@@ -148,6 +151,133 @@ public partial class DockWindow : AcrylicWindow
         // 悬停预览：MouseMove 判定当前条目并起/重置 350ms 驻留；离开条目行即收起。
         Surface.MouseMove += OnSurfaceMouseMove;
         Surface.MouseLeave += (_, _) => CancelPreview();
+
+        // 内部拖拽（排序 / 转固定 / 甩出取消固定）的完成回调：策略在窗口，几何与状态机在渲染器。
+        Surface.DragStarted = _ => CancelPreview();   // 拖动时绝不弹悬停预览
+        Surface.ItemDroppedInside = OnItemDroppedInside;
+        Surface.ItemDraggedOut = OnItemDraggedOut;
+
+        // 外部拖入（Explorer/桌面 → Dock）：Surface 是分层窗口里唯一实底可命中的元素，Drop 目标挂它。
+        // 分层 + topmost + 非激活窗口接 shell 拖放全程不 Activate（drop 不抢焦点，各处理器都不调激活）。
+        Surface.AllowDrop = true;
+        Surface.DragOver += OnSurfaceDragOver;
+        Surface.Drop += OnSurfaceDrop;
+        Surface.DragLeave += (_, _) => Surface.HideInsertionIndicator();
+    }
+
+    // ---------- 拖放固定 / 排序 / 取消固定（v3 T5）----------
+
+    /// <summary>
+    /// 外部拖过的连续事件：只做"取一次 FileDrop + 探针 + 移动指示条 + 设效果"，绝不重建条目列表、
+    /// 不每事件分配（GetData 跨进程可能抛或返残缺，全程守卫）。回收站格上恒为 None（Dock 不接删除动词）。
+    /// </summary>
+    private void OnSurfaceDragOver(object sender, DragEventArgs e)
+    {
+        e.Effects = DragDropEffects.None;
+        try
+        {
+            if (e.Data.GetDataPresent(DataFormats.FileDrop))
+            {
+                var probe = Surface.ProbeDrop(e.GetPosition(Surface));
+                if (probe.OverTrash) Surface.HideInsertionIndicator();
+                else
+                {
+                    Surface.ShowInsertionIndicator(probe.PinnedSlot);
+                    e.Effects = DragDropEffects.Copy;
+                }
+            }
+            else Surface.HideInsertionIndicator();
+        }
+        catch (Exception ex)
+        {
+            // 源进程在拖拽中途退出 / 数据不可达：静默降级为 None，绝不让拖放异常波及 AppBar 常驻窗口。
+            e.Effects = DragDropEffects.None;
+            Logger.Warn($"Dock 拖放 DragOver 取数据失败: {ex.Message}");
+        }
+        e.Handled = true;
+    }
+
+    /// <summary>外部放下：解析 FileDrop → 逐个落位固定；回收站格上丢弃为 no-op（不删除任何文件）。</summary>
+    private void OnSurfaceDrop(object sender, DragEventArgs e)
+    {
+        Surface.HideInsertionIndicator();
+        string[]? files = null;
+        try
+        {
+            if (e.Data.GetDataPresent(DataFormats.FileDrop))
+                files = e.Data.GetData(DataFormats.FileDrop) as string[];
+        }
+        catch (Exception ex)
+        {
+            Logger.Warn($"Dock 拖放 Drop 取数据失败: {ex.Message}");
+            return;
+        }
+        if (files is null || files.Length == 0) return;
+
+        var probe = Surface.ProbeDrop(e.GetPosition(Surface));
+        if (probe.OverTrash)
+        {
+            Logger.Info($"拖到回收站：{files.Length} 项，执行 no-op（设计：Dock 不调用 shell 删除动词）");
+            return;
+        }
+        var slot = probe.PinnedSlot;
+        foreach (var file in files)
+        {
+            switch (_vm.DropPinAt(file, slot, out var reason))
+            {
+                case DockViewModel.PinDropResult.Inserted:
+                    Logger.Info($"拖入固定：{file} → 固定块槽 {slot}"); slot++; break;
+                case DockViewModel.PinDropResult.MovedExisting:
+                    Logger.Info($"拖入重复：{file} 已固定 → 移到槽 {slot}（不加第二条）"); slot++; break;
+                default:
+                    Logger.Warn($"拖入被拒：{reason}"); break;
+            }
+        }
+    }
+
+    /// <summary>内部拖拽落在条带内：固定项→排序；运行窗口项→落在固定块区间才转固定，否则取消；回收站格→no-op。</summary>
+    private void OnItemDroppedInside(DockItem dragged, DockSurface.DropProbe probe)
+    {
+        if (probe.OverTrash)
+        {
+            Logger.Info($"拖到回收站：{dragged.Label}，执行 no-op（设计：不删除文件、不取消固定）");
+            return;
+        }
+        switch (dragged.Kind)
+        {
+            case DockItemKind.Pinned:
+                var from = Surface.PinnedIndexOf(dragged);
+                if (from >= 0 && _vm.MovePinned(from, probe.PinnedSlot))
+                    Logger.Info($"Dock 排序：{dragged.Label} 固定槽 {from} → {probe.PinnedSlot}");
+                break;
+
+            case DockItemKind.Window:
+                // 裁定（macOS 语义）：把运行窗口的图标拖进**固定块区间**即在该位置钉住它；
+                // 落在运行区/后缀区则取消——瞬时窗口的顺序由系统跟踪，重排无意义。
+                if (!probe.WithinPinnedRegion || dragged.LaunchPath.Length == 0)
+                {
+                    Logger.Info("拖拽运行窗口到固定块外：取消（不固定、不排序瞬时窗口）");
+                    break;
+                }
+                var r = _vm.DropPinAt(dragged.LaunchPath, probe.PinnedSlot, out var why);
+                Logger.Info(r switch
+                {
+                    DockViewModel.PinDropResult.Inserted => $"拖拽转固定：{dragged.LaunchPath} → 固定块槽 {probe.PinnedSlot}",
+                    DockViewModel.PinDropResult.MovedExisting => $"拖拽转固定：{dragged.Label} 已在固定块 → 移到槽 {probe.PinnedSlot}",
+                    _ => $"拖拽转固定被拒：{why}",
+                });
+                break;
+        }
+    }
+
+    /// <summary>甩出 Dock（释放点在条带外）：固定项→取消固定（macOS flick-out）；运行窗口项→无操作（本就没钉）。</summary>
+    private void OnItemDraggedOut(DockItem dragged)
+    {
+        if (dragged.Kind == DockItemKind.Pinned)
+        {
+            _vm.Unpin(dragged.LaunchPath);
+            Logger.Info($"甩出 Dock 取消固定：{dragged.Label}");
+        }
     }
 
     // ---------- 生命周期 / AppBar ----------
@@ -739,6 +869,7 @@ public partial class DockWindow : AcrylicWindow
     /// 开关关（PreviewEnabled=false）直接收起并不起计时——这是让设置里的预览开关真正生效的读取点。</summary>
     private void OnSurfaceMouseMove(object sender, MouseEventArgs e)
     {
+        if (Surface.IsDragging) return;   // 内部拖拽进行中：预览让位给指示条，绝不叠加缩略图
         if (!SettingsService.Current.PreviewEnabled)
         {
             if (_preview is { IsShowing: true } || _previewPending is not null) CancelPreview();

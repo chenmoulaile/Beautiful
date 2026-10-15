@@ -1,5 +1,6 @@
 using System.IO;
 using System.Text.Json;
+using Beautiful.Core.Dock;
 
 namespace Beautiful.App.Services;
 
@@ -7,6 +8,12 @@ namespace Beautiful.App.Services;
 /// 固定应用列表存储（config/dock.json，JSON List&lt;string&gt; exe 路径；控制器裁定：固定应用
 /// 只落 dock.json，与 settings.json 分离）。文件缺失 → 代码默认兜底（资源管理器/记事本/
 /// Edge-if-exists，与 T12 硬编码一致，不写盘）；损坏 → 默认（不删文件，下次 Save 覆盖）。
+/// <para>
+/// 解析与去重的**算术**在 Core（<see cref="DockPinOps"/>，可单测）：结构损坏 JSON 走 TryParsePaths
+/// 的自愈信号（与 AppSettingsStore 的 Corrupt 同一 idiom），空行/重复走 Normalize。本类只负责
+/// 文件 IO + Logger + 代码默认，不再自带一份去重逻辑（过去 Load 里的 Distinct 与插入路径的去重是两套，
+/// 拖放固定/排序引入"按解析目标去重"后必须统一到一个来源）。
+/// </para>
 /// </summary>
 public sealed class PinnedAppsStore
 {
@@ -24,12 +31,14 @@ public sealed class PinnedAppsStore
         try
         {
             if (!File.Exists(_filePath)) return Defaults();
-            var list = JsonSerializer.Deserialize<List<string>>(File.ReadAllText(_filePath));
-            if (list is null) return Defaults();
-            // 去空行 + 去重（忽略大小写，Windows 路径不区分大小写）
-            return list.Where(p => !string.IsNullOrWhiteSpace(p))
-                       .Distinct(StringComparer.OrdinalIgnoreCase)
-                       .ToList();
+            if (!DockPinOps.TryParsePaths(File.ReadAllText(_filePath), out var raw))
+            {
+                // 结构损坏（语法错/非数组/"null"）：回落默认但不删文件——与历史行为一致，下次 Save 覆盖
+                Logger.Warn("dock.json 结构损坏，回退默认固定项");
+                return Defaults();
+            }
+            // 值域自愈：去空 + 按原始路径（忽略大小写）去重。目标级去重（.lnk vs exe）在编辑路径注入解析器完成。
+            return DockPinOps.Normalize(raw);
         }
         catch (Exception ex) when (ex is JsonException or IOException or UnauthorizedAccessException)
         {
