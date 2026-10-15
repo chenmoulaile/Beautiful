@@ -7,6 +7,7 @@ using Beautiful.App.Services;
 using Beautiful.App.Shell;
 using Beautiful.App.Themes;
 using Beautiful.App.TopBar;
+using Beautiful.Core.Controls;
 using Application = System.Windows.Application;
 using MessageBox = System.Windows.MessageBox;
 
@@ -310,6 +311,47 @@ public partial class App : Application
     /// <summary>设置页切换 PreviewEnabled 后的即时生效入口：关闭时立即收起正在显示的预览
     /// （开启无需动作——下一次悬停按新值放行）。让该开关不再是死控件。</summary>
     public static void ApplyPreviewEnabled() => (Current as App)?._dock?.ApplyPreviewSetting();
+
+    // ---------- 控制中心的落地入口（v3 T7） ----------
+    //
+    // 【为什么是 App 的静态入口而不是面板自己接线】这些开关的"真值 + 落地目标"都只在 App 手里
+    //（TaskbarManager 实例、Dock 的媒体 VM），而设置窗口早已用同一形状（SetTopBarEnabled /
+    // SetSwitcherEnabled / ApplyDockLayout）。控制中心与设置页因此共用一条写入路径：
+    // 值只经 QuickSettings 的纯函数折算一次（有单测），落盘只经 SettingsService.UpdateAndSave 一次，
+    // 不会出现"从控制中心改的和从设置页改的行为不一样"。
+
+    /// <summary>
+    /// 系统任务栏策略：落盘 + <see cref="TaskbarManager.Apply"/>。
+    /// Dock 尚未创建/正在退出时策略照样落盘（下次创建时按 Current 重放），不静默丢弃用户的选择。
+    /// </summary>
+    public static void SetTaskbarPolicy(string policyId)
+    {
+        SettingsService.UpdateAndSave(QuickSettings.WithTaskbarPolicy(SettingsService.Current, policyId));
+        var app = Current as App;
+        app?._taskbar?.Apply(SettingsService.PolicyOf(SettingsService.Current));
+    }
+
+    /// <summary>悬停放大开关：强度在"下限 ×1.0（关）"与"默认倍率（开）"之间切换，落地走 Dock 布局重放。</summary>
+    public static void SetMagnification(bool on)
+    {
+        SettingsService.UpdateAndSave(QuickSettings.WithMagnification(SettingsService.Current, on));
+        ApplyDockLayout();
+    }
+
+    /// <summary>倒影开关：三态设置被这一次点击落成显式值，此后切主题不再冲掉（见 AppSettings.ReflectionEnabled）。</summary>
+    public static void SetReflection(bool on)
+    {
+        SettingsService.UpdateAndSave(QuickSettings.WithReflection(SettingsService.Current, on));
+        ApplyDockLayout();
+    }
+
+    /// <summary>媒体胶囊开关：落盘 + 即时改 Dock 媒体 VM 的可见旗标（无 SMTC 会话时胶囊本来就隐藏）。</summary>
+    public static void SetMediaCapsule(bool on)
+    {
+        SettingsService.UpdateAndSave(QuickSettings.WithMediaCapsule(SettingsService.Current, on));
+        var dock = (Current as App)?._dock;
+        if (dock is not null) dock.MediaVm.CapsuleVisible = on;
+    }
 
 
     // ---------- 切换器生命周期（Task 11） ----------

@@ -41,8 +41,8 @@ public sealed record AppSettings
     /// <summary>Dock 基准图标尺寸（32..72，加载时钳制）。</summary>
     public int DockIconSize { get; init; } = 48;
 
-    /// <summary>悬停放大强度倍率（1.0..2.5，加载时钳制）。</summary>
-    public double MagnificationStrength { get; init; } = 1.8;
+    /// <summary>悬停放大强度倍率（1.0..2.5，加载时钳制）。默认值与 <see cref="DefaultMagnificationStrength"/> 同源。</summary>
+    public double MagnificationStrength { get; init; } = DefaultMagnificationStrength;
 
     /// <summary>Dock 停靠边："bottom" | "top" | "left" | "right"。</summary>
     public string DockPosition { get; init; } = "bottom";
@@ -116,6 +116,13 @@ public sealed record AppSettings
 
     /// <summary>放大强度上限。</summary>
     public const double MaxMagnificationStrength = 2.5;
+
+    /// <summary>
+    /// 放大强度的默认/回落值：控制中心的"放大"砖块在<b>当前就是关</b>的状态下被打开时回到它
+    /// （见 Controls.QuickSettings.WithMagnification）。写在这里而不是散在 UI 里，
+    /// 是为了让"新配置的默认值"和"重新打开放大"永远是同一个数。
+    /// </summary>
+    public const double DefaultMagnificationStrength = 1.8;
 
     /// <summary>显示器选择器的关键字取值（序号形另由 <see cref="MaxMonitorIndex"/> 界定）。</summary>
     public static IReadOnlyList<string> KnownMonitorKeywords { get; } = ["auto", "primary"];

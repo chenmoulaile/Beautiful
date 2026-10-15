@@ -2,6 +2,7 @@ using System.ComponentModel;
 using System.IO;
 using System.Net.NetworkInformation;
 using System.Windows;
+using System.Windows.Automation;
 using System.Windows.Controls;
 using System.Windows.Interop;
 using System.Windows.Media;
@@ -15,12 +16,15 @@ using Beautiful.Core.Layout;
 using Beautiful.Core.Themes;
 using Beautiful.Core.TopBar;
 using Brush = System.Windows.Media.Brush;
-// UseWindowsForms 隐式全局 using 与下列 WPF 类型同名，定向消歧：
 using Brushes = System.Windows.Media.Brushes;
+// UseWindowsForms 隐式全局 using 与下列 WPF 类型同名，定向消歧：
 using Button = System.Windows.Controls.Button;
 using Color = System.Windows.Media.Color;
+using Control = System.Windows.Controls.Control; // 消歧：WinForms 隐式 using 带入同名类型（控制中心打开态要清它的 Background 属性）
 using FontFamily = System.Windows.Media.FontFamily;
 using HorizontalAlignment = System.Windows.HorizontalAlignment; // 消歧：WinForms 隐式 using 带入同名枚举（含 Center/Left/Right）
+using Key = System.Windows.Input.Key; // 同上（Esc 收起控制中心的按键枚举）
+using KeyEventArgs = System.Windows.Input.KeyEventArgs; // 同上
 using Orientation = System.Windows.Controls.Orientation;
 using Point = System.Windows.Point;
 using TextBlock = System.Windows.Controls.TextBlock;
@@ -49,6 +53,13 @@ public partial class TopBarWindow : AcrylicWindow
 {
     private const double BarHeightDip = 30; // macOS 顶栏视觉高度（DIP；AppBar 条带同值）
     private const int IconFontDip = 13;
+
+    /// <summary>
+    /// "点顶栏图标收起控制中心"的**重开抑制窗口**（毫秒）：面板失活后由看门狗（40ms × 2 拍 ≈ 80ms）
+    /// 关掉，而按钮的 Click 可能落在这之后。取值只要覆盖"按下→关闭落地→抬起"这段真实点击时长即可，
+    /// 这里给 250ms（比慢速双击的下限还短，不会被当成"用户又点了一次"）。见 <see cref="ToggleControlCenter"/>。
+    /// </summary>
+    private const int ReopenGuardMs = 250;
 
     private readonly TopBarContext _context;
 
@@ -85,6 +96,11 @@ public partial class TopBarWindow : AcrylicWindow
     private TextBlock? _networkText;
     private TextBlock? _batteryText;
     private MediaViewModel? _subscribedMedia;
+
+    // v3 T7：控制中心面板（宿主 + 入口按钮 + "刚关过"抑制位；见 ToggleControlCenter 的竞态说明）
+    private FluentPopupHost? _controlCenterHost;
+    private Button? _controlCenterButton;
+    private DateTime _controlCenterClosedAt = DateTime.MinValue;
 
     /// <summary>
     /// "窗口"菜单的前台句柄快照：<b>只读 <see cref="_menuFgSnapshot"/>，绝不读 <see cref="_lastFgHwnd"/></b>。
@@ -138,6 +154,7 @@ public partial class TopBarWindow : AcrylicWindow
     {
         ThemeManager.ThemeChanged -= OnThemeChanged;
         if (_subscribedMedia is not null) _subscribedMedia.PropertyChanged -= OnMediaChanged;
+        _controlCenterHost?.Close(); // 控制中心随顶栏一起收起（重载/退出时不得留一个无主的弹层）
         FluentMenu.CloseCurrent(); // 防弹层残留（重载/退出时）
         base.OnClosed(e);
     }
@@ -498,6 +515,16 @@ public partial class TopBarWindow : AcrylicWindow
         bat.Visibility = Visibility.Collapsed;
         RightHost.Children.Add(bat);
 
+        // 控制中心入口（v3 T7，最右一位 = macOS/Win11 的"快捷设置"位置）：
+        // 字形取已在托盘/顶栏菜单里验证过能渲染的 \uE790（与状态项同一套 Segoe 图标字体 + 同一字号），
+        // 打开态用样式同款的主题面板底色做持久高亮（见 ToggleControlCenter）。
+        var (controlCenter, _) = MakeStatusItem("\uE790", iconFont: true);
+        _controlCenterButton = controlCenter;
+        AutomationProperties.SetName(controlCenter, "控制中心");
+        controlCenter.ToolTip = "控制中心";
+        controlCenter.Click += (_, _) => ToggleControlCenter();
+        RightHost.Children.Add(controlCenter);
+
         AttachMedia(_context.Media());
         UpdateClock();
         UpdateNetwork();
@@ -622,5 +649,78 @@ public partial class TopBarWindow : AcrylicWindow
         // 落在弹层矩形外 → 默认看门狗 80ms 内即自关）。失活（点别处）后回退矩形判定自然关闭。
         host.KeepAliveProbe = () => host.IsActive || host.CursorInInflated(FluentPopupHost.RectInflate);
         host.ShowAt(new Point(p.X, p.Y));
+    }
+
+    // ---------- 控制中心（v3 T7） ----------
+
+    /// <summary>
+    /// 切换控制中心面板：没开则开、开着则关。落位/翻转/背板全部交给 <see cref="FluentPopupHost.ShowAt"/>
+    /// （与日历浮层、托盘菜单同一套锚点显示器 DPI + 工作区钳制 + 边缘翻转，绝不会出屏）。
+    /// <para>
+    /// 【"再点一次收起"的竞态与抑制】面板是激活式弹层：按下顶栏按钮的那一刻按钮所在窗口成为前台，
+    /// 面板失活 → 看门狗（40ms × 2 拍）把它关掉，而 <c>Click</c> 可能在它之后才到。若此时按
+    /// "<c>_controlCenterHost</c> 已是 null"去判断，就会**把刚被收起的面板又开一遍**（用户看到的是
+    /// "点了没反应"）。因此记住最近一次关闭时刻，<see cref="ReopenGuardMs"/> 内的这次点击只认作
+    /// "收起"，不重开；超过该窗口后照常开合。两条路径都以"屏上不再留面板"收尾。
+    /// </para>
+    /// <para>
+    /// 【生命周期对称】本方法是唯一创建点：面板与宿主都构造完成后才接线；关闭回调里先清字段、
+    /// 再解 Esc 按键挂点、最后 <see cref="ControlCenterPanel.Shutdown"/> 释放音频 COM 引用。
+    /// 面板与顶栏之间只有"按钮 → 宿主"这一条正向引用与一条宿主上的实例事件，**没有任何静态挂点**，
+    /// 宿主关闭后整条对象图可回收（10 次开合的句柄/工作集取证见提交说明）。
+    /// </para>
+    /// </summary>
+    private void ToggleControlCenter()
+    {
+        if (_controlCenterHost is { } open)
+        {
+            open.Close();
+            return;
+        }
+        if ((DateTime.UtcNow - _controlCenterClosedAt).TotalMilliseconds < ReopenGuardMs) return;
+        OpenControlCenter();
+    }
+
+    private void OpenControlCenter()
+    {
+        if (_controlCenterButton is null) return;
+        // 锚点 = 按钮下缘的设备像素（PointToScreen 返回物理 px，与 ShowAt 的入参口径一致）
+        var anchor = _controlCenterButton.PointToScreen(new Point(0, _controlCenterButton.ActualHeight));
+        var host = new FluentPopupHost();
+        var panel = new ControlCenterPanel(_context);
+        panel.AttachHost(host);          // 面板需要能在触发"打开设置/重载 Dock"时收起自己的宿主
+        host.Content = panel;
+        host.KeepAliveProbe = () => host.IsActive || host.CursorInInflated(FluentPopupHost.RectInflate);
+        host.PreviewKeyDown += ControlCenter_PreviewKeyDown;
+        host.Closed += OnControlCenterClosed;
+        _controlCenterHost = host;
+        // 打开态持久高亮：走 DynamicResource 引用（换主题时高亮跟着变色），关闭时 ClearValue 交还给样式的 Transparent
+        _controlCenterButton.SetResourceReference(Control.BackgroundProperty, "ThemePanelBackground");
+        host.ShowAt(new Point(anchor.X, anchor.Y));
+        Logger.Info("控制中心已打开");
+    }
+
+    /// <summary>Esc 收起面板（与 FluentMenu 的键盘语义一致；弹层是激活式窗口，按键必然落在它身上）。</summary>
+    private void ControlCenter_PreviewKeyDown(object sender, KeyEventArgs e)
+    {
+        if (e.Key != Key.Escape) return;
+        e.Handled = true;
+        _controlCenterHost?.Close();
+    }
+
+    private void OnControlCenterClosed(object? sender, EventArgs e)
+    {
+        var host = sender as FluentPopupHost;
+        if (host is not null)
+        {
+            // 与 OpenControlCenter 的订阅一一对称解绑（宿主虽是瞬态对象，解绑也让"谁挂着谁"一目了然）
+            host.PreviewKeyDown -= ControlCenter_PreviewKeyDown;
+            host.Closed -= OnControlCenterClosed;
+        }
+        _controlCenterHost = null;
+        _controlCenterClosedAt = DateTime.UtcNow;
+        _controlCenterButton?.ClearValue(Control.BackgroundProperty);
+        (host?.Content as ControlCenterPanel)?.Shutdown();  // 释放音频端点 COM 引用（幂等）
+        Logger.Info("控制中心已关闭");
     }
 }
