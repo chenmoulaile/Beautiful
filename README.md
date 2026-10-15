@@ -23,18 +23,18 @@ Beautiful 接管日常桌面三件套：屏幕底部是悬浮 Dock（应用固�
 | --- | --- | --- |
 | **顶栏没贴屏幕顶，上方露一截** | 条带几何改按**窗口所在显示器**取：`MonitorFromWindow`/`MonitorFromPoint` + `GetMonitorInfo` 的 `rcMonitor` + `GetDpiForMonitor`，不再用 `GetSystemMetrics`（只有主屏）。另外 shell 收到 AppBar 注册后会把自己的条带往下推一条带高度，故 `ABN_POSCHANGED`/`WM_WINDOWPOSCHANGED` 时重申窗口落位 | `顶栏几何 window.top=0 rcMonitor.top=0 → 贴边OK`；`顶栏几何 窗口被移到 (0,30)-(1024,60) ≠ 目标 (0,0)-(1024,30)（偏移 30px）→ 重申贴边` |
 | **Dock 只要 dock 那么大，不要一整条** | Dock 窗口是逐像素透明的分层窗口：可见面板收到图标行 + 分隔符 + 内边距，窗口矩形 = 预留带 + 放大生长余量，余量部分是透明的、点得穿 | `Dock 工作区 预留高=76px（=面板 76.0DIP，行高 60.0DIP，图标 48DIP…）窗口高=98px 余量=22px`；`Dock 几何 window.bottom=768 rcMonitor.bottom=768 → 贴底OK` |
-| **Alt+Tab 面板圆角不对** | 切换器改为分层窗口 + `Card` 自绘圆角（macOS 18 / Win11 8 / 鸿蒙胶囊），"玻璃"由显示前抓屏自绘模糊提供；v2 的 `SetWindowRgn` 裁形与 DWM 圆角属性两条路径整枝删除（真机上圆角缺口里照画深色块） | `SwitcherWindow.xaml.cs` 类型注释；三样式截图见 v3-t2/v3-t2b 系列 |
-| **缺少分隔符** | 三主题 Dock 原生还原：固定块与运行窗口块之间画分隔符，macOS/鸿蒙/Linux 各自的间距与收边分别对齐 | v3-t4-hover-sep 系列截图 |
+| **Alt+Tab 面板圆角不对** | 切换器改为分层窗口 + `Card` 自绘圆角（macOS 18 / Win11 8 / 鸿蒙胶囊），"玻璃"由显示前抓屏自绘模糊提供；v2 的 `SetWindowRgn` 裁形与 DWM 圆角属性两条路径整枝删除（真机上圆角缺口里照画深色块） | `SwitcherWindow.xaml.cs` 类型注释；三样式各有开发机本地截图（v3-t2 / v3-t2b 系列，不入库） |
+| **缺少分隔符** | 三主题 Dock 原生还原：固定块与运行窗口块之间画分隔符，macOS/鸿蒙/Linux 各自的间距与收边分别对齐 | 开发机本地截图 v3-t4-hover-sep 系列（不入库） |
 | **固定软件的行为** | 外部拖入即固定、块内拖拽排序、甩出 Dock 取消固定、回收站落点为显式 no-op（不删文件、不取消固定）；右键菜单仍是固定/取消固定 | `拖入固定：… → 固定块槽 N`、`Dock 排序：… 固定槽 A → B`、`甩出 Dock 取消固定：…` |
 | **图标糊** | 图标提取按 256px 取最大帧（不再被 32px 兜底），遮罩/内高光/alpha 投影一次性烘焙成图块并缓存，换主题或换尺寸才重烘 | `图标提取 explorer.exe: 层=ShellDef 尺寸=256×256 格式=Bgra32 请求=256`、`图标烘焙参数: 主题=HarmonyOS 尺寸=48DIP dpi=1 图块=48px 形状=Squircle …` |
-| **新增功能** | 控制中心（主题/任务栏策略/放大·倒影·媒体胶囊·壁纸取色砖块/真实系统音量）、Spotlight 式启动器（含 MSIX/UWP 条目、exe 名可直接搜）、壁纸取色强调色、Dock 显示器选择器 | 控制中心截图 v3-t8-cc-crop.png；`启动器：索引就绪，188 条可启动项`；`壁纸取色：… → #9BBBD4` |
+| **新增功能** | 控制中心（主题/任务栏策略/放大·倒影·媒体胶囊·壁纸取色砖块/真实系统音量）、Spotlight 式启动器（含 MSIX/UWP 条目、exe 名可直接搜）、壁纸取色强调色、Dock 显示器选择器 | 开发机本地截图 v3-t8-cc-crop.png（不入库）；`启动器：索引就绪，188 条可启动项`；`壁纸取色：… → #9BBBD4` |
 
 ## 不同分辨率、DPI 与多屏
 
 几何的**唯一来源**是"这条带实际落在哪块屏"，不是主屏尺寸：
 
 1. **选屏**：设置项 `DockMonitor` / `TopBarMonitor` 决定，取值 `auto`（启动时光标所在显示器，解析结果按进程粘住，避免拖动滑杆时 Dock 整条跳到副屏）/ `primary` / 序号（设置面板的下拉标签里直接写着每块屏的真实分辨率与原点）。任何解析失败都往 `auto` 收敛，最终兜到"窗口所在屏 → 首块枚举屏"，宁可让条带待在一块合理的屏上，也不返回一个猜出来的尺寸。
-2. **取数**：`MonitorFromWindow`/`MonitorFromPoint` 拿显示器句柄 → `GetMonitorInfo` 拿 `rcMonitor`（贴边要用真边缘，不是 `rcWork`）→ `GetDpiForMonitor(MDT_EFFECTIVE_DPI)` 拿该屏有效缩放。`GetSystemMetrics(SM_CXSCREEN/SM_CYSCREEN)` 在几何路径上一次都不出现——那是 v2 "副屏错位 + 高 DPI 屏顶栏上方露壁纸" 的根因。混合 DPI 多屏下也不刚注册的窗口用 `GetDpiForWindow`（它返回的是**初置屏**的 DPI，副屏 150% 会把条带算成 2/3 高）。
+2. **取数**：`MonitorFromWindow`/`MonitorFromPoint` 拿显示器句柄 → `GetMonitorInfo` 拿 `rcMonitor`（贴边要用真边缘，不是 `rcWork`）→ `GetDpiForMonitor(MDT_EFFECTIVE_DPI)` 拿该屏有效缩放。`GetSystemMetrics(SM_CXSCREEN/SM_CYSCREEN)` 在几何路径上一次都不出现——那是 v2 "副屏错位 + 高 DPI 屏顶栏上方露壁纸" 的根因。混合 DPI 多屏下也**不拿刚注册窗口的 `GetDpiForWindow` 为准**（它返回的是**初置屏**的 DPI，副屏 150% 会把条带算成 2/3 高），只在 `shcore` 不可用时才降级到它，最后才兜 1.0。
 3. **预留与生长**：上报给 shell 的 `ABM_QUERYPOS/ABM_SETPOS` 只包含**可见面板**那一截，真实窗口矩形 = 预留带 + 越界生长余量（放大 headroom）。于是最大化窗口让位的是面板的高度，而放大时"长出来"的那部分画在预留带之外、盖在桌面上，不会把桌面重新挤一遍。
 4. **重申落位**：shell 处理 AppBar 注册时会把条带整体往下推一条带高度（顶栏表现为"贴在工作区顶而不是屏幕顶"），因此收到 `ABN_POSCHANGED` 与 `WM_WINDOWPOSCHANGED` 后按目标矩形重申一次 `SetWindowPos`——**只重摆窗口、不重发 `ABM_SETPOS`**（预留带没变 → 不会再触发 shell 重排 → 不构成"重申 → 广播 → 再重申"的环）。
 5. **副屏任务栏**：`TaskbarManager` 判"任务栏在不在自己那块屏"用的是它所在显示器的 `rcMonitor.Bottom`，把副屏的 `Shell_SecondaryTrayWnd` 推出**它自己的**屏幕，而不是主屏那一行。
