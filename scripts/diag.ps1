@@ -19,6 +19,32 @@ param(
 $ErrorActionPreference = 'Stop'
 $root = Split-Path -Parent $PSScriptRoot
 
+# ---------- 0. 让本进程变成 Per-Monitor v2 DPI 感知 ----------
+# 必须在任何显示器查询之前调用：DPI 感知是进程级且不可逆的属性。不开这一句，
+# EnumDisplayMonitors/GetMonitorInfo 与 GetDpiForMonitor 返回的是**系统虚拟化**后的
+# 数字（200% 屏上给 1440x960 @96 DPI），而应用日志里的 rcMonitor 是**物理**像素
+# （同一块屏给 2880x1920 / dpi=2）—— 本节的全部用途就是"两边一对就能定位"，
+# 口径不一致时它反而会把人带偏（源开发机是 100% 缩放，两套数字恰好相等，所以从没暴露）。
+try {
+    Add-Type -TypeDefinition @'
+using System;
+using System.Runtime.InteropServices;
+public static class DiagDpi {
+  [DllImport("user32.dll")] public static extern bool SetProcessDpiAwarenessContext(IntPtr value);
+  [DllImport("user32.dll")] public static extern bool SetProcessDPIAware();
+  // DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2 = -4；已设置过再调用只会返回 false，不是错误
+  public static string Apply() {
+    try { if (SetProcessDpiAwarenessContext(new IntPtr(-4))) return "PerMonitorV2"; } catch { }
+    try { if (SetProcessDPIAware()) return "SystemAware(回退)"; } catch { }
+    return "未改变（可能已由宿主进程设置）";
+  }
+}
+'@
+    $dpiMode = [DiagDpi]::Apply()
+} catch {
+    $dpiMode = "设置失败（将继续用进程原有感知，数字可能与日志不同口径）"
+}
+
 # ---------- 1. 定位日志 ----------
 # Logger 写在 AppContext.BaseDirectory\logs\Beautiful-yyyyMM.log，而 BaseDirectory 随运行入口而变：
 # 自包含产物在 dist\Beautiful\（或 publish\），开发构建在 src\Beautiful.App\bin\<cfg>\...。
@@ -175,6 +201,7 @@ public static class W32Diag
 
 Write-Output ''
 Write-Output '[显示器与 DPI（几何数字的解释基准）]'
+Write-Output "  本进程 DPI 感知: $dpiMode    口径: 下列 rcMonitor 与日志里的 rc 同为物理像素"
 foreach ($l in [W32Diag]::Report()) { Write-Output $l }
 
 # ---------- 3. 当前设置 ----------
