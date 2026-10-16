@@ -62,14 +62,15 @@ internal static class TrayInterop
     public const uint TbGetButtonInfoW = WmUser + 63;
 
     /// <summary>
-    /// <c>TBBUTTONINFO.dwMask</c> 里本层用到的位。置哪个位，目标代码才写哪个字段——
-    /// <b>没置位的字段它不会写</b>，于是我们从远程缓冲区读回来的是自己预填的值，
-    /// 所以预填必须是 0（见 <see cref="Services.TrayIconSource"/> 里构造 <see cref="TBBUTTONINFOW"/> 的地方）。
-    /// 其余位（<c>TBIF_IMAGE</c>=0x1、<c>TBIF_SIZE</c>=0x40）没有用场：图标索引与按钮宽度都判不出
-    /// 任何我们需要的结论，声明了却不去读只会让下一个人以为还有一条取图的路。
+    /// <c>TBBUTTONINFO.dwMask</c> 里本层用到的两个位（外加 <see cref="TbifByIndex"/>）。
+    /// 置哪个位，目标代码才写哪个字段——<b>没置位的字段它不会写</b>，于是我们从远程缓冲区读回来的是
+    /// 自己预填的值，所以预填必须是 0（见 <see cref="Services.TrayIconSource"/> 里构造 <see cref="TBBUTTONINFOW"/> 的地方）。
+    /// 其余位（<c>TBIF_IMAGE</c>=0x1、<c>TBIF_STATE</c>=0x4、<c>TBIF_STYLE</c>=0x8、<c>TBIF_LPARAM</c>=0x10、
+    /// <c>TBIF_SIZE</c>=0x40）这里刻意不要：状态位、样式位与 <c>dwData</c> 已经由 <see cref="TbGetButton"/>
+    /// 一次性拿到（那次读的是整条 <see cref="TBBUTTON"/>），在这里重复索取只会多一个"两处数值不一致时该信谁"
+    /// 的问题，而 <see cref="TbifCommand"/> 是唯一必须重复的——它用来交叉校验我们要的确实是同一个按钮。
     /// </summary>
-    public const uint TbifText = 0x0002, TbifState = 0x0004, TbifStyle = 0x0008,
-                     TbifLparam = 0x0010, TbifCommand = 0x0020;
+    public const uint TbifText = 0x0002, TbifCommand = 0x0020;
 
     /// <summary><c>TBIF_BYINDEX</c>：置位后 wParam 解释为**索引**，否则解释为**命令号**（TB_GETBUTTONINFO 的文档行为）。</summary>
     public const uint TbifByIndex = 0x8000_0000;

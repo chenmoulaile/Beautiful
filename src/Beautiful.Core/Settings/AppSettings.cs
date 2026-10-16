@@ -128,6 +128,14 @@ public sealed record AppSettings
     public bool ShowTrayInTopBar { get; init; } = true;
 
     /// <summary>
+    /// 任务栏"玻璃壳"（v3.2，#6）：在<b>原生任务栏</b>上盖一层点击穿透的自绘装饰
+    /// （面向屏幕内侧的圆角收口 + 1px 高光亮边 + 主题强调色发丝线）。
+    /// 不移动、不隐藏、不接管原生任务栏的任何交互，所以它与"隐藏任务栏"策略是互斥的：
+    /// 策略为 hide 时没有可装饰的东西，装饰层会自己消失。
+    /// </summary>
+    public bool TaskbarGlass { get; init; } = true;
+
+    /// <summary>
     /// Dock 所在显示器：auto = 启动时光标所在显示器（解析结果按进程粘住，重排不会因鼠标划过别屏而
     /// 让 Dock 跳走）、primary = 主显示器、其余为设置面板列出的十进制序号（1 起）。
     /// </summary>

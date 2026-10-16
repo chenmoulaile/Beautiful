@@ -390,9 +390,9 @@ public sealed class TrayIconSource
             var info = new TBBUTTONINFOW
             {
                 cbSize = infoSize,
-                // dwMask 是逐字段生效开关：没置位的字段目标代码不会写，因此除了 cbSize 与 iString 全留 0
-                dwMask = (int)(TbifText | TbifState | TbifStyle | TbifLparam | TbifCommand
-                               | (byIndex ? TbifByIndex : 0u)),
+                // 只要文本 + 命令号：状态位/样式位/dwData 已经由 TB_GETBUTTON 一次拿全，重复索取只会
+                // 多出"两处数值不一致时该信谁"的问题。命令号必须再要一次，因为它是下面那道交叉校验的凭据。
+                dwMask = (int)(TbifText | TbifCommand | (byIndex ? TbifByIndex : 0u)),
                 iString = remoteText,
             };
             var bytes = ToBytes(info);
@@ -905,10 +905,11 @@ public sealed class TrayIconSource
                 var el = buttons[i];
                 var name = SafeString(() => el.Current.Name);
                 var id = SafeString(() => el.Current.AutomationId);
-                var looksLikeChevron = name.Contains("隐藏") || name.Contains("溢出")
+                // 只认三个明确的说法。刻意不收 "overflow"/"溢出" 这类宽泛词：隐藏区里第三方图标的
+                // AutomationId 也可能带 Overflow 前缀，误命中就变成"点展开却触发了别人的图标"。
+                var looksLikeChevron = name.Contains("隐藏")
                                        || name.IndexOf("hidden", StringComparison.OrdinalIgnoreCase) >= 0
-                                       || id.IndexOf("ShowHidden", StringComparison.OrdinalIgnoreCase) >= 0
-                                       || id.IndexOf("Overflow", StringComparison.OrdinalIgnoreCase) >= 0;
+                                       || id.IndexOf("ShowHidden", StringComparison.OrdinalIgnoreCase) >= 0;
                 if (!looksLikeChevron) continue;
 
                 try

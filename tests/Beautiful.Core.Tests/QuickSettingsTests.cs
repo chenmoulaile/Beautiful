@@ -179,7 +179,25 @@ public class QuickSettingsTests
         Assert.True(QuickSettings.FindTile(tiles, QuickSettings.MagnificationId)!.IsOn);
         Assert.True(QuickSettings.FindTile(tiles, QuickSettings.ReflectionId)!.IsOn);
         Assert.False(QuickSettings.FindTile(tiles, QuickSettings.MediaCapsuleId)!.IsOn);
-        Assert.Equal(4, tiles.Count);   // 顺序与数量都是界面的契约（UniformGrid 现在是两列，四块正好 2×2）
+        Assert.True(QuickSettings.FindTile(tiles, QuickSettings.TaskbarGlassId)!.IsOn);
+        Assert.Equal(5, tiles.Count);   // 顺序与数量都是界面的契约（两列 UniformGrid：2+2+1，最后一块自己一行）
+    }
+
+    [Fact]
+    public void 任务栏被隐藏时玻璃壳砖块置灰并写明原因()
+    {
+        // 玻璃壳是给原生任务栏化妆的：任务栏没了就没有可化妆的对象。
+        // 让砖块亮着而屏上什么也没变，是本项目明确不接受的"假状态"。
+        var hidden = Tiles(new AppSettings { TaskbarPolicy = "hide", TaskbarGlass = true }, ThemeDefinition.MacOs());
+        var glass = QuickSettings.FindTile(hidden, QuickSettings.TaskbarGlassId)!;
+        Assert.False(glass.IsEnabled);
+        Assert.False(string.IsNullOrWhiteSpace(glass.BlockReason));
+
+        var kept = Tiles(new AppSettings { TaskbarPolicy = "keep", TaskbarGlass = true }, ThemeDefinition.MacOs());
+        Assert.True(QuickSettings.FindTile(kept, QuickSettings.TaskbarGlassId)!.IsEnabled);
+
+        // autohide 算"看得见"：它只是缩起来，任务栏还在那里，可以化妆
+        Assert.True(QuickSettings.NativeTaskbarVisible(new AppSettings { TaskbarPolicy = "autohide" }));
     }
 
     [Fact]

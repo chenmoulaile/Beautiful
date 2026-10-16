@@ -45,6 +45,9 @@ public static class QuickSettings
     public const string MediaCapsuleId = "mediaCapsule";
     public const string WallpaperAccentId = "wallpaperAccent";
 
+    /// <summary>任务栏玻璃壳砖块（v3.2 #6）：只美化原生任务栏，不接管。</summary>
+    public const string TaskbarGlassId = "taskbarGlass";
+
     /// <summary>主题分段（左→右）。鸿蒙放最后一位，与设置页的先后顺序一致。</summary>
     public static IReadOnlyList<QuickOption> Themes { get; } =
     [
@@ -101,6 +104,9 @@ public static class QuickSettings
     /// <summary>壁纸取色是否打开（关时主题观感与取色功能上线前完全一致）。</summary>
     public static bool IsWallpaperAccentOn(AppSettings s) => s.UseWallpaperAccent;
 
+    /// <summary>玻璃壳开关的现值。</summary>
+    public static bool IsTaskbarGlassOn(AppSettings s) => s.TaskbarGlass;
+
     // ---------- 开关：写入 ----------
 
     /// <summary>
@@ -124,6 +130,9 @@ public static class QuickSettings
 
     /// <summary>设壁纸取色强调色的开关（落盘后由 App 侧 WallpaperAccentService 立即重放一次）。</summary>
     public static AppSettings WithWallpaperAccent(AppSettings s, bool on) => s with { UseWallpaperAccent = on };
+
+    /// <summary>写玻璃壳开关。</summary>
+    public static AppSettings WithTaskbarGlass(AppSettings s, bool on) => s with { TaskbarGlass = on };
 
     // ---------- 砖块投影 ----------
 
@@ -159,7 +168,15 @@ public static class QuickSettings
         new(MediaCapsuleId, "媒体胶囊", IsMediaCapsuleOn(s), true, null),
         new(WallpaperAccentId, "壁纸取色", IsWallpaperAccentOn(s), wallpaperAccentAvailable,
             wallpaperAccentAvailable ? null : "读不到当前壁纸文件（幻灯片或纯色桌面）"),
+        // 玻璃壳是"给原生任务栏化妆"，任务栏被隐藏时没有可化妆的对象——置灰并写明原因，
+        // 而不是让砖块亮着却屏上什么也没变（那是"假状态"，本项目不接受）
+        new(TaskbarGlassId, "任务栏玻璃壳", IsTaskbarGlassOn(s), NativeTaskbarVisible(s),
+            NativeTaskbarVisible(s) ? null : "任务栏策略为隐藏，没有可装饰的任务栏"),
     ];
+
+    /// <summary>原生任务栏当前是否可见（玻璃壳的前提）。autohide 算可见——它只是缩起来，仍然在那里。</summary>
+    public static bool NativeTaskbarVisible(AppSettings s) =>
+        !string.Equals(s.TaskbarPolicy, "hide", System.StringComparison.OrdinalIgnoreCase);
 
     /// <summary>按 Id 找砖块投影（点击后刷新单项状态用）；未知 Id 返回 null。</summary>
     public static QuickTile? FindTile(IReadOnlyList<QuickTile> tiles, string id) =>

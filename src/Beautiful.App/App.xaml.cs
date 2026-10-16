@@ -40,6 +40,9 @@ public partial class App : Application
 
     /// <summary>最小化/最大化动画（v3.2）：持有两条 WinEvent 钩子，退出必须卸。</summary>
     private Animation.MinimizeAnimator? _animator;
+
+    /// <summary>任务栏玻璃壳（v3.2 #6）：盖在原生任务栏上的点击穿透装饰层，只美化不接管。</summary>
+    private Services.TaskbarGlassOverlay? _glass;
     private TopBarWindow? _topBar;
     private Switcher.SwitcherService? _switcher;
     private Switcher.SwitcherWindow? _switcherWindow;
@@ -86,6 +89,9 @@ public partial class App : Application
             // 6. Dock 即主 UI：--minimized 仅标识自启来源（自启语义），Dock 照常显示，超出仅记录
             _dock = new DockWindow(_taskbar);
             _dock.Show();
+
+            // 6.3 任务栏玻璃壳（v3.2 #6）：必须在任务栏策略落地之后建，否则会给一条已被推出的任务栏化妆
+            ApplyGlassState(SettingsService.Current);
 
             // 6.2 最小化/最大化动画（v3.2）：挂在 Dock 之后，因为落点要问 Dock 图标在哪。
             // 它是纯装饰的附属能力，装不上只记日志，绝不连坐主 UI（与顶栏同一处置）。
@@ -158,6 +164,8 @@ public partial class App : Application
         _tray = null;
         _animator?.Dispose();   // WinEvent 钩子必须卸载（幂等）
         _animator = null;
+        _glass?.Dispose();      // 拆掉盖在原生任务栏上的装饰层（幂等）
+        _glass = null;
         DestroyLauncher();  // 覆盖层是瞬态弹层：兜底路径也要收（Dispose 幂等，ExitApp 已走过一次则 no-op）
         DestroySwitcher(); // 键盘钩子必须卸载（幂等）：残留的 WH_KEYBOARD_LL 会在进程退出时由系统回收，
                            // 但显式 Shutdown 而未走 ExitApp 的路径若卡在非 UI 线程，卸载会失败 → 这里至少留日志
@@ -380,6 +388,8 @@ public partial class App : Application
         SettingsService.UpdateAndSave(QuickSettings.WithTaskbarPolicy(SettingsService.Current, policyId));
         var app = Current as App;
         app?._taskbar?.Apply(SettingsService.PolicyOf(SettingsService.Current));
+        // 策略一换，玻璃壳的"有没有可装饰的任务栏"就变了：切到隐藏必须把装饰一起拆掉
+        app?.ApplyGlassState(SettingsService.Current);
     }
 
     /// <summary>悬停放大开关：强度在"下限 ×1.0（关）"与"默认倍率（开）"之间切换，落地走 Dock 布局重放。</summary>
@@ -412,6 +422,46 @@ public partial class App : Application
     {
         SettingsService.UpdateAndSave(QuickSettings.WithWallpaperAccent(SettingsService.Current, on));
         _ = WallpaperAccentService.RefreshAsync(on);
+    }
+
+    /// <summary>
+    /// 玻璃壳开关（v3.2 #6）：写设置 + 建/拆装饰层。策略为"隐藏"时不建层
+    /// （没有可装饰的任务栏，留一条悬空高光比不画更难看），砖块那边已经把这个前提置灰并写明原因。
+    /// </summary>
+    public static void SetTaskbarGlass(bool on)
+    {
+        var next = QuickSettings.WithTaskbarGlass(SettingsService.Current, on);
+        SettingsService.UpdateAndSave(next);
+        (Current as App)?.ApplyGlassState(next);
+    }
+
+    /// <summary>按现值决定玻璃壳在不在。策略变化（隐藏↔保留）也要走这里，否则会出现"任务栏没了、装饰还在"。</summary>
+    private void ApplyGlassState(Core.Settings.AppSettings s)
+    {
+        var want = s.TaskbarGlass && QuickSettings.NativeTaskbarVisible(s);
+        if (want && _glass is null)
+        {
+            try
+            {
+                _glass = new Services.TaskbarGlassOverlay();
+            }
+            catch (Exception ex)
+            {
+                // 装饰层是附属能力，装不上只记日志，绝不连坐主 UI
+                Logger.Warn($"任务栏玻璃壳未启用：{ex.GetType().Name} {ex.Message}");
+                _glass = null;
+            }
+        }
+        else if (!want && _glass is not null)
+        {
+            _glass.Dispose();
+            _glass = null;
+            Logger.Info("任务栏玻璃壳已卸载");
+        }
+        else if (want)
+        {
+            _glass?.Refresh();
+        }
     }
 
 

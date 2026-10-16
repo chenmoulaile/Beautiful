@@ -223,6 +223,7 @@ public partial class ControlCenterPanel : UserControl, IBackdropAware, IPopupSha
             case QuickSettings.ReflectionId: App.SetReflection(on); break;
             case QuickSettings.MediaCapsuleId: App.SetMediaCapsule(on); break;
             case QuickSettings.WallpaperAccentId: App.SetWallpaperAccent(on); break;
+            case QuickSettings.TaskbarGlassId: App.SetTaskbarGlass(on); break;
             default: break;   // 未知砖块 Id：不写任何东西，下面的重投影会把界面拉回真值
         }
         RebuildTilesDeferred();
