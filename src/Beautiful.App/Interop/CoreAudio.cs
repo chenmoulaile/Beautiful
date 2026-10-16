@@ -69,14 +69,79 @@ internal interface IMMDevice
     void Activate(ref Guid interfaceId, int classContext, IntPtr activationParams,
                   [MarshalAs(UnmanagedType.IUnknown)] out object instance);
 
-    /// <summary>槽 2 OpenPropertyStore（未使用）。</summary>
-    void OpenPropertyStore(int accessFlags, IntPtr propertyStore);
+    /// <summary>槽 2 OpenPropertyStore：取端点的属性仓库（面板抬头要读"这块设备叫什么"）。</summary>
+    void OpenPropertyStore(int stgmAccess, out IPropertyStore propertyStore);
 
-    /// <summary>槽 3 GetId（未使用）。</summary>
-    void GetId(IntPtr deviceId);
+    /// <summary>槽 3 GetId：端点 ID 字符串（面板只拿来做日志/去重，不显示给用户）。</summary>
+    void GetId([MarshalAs(UnmanagedType.LPWStr)] out string deviceId);
 
     /// <summary>槽 4 GetState（未使用：默认端点取到了就说明它是活的）。</summary>
     void GetState(out int state);
+}
+
+/// <summary>
+/// <c>IPropertyStore</c>（propsys.h，5 个方法）。只用到 <see cref="GetValue"/>。
+/// </summary>
+[ComImport, Guid("886d8eeb-8cf2-4446-8d02-cdba1dbdcf99"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+internal interface IPropertyStore
+{
+    void GetCount(out uint count);
+    void GetAt(uint index, out PropertyKey key);
+
+    /// <summary>读一个属性。<paramref name="value"/> 里的字符串指针由 COM 持有，必须 <c>PropVariantClear</c>。</summary>
+    void GetValue(in PropertyKey key, out PropVariant value);
+
+    void SetValue(in PropertyKey key, in PropVariant value);
+    void Commit(uint flags);
+}
+
+/// <summary><c>PROPERTYKEY</c> = GUID + UINT 子键。</summary>
+[StructLayout(LayoutKind.Sequential)]
+internal struct PropertyKey
+{
+    public Guid FormatId;
+    public uint PropertyId;
+
+    public PropertyKey(string formatId, uint propertyId)
+    {
+        FormatId = new Guid(formatId);
+        PropertyId = propertyId;
+    }
+}
+
+/// <summary>
+/// <c>PROPVARIANT</c> 的<b>只读局部</b>布局：本程序只取 <c>VT_LPWSTR</c>，所以只声明到那个指针够用为止。
+/// x64 下联合体从偏移 8 开始（前 8 字节是 vt/wReserved 与对齐填充），<c>pwszVal</c> 就落在那里。
+/// 发布目标是 win-x64 单一架构，这个前提写死在注释里；真要上 ARM64 得回来核对。
+/// </summary>
+[StructLayout(LayoutKind.Explicit)]
+internal struct PropVariant
+{
+    [FieldOffset(0)] public ushort VarType;
+    [FieldOffset(8)] public IntPtr PointerValue;
+
+    /// <summary>VT_LPWSTR = 31。</summary>
+    public const ushort VtLpWstr = 31;
+
+    [DllImport("ole32.dll")]
+    public static extern int PropVariantClear(ref PropVariant variant);
+
+    /// <summary>取字符串（非 VT_LPWSTR 一律当"读不到"，不硬转）；读完立刻 Clear，否则漏 COM 分配的内存。</summary>
+    public readonly string? ReadString()
+    {
+        if (VarType != VtLpWstr || PointerValue == IntPtr.Zero) return null;
+        return Marshal.PtrToStringUni(PointerValue);
+    }
+}
+
+internal static class CoreAudioProps
+{
+    /// <summary>STGM_READ：只读打开属性仓库。</summary>
+    public const int StgmRead = 0x00000000;
+
+    /// <summary><c>PKEY_Device_FriendlyName</c> = {a45c254e-df1c-4efa-8020-67d146a850e0}, 14。</summary>
+    public static readonly PropertyKey DeviceFriendlyName =
+        new("a45c254e-df1c-4efa-8020-67d146a850e0", 14);
 }
 
 /// <summary>

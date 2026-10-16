@@ -1,0 +1,113 @@
+<UserControl x:Class="Beautiful.App.TopBar.VolumePanel"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             TextOptions.TextFormattingMode="Ideal"
+             FontFamily="{DynamicResource ThemeFontFamily}"
+             Foreground="{DynamicResource ThemeTextPrimary}">
+
+    <!-- 顶栏音量图标点开的自家音量面板（用户要求："声音控制也是同理……要好用高质量"）。
+         原来那里直接开 sndvol.exe（系统混音器），整块 UI 都是 Windows 的。
+         材质与控制中心/WiFi 面板同一套：抓屏模糊 + 深色遮罩，拿不到模糊铺实心卡底。 -->
+    <UserControl.Resources>
+        <LinearGradientBrush x:Key="CardFillBlur" StartPoint="0,0" EndPoint="0,1">
+            <GradientStop Color="#CC1A1A1A" Offset="0"/>
+            <GradientStop Color="#D9141414" Offset="1"/>
+        </LinearGradientBrush>
+        <SolidColorBrush x:Key="CardFillSolid" Color="#F01F1F1F"/>
+        <DropShadowEffect x:Key="CardShadow" BlurRadius="32" ShadowDepth="9" Direction="270"
+                          Color="#B0000000" Opacity="0.85" RenderingBias="Performance"/>
+
+        <Style x:Key="RowButtonStyle" TargetType="Button">
+            <Setter Property="Height" Value="30"/>
+            <Setter Property="FontSize" Value="12.5"/>
+            <Setter Property="Foreground" Value="{DynamicResource ThemeTextPrimary}"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Button">
+                        <Border x:Name="bg" CornerRadius="7" Background="Transparent" Padding="11,0">
+                            <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="bg" Property="Background" Value="#2EFFFFFF"/>
+                            </Trigger>
+                            <Trigger Property="IsEnabled" Value="False">
+                                <Setter Property="Opacity" Value="0.45"/>
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+    </UserControl.Resources>
+
+    <Grid x:Name="Shell" Margin="20,18,20,24">
+        <Border x:Name="Card" Width="312" CornerRadius="12" BorderThickness="1" BorderBrush="#2AFFFFFF"
+                Background="{StaticResource CardFillSolid}" Effect="{StaticResource CardShadow}">
+            <Grid>
+                <Border x:Name="Scrim" CornerRadius="11" IsHitTestVisible="False" Background="Transparent"/>
+                <Border x:Name="TintLayer" CornerRadius="11" IsHitTestVisible="False"
+                        Background="{DynamicResource ThemeBackdropTint}"/>
+                <Border x:Name="InnerGlow" CornerRadius="11" IsHitTestVisible="False">
+                    <Border.Background>
+                        <LinearGradientBrush StartPoint="0,0" EndPoint="0,1">
+                            <GradientStop Color="#14FFFFFF" Offset="0"/>
+                            <GradientStop Color="#05FFFFFF" Offset="0.35"/>
+                            <GradientStop Color="#00FFFFFF" Offset="1"/>
+                        </LinearGradientBrush>
+                    </Border.Background>
+                </Border>
+
+                <StackPanel Margin="13,11,13,9">
+                    <Grid Margin="0,0,0,2">
+                        <TextBlock Text="声音" FontSize="13.5" FontWeight="SemiBold"/>
+                        <!-- 当前默认播放端点的友好名；读不到就整行不显示（不编设备名） -->
+                        <TextBlock x:Name="DeviceLabel" HorizontalAlignment="Right" MaxWidth="186"
+                                   FontSize="11.5" Opacity="0.72" TextTrimming="CharacterEllipsis"/>
+                    </Grid>
+
+                    <Grid Margin="0,9,0,0">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="Auto"/>
+                            <ColumnDefinition Width="*"/>
+                            <ColumnDefinition Width="Auto"/>
+                        </Grid.ColumnDefinitions>
+                        <Button x:Name="MuteButton" Grid.Column="0" Width="32" Height="30" Margin="0,0,8,0"
+                                Padding="0" FontSize="14"
+                                FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets"
+                                Foreground="{DynamicResource ThemeTextPrimary}"
+                                Style="{StaticResource RowButtonStyle}" Click="Mute_Click"
+                                AutomationProperties.Name="静音开关"/>
+                        <Slider x:Name="VolumeSlider" Grid.Column="1" Minimum="0" Maximum="100"
+                                IsMoveToPointEnabled="True" VerticalAlignment="Center" Height="30"
+                                TickFrequency="1" SmallChange="1" LargeChange="5"
+                                ValueChanged="Volume_ValueChanged"
+                                PreviewMouseLeftButtonDown="Volume_DragBegin"
+                                PreviewMouseLeftButtonUp="Volume_DragEnd"
+                                LostMouseCapture="Volume_DragEnd"
+                                AutomationProperties.Name="系统音量"/>
+                        <TextBlock x:Name="VolumeText" Grid.Column="2" MinWidth="46" Margin="9,0,0,0"
+                                   FontSize="12" VerticalAlignment="Center" HorizontalAlignment="Right"/>
+                    </Grid>
+
+                    <!-- 不可用原因 / 失败回读：读不到真值就置灰并写明原因，绝不显示一个编出来的百分比 -->
+                    <TextBlock x:Name="VolumeReason" FontSize="11" Opacity="0.72" Margin="1,8,0,0"
+                               TextWrapping="Wrap" Visibility="Collapsed"/>
+
+                    <Border Height="1" Background="#1AFFFFFF" Margin="1,9,1,0"/>
+                    <Grid Margin="0,7,0,0">
+                        <StackPanel Orientation="Horizontal">
+                            <Button Content="静音" Height="28" Padding="11,0"
+                                    Style="{StaticResource RowButtonStyle}" Click="Mute_Click"/>
+                            <Button Content="重读" Height="28" Margin="3,0,0,0" Padding="11,0"
+                                    Style="{StaticResource RowButtonStyle}" Click="Refresh_Click"/>
+                        </StackPanel>
+                        <!-- 混音器（逐应用音量）本程序不做，把唯一出路明确给出来 -->
+                        <Button Content="系统声音设置…" HorizontalAlignment="Right" Height="28" Padding="11,0"
+                                FontSize="12" Style="{StaticResource RowButtonStyle}" Click="OpenSettings_Click"/>
+                    </Grid>
+                </StackPanel>
+            </Grid>
+        </Border>
+    </Grid>
+</UserControl>

@@ -104,6 +104,14 @@ public partial class TopBarWindow : AcrylicWindow
     // v3 T7：控制中心面板（宿主 + 入口按钮 + "刚关过"抑制位；见 ToggleControlCenter 的竞态说明）
     private FluentPopupHost? _controlCenterHost;
     private Button? _controlCenterButton;
+
+    /// <summary>自家 WiFi 面板（v3.2）：宿主与触发按钮；面板自己持有 wlanapi 句柄，关闭时 Shutdown。</summary>
+    private FluentPopupHost? _wifiHost;
+    private Button? _wifiButton;
+
+    /// <summary>自家音量面板（v3.2）：持有音频端点 COM 引用，关闭时 Shutdown。</summary>
+    private FluentPopupHost? _volumeHost;
+    private Button? _volumeButton;
     private DateTime _controlCenterClosedAt = DateTime.MinValue;
 
     /// <summary>
@@ -505,15 +513,17 @@ public partial class TopBarWindow : AcrylicWindow
         _clockButton.Click += (_, _) => OpenCalendar();
         RightHost.Children.Add(_clockButton);
 
-        // 音量（点击 → 系统混音器 sndvol）
+        // 音量（点击 → 自家音量面板；原来是 sndvol.exe，整块 UI 都是 Windows 的）
         var (vol, _) = MakeStatusItem("\uE767", iconFont: true); // Segoe MDL2 Volume
-        vol.Click += (_, _) => TopBarMenus.Launch("sndvol.exe");
+        _volumeButton = vol;
+        vol.Click += Volume_Click;
         RightHost.Children.Add(vol);
 
-        // 网络（点击 → ms-settings:network；状态由每分钟定时器对账）
+        // 网络（点击 → 自家 WiFi 面板；状态由每分钟定时器对账）
         var (net, netText) = MakeStatusItem("\uE701", iconFont: true); // Segoe MDL2 Globe
         _networkText = netText;
-        net.Click += (_, _) => TopBarMenus.Launch("ms-settings:network-status");
+        _wifiButton = net;
+        net.Click += Wifi_Click;
         RightHost.Children.Add(net);
 
         // 电量（仅存在电池时显示；每分钟刷新）
@@ -753,6 +763,68 @@ public partial class TopBarWindow : AcrylicWindow
         }
         if ((DateTime.UtcNow - _controlCenterClosedAt).TotalMilliseconds < ReopenGuardMs) return;
         OpenControlCenter();
+    }
+
+    /// <summary>
+    /// 网络图标点击：已开即收（与控制中心一致的"再点一下关掉"语义），否则在按钮下缘开自家 WiFi 面板。
+    /// 原来这里直接 <c>ms-settings:network-status</c> ——用户明确要求"单独做一个 wifi 栏，不要使 windows 的东西"。
+    /// </summary>
+    private void Wifi_Click(object sender, RoutedEventArgs e)
+    {
+        if (_wifiHost is { IsLoaded: true }) { _wifiHost.Close(); return; }
+        OpenWifiPanel();
+    }
+
+    private void OpenWifiPanel()
+    {
+        if (_wifiButton is null) return;
+        // 锚点 = 按钮下缘的设备像素；ShowAt 按**可见卡片**对齐（v3.2 修掉了投影留白被算进偏移的错位）
+        var anchor = _wifiButton.PointToScreen(new Point(0, _wifiButton.ActualHeight));
+        var host = new FluentPopupHost();
+        var panel = new WifiPanel();
+        panel.AttachHost(host);
+        host.Content = panel;
+        host.KeepAliveProbe = () => host.IsActive || host.CursorInInflated(FluentPopupHost.RectInflate);
+        host.Closed += (_, _) =>
+        {
+            _wifiHost = null;
+            _wifiButton?.ClearValue(Control.BackgroundProperty);
+            panel.Shutdown();          // 释放 wlanapi 句柄（幂等）
+            Logger.Info("WiFi 面板已关闭");
+        };
+        _wifiHost = host;
+        _wifiButton.SetResourceReference(Control.BackgroundProperty, "ThemePanelBackground");
+        host.ShowAt(anchor);
+        Logger.Info("WiFi 面板已打开");
+    }
+
+    /// <summary>音量图标点击：已开即收，否则开自家音量面板（替掉原来的 sndvol.exe）。</summary>
+    private void Volume_Click(object sender, RoutedEventArgs e)
+    {
+        if (_volumeHost is { IsLoaded: true }) { _volumeHost.Close(); return; }
+        OpenVolumePanel();
+    }
+
+    private void OpenVolumePanel()
+    {
+        if (_volumeButton is null) return;
+        var anchor = _volumeButton.PointToScreen(new Point(0, _volumeButton.ActualHeight));
+        var host = new FluentPopupHost();
+        var panel = new VolumePanel();
+        panel.AttachHost(host);
+        host.Content = panel;
+        host.KeepAliveProbe = () => host.IsActive || host.CursorInInflated(FluentPopupHost.RectInflate);
+        host.Closed += (_, _) =>
+        {
+            _volumeHost = null;
+            _volumeButton?.ClearValue(Control.BackgroundProperty);
+            panel.Shutdown();          // 归还音频端点 COM 引用（幂等）
+            Logger.Info("音量面板已关闭");
+        };
+        _volumeHost = host;
+        _volumeButton.SetResourceReference(Control.BackgroundProperty, "ThemePanelBackground");
+        host.ShowAt(anchor);
+        Logger.Info("音量面板已打开");
     }
 
     private void OpenControlCenter()

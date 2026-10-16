@@ -39,6 +39,29 @@ public sealed class SystemVolumeService : IDisposable
     /// <summary>不可用的中文原因（可用时为 null）。直接进砖块的 ToolTip，不做二次加工。</summary>
     public string? UnavailableReason { get; private set; }
 
+    /// <summary>当前默认播放端点的友好名（面板抬头用）。取不到 = null，不编。</summary>
+    public string? DeviceName { get; private set; }
+
+    /// <summary>
+    /// 读端点的 <c>PKEY_Device_FriendlyName</c>。属性仓库打开或取值失败一律回 null——
+    /// 抬头少一行设备名不影响控制音量，编一个名字才会。
+    /// </summary>
+    private static string? ReadFriendlyName(IMMDevice device)
+    {
+        try
+        {
+            device.OpenPropertyStore(CoreAudioProps.StgmRead, out var store);
+            store.GetValue(in CoreAudioProps.DeviceFriendlyName, out var value);
+            var name = value.ReadString();
+            PropVariant.PropVariantClear(ref value);
+            return string.IsNullOrWhiteSpace(name) ? null : name;
+        }
+        catch (Exception ex) when (ex is InvalidOperationException or NotSupportedException or System.Runtime.InteropServices.COMException)
+        {
+            return null;
+        }
+    }
+
     public SystemVolumeService()
     {
         // 全程 try/catch：这是 UI 线程上"打开面板"路径里的一步，任何一次 COM 失败都只能变成
@@ -63,6 +86,7 @@ public sealed class SystemVolumeService : IDisposable
             // eRender + eConsole = "系统音量滑杆所控制的那块端点"。无默认端点时这一步抛 COMException。
             enumerator.GetDefaultAudioEndpoint(CoreAudioIds.DataFlowRender, CoreAudioIds.RoleConsole, out var device);
             _device = device;
+            DeviceName = ReadFriendlyName(device);   // 读不到就是 null：面板宁可不显示这行，也不编一个设备名
 
             var iid = new Guid(CoreAudioIds.AudioEndpointVolumeIid);
             device.Activate(ref iid, CoreAudioIds.CtxServer, IntPtr.Zero, out var raw);

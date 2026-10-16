@@ -1,0 +1,126 @@
+<UserControl x:Class="Beautiful.App.TopBar.WifiPanel"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             TextOptions.TextFormattingMode="Ideal"
+             FontFamily="{DynamicResource ThemeFontFamily}"
+             Foreground="{DynamicResource ThemeTextPrimary}">
+
+    <!-- 顶栏网络图标点开的自家 WiFi 面板（用户要求："单独做一个 wifi 栏…不要使 windows 的东西"）。
+         材质与控制中心完全同一套：Shell.Margin 给自绘投影留位 → Card 圆角 + 亮边 + 投影，
+         玻璃感来自宿主的抓屏模糊（IBackdropAware），拿不到模糊时铺 CardFillSolid 实心卡底。
+         列表行由代码构建（与控制中心的分段同一做法）：行的可用/置灰/连接中状态多，
+         写在 DataTemplate 的触发器里比写在代码里更难读。 -->
+    <UserControl.Resources>
+        <!-- 有模糊时压在模糊之上的半透明深色遮罩：保证白字在任何壁纸上都有对比度 -->
+        <LinearGradientBrush x:Key="CardFillBlur" StartPoint="0,0" EndPoint="0,1">
+            <GradientStop Color="#CC1A1A1A" Offset="0"/>
+            <GradientStop Color="#D9141414" Offset="1"/>
+        </LinearGradientBrush>
+        <SolidColorBrush x:Key="CardFillSolid" Color="#F01F1F1F"/>
+        <DropShadowEffect x:Key="CardShadow" BlurRadius="32" ShadowDepth="9" Direction="270"
+                          Color="#B0000000" Opacity="0.85" RenderingBias="Performance"/>
+
+        <!-- 面板内的行按钮：透明底 + 悬停强调 + 圆角，和控制中心的底部动作同一观感 -->
+        <Style x:Key="RowButtonStyle" TargetType="Button">
+            <Setter Property="Height" Value="34"/>
+            <Setter Property="HorizontalContentAlignment" Value="Stretch"/>
+            <Setter Property="Padding" Value="0"/>
+            <Setter Property="FontSize" Value="12.5"/>
+            <Setter Property="Foreground" Value="{DynamicResource ThemeTextPrimary}"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Button">
+                        <Border x:Name="bg" CornerRadius="8" Background="Transparent" Padding="9,0">
+                            <ContentPresenter VerticalAlignment="Center"/>
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="bg" Property="Background" Value="#26FFFFFF"/>
+                            </Trigger>
+                            <Trigger Property="IsEnabled" Value="False">
+                                <Setter Property="Opacity" Value="0.42"/>
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+    </UserControl.Resources>
+
+    <Grid x:Name="Shell" Margin="20,18,20,24">
+        <Border x:Name="Card" Width="330" CornerRadius="12" BorderThickness="1" BorderBrush="#2AFFFFFF"
+                Background="{StaticResource CardFillSolid}" Effect="{StaticResource CardShadow}">
+            <Grid>
+                <Border x:Name="Scrim" CornerRadius="11" IsHitTestVisible="False" Background="Transparent"/>
+                <Border x:Name="TintLayer" CornerRadius="11" IsHitTestVisible="False"
+                        Background="{DynamicResource ThemeBackdropTint}"/>
+                <Border x:Name="InnerGlow" CornerRadius="11" IsHitTestVisible="False">
+                    <Border.Background>
+                        <LinearGradientBrush StartPoint="0,0" EndPoint="0,1">
+                            <GradientStop Color="#14FFFFFF" Offset="0"/>
+                            <GradientStop Color="#05FFFFFF" Offset="0.35"/>
+                            <GradientStop Color="#00FFFFFF" Offset="1"/>
+                        </LinearGradientBrush>
+                    </Border.Background>
+                </Border>
+
+                <StackPanel Margin="13,11,13,9">
+                    <!-- 标题行：左"Wi‑Fi"，右当前连接名（或不可用原因，取不到就写"未连接"，不编） -->
+                    <Grid Margin="0,0,0,6">
+                        <TextBlock Text="Wi‑Fi" FontSize="13.5" FontWeight="Semibold"/>
+                        <TextBlock x:Name="HeaderStatus" HorizontalAlignment="Right" MaxWidth="180"
+                                   FontSize="11.5" Opacity="0.72" TextTrimming="CharacterEllipsis"/>
+                    </Grid>
+
+                    <!-- 列表：行由代码加进来 -->
+                    <StackPanel x:Name="NetworkHost"/>
+
+                    <!-- 口令行：只在"点到需要口令且系统里还没有配置文件的网络"时出现，就地展开。
+                         做成第二层弹层要多管一次激活/键盘焦点，就地展开反而更稳。 -->
+                    <Border x:Name="PassBox" CornerRadius="8" Background="#1FFFFFFF"
+                            Padding="9,7" Margin="0,4,0,0" Visibility="Collapsed">
+                        <StackPanel>
+                            <TextBlock x:Name="PassHint" FontSize="11" Opacity="0.72" Margin="0,0,0,5"
+                                       TextWrapping="Wrap"/>
+                            <Grid>
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="*"/>
+                                    <ColumnDefinition Width="Auto"/>
+                                    <ColumnDefinition Width="Auto"/>
+                                </Grid.ColumnDefinitions>
+                                <PasswordBox x:Name="PassInput" Grid.Column="0" Height="28" FontSize="12.5"
+                                             VerticalContentAlignment="Center" Padding="6,0"
+                                             Background="#26000000" Foreground="{DynamicResource ThemeTextPrimary}"
+                                             BorderBrush="#33FFFFFF" BorderThickness="1"
+                                             AutomationProperties.Name="网络密码"/>
+                                <Button Grid.Column="1" Content="连接" Height="28" Margin="7,0,0,0" Padding="11,0"
+                                        Style="{StaticResource RowButtonStyle}" Click="PassConnect_Click"/>
+                                <Button Grid.Column="2" Content="取消" Height="28" Margin="2,0,0,0" Padding="11,0"
+                                        Style="{StaticResource RowButtonStyle}" Click="PassCancel_Click"/>
+                            </Grid>
+                            <TextBlock x:Name="PassError" FontSize="11" Margin="1,6,0,0" TextWrapping="Wrap"
+                                       Foreground="#FFFF8A80" Visibility="Collapsed"/>
+                        </StackPanel>
+                    </Border>
+
+                    <!-- 状态/结果行：连接中、失败原因都写在这里，不弹系统气泡 -->
+                    <TextBlock x:Name="StatusLine" FontSize="11" Opacity="0.72" Margin="1,7,0,0"
+                               TextWrapping="Wrap" Visibility="Collapsed"/>
+
+                    <Border Height="1" Background="#1AFFFFFF" Margin="1,8,1,0"/>
+                    <Grid Margin="0,7,0,0">
+                        <StackPanel Orientation="Horizontal">
+                            <Button Content="刷新" Height="28" Padding="11,0"
+                                    Style="{StaticResource RowButtonStyle}" Click="Refresh_Click"/>
+                            <Button Content="扫描" Height="28" Margin="3,0,0,0" Padding="11,0"
+                                    Style="{StaticResource RowButtonStyle}" Click="Scan_Click"/>
+                        </StackPanel>
+                        <!-- 企业级/证书网络的唯一出路，明确给出来（不放只有一半能用的自建表单） -->
+                        <Button Content="系统网络设置…" HorizontalAlignment="Right" Height="28" Padding="11,0"
+                                FontSize="12" Style="{StaticResource RowButtonStyle}" Click="OpenSettings_Click"/>
+                    </Grid>
+                </StackPanel>
+            </Grid>
+        </Border>
+    </Grid>
+</UserControl>
