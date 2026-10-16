@@ -37,6 +37,9 @@ public partial class App : Application
     private int _exceptionDialogs;
     private TaskbarManager? _taskbar;
     private DockWindow? _dock;
+
+    /// <summary>最小化/最大化动画（v3.2）：持有两条 WinEvent 钩子，退出必须卸。</summary>
+    private Animation.MinimizeAnimator? _animator;
     private TopBarWindow? _topBar;
     private Switcher.SwitcherService? _switcher;
     private Switcher.SwitcherWindow? _switcherWindow;
@@ -83,6 +86,20 @@ public partial class App : Application
             // 6. Dock 即主 UI：--minimized 仅标识自启来源（自启语义），Dock 照常显示，超出仅记录
             _dock = new DockWindow(_taskbar);
             _dock.Show();
+
+            // 6.2 最小化/最大化动画（v3.2）：挂在 Dock 之后，因为落点要问 Dock 图标在哪。
+            // 它是纯装饰的附属能力，装不上只记日志，绝不连坐主 UI（与顶栏同一处置）。
+            if (SettingsService.Current.MinimizeAnimation)
+            {
+                try
+                {
+                    _animator = new Animation.MinimizeAnimator(hwnd => _dock?.IconCenterPhysical(hwnd));
+                }
+                catch (Exception ex)
+                {
+                    Logger.Warn($"最小化动画未启用：{ex.GetType().Name} {ex.Message}");
+                }
+            }
             if (e.Args.Contains("--minimized", StringComparer.OrdinalIgnoreCase))
                 Logger.Info("--minimized（开机自启）：Dock 即主 UI，照常显示");
             Logger.Info("Dock 已显示");
@@ -139,6 +156,8 @@ public partial class App : Application
         // 兜底路径（系统会话结束、显式 Shutdown 等）也要清理；与 ExitApp 重复调用均幂等
         _tray?.Dispose();
         _tray = null;
+        _animator?.Dispose();   // WinEvent 钩子必须卸载（幂等）
+        _animator = null;
         DestroyLauncher();  // 覆盖层是瞬态弹层：兜底路径也要收（Dispose 幂等，ExitApp 已走过一次则 no-op）
         DestroySwitcher(); // 键盘钩子必须卸载（幂等）：残留的 WH_KEYBOARD_LL 会在进程退出时由系统回收，
                            // 但显式 Shutdown 而未走 ExitApp 的路径若卡在非 UI 线程，卸载会失败 → 这里至少留日志

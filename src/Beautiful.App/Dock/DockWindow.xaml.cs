@@ -145,6 +145,22 @@ public partial class DockWindow : AcrylicWindow
         ShowMediaPanel();
     }
 
+    /// <summary>
+    /// 该运行窗口条目在<b>屏幕</b>上的物理像素中心 —— 最小化 genie 动画的落点。
+    /// 找不到条目（窗口还没进 Dock、或刚被关掉）返回 null，调用方自己决定退路。
+    /// </summary>
+    public System.Windows.Point? IconCenterPhysical(IntPtr hwnd)
+    {
+        var item = _vm.Items.FirstOrDefault(i => i.WindowHandle == hwnd);
+        if (item is null) return null;
+        var bounds = Surface.GetItemBounds(item);
+        if (bounds is null) return null;
+        // PointToScreen 返回设备像素，与 GenieGhost / GetWindowRect 同一口径
+        return PointToScreen(new System.Windows.Point(
+            bounds.Value.X + bounds.Value.Width / 2,
+            bounds.Value.Y + bounds.Value.Height / 2));
+    }
+
     /// <summary>DockSurface 接线：光标取样 + 左键激活 + 右键条目菜单 + 悬停预览（Task 13）+ 拖放固定/排序（v3 T5）。</summary>
     private void WireSurface()
     {

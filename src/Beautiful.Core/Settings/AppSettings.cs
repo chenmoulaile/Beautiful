@@ -116,6 +116,12 @@ public sealed record AppSettings
     public bool ImportTaskbarPins { get; init; } = true;
 
     /// <summary>
+    /// 是否给最小化/最大化加 macOS 式动画（v3.2）：最小化把窗口画面切成条带收进 Dock 图标，
+    /// 最大化/还原则做一段缩放过渡。关掉即回到"瞬间消失/瞬间变大"的系统行为。
+    /// </summary>
+    public bool MinimizeAnimation { get; init; } = true;
+
+    /// <summary>
     /// Dock 所在显示器：auto = 启动时光标所在显示器（解析结果按进程粘住，重排不会因鼠标划过别屏而
     /// 让 Dock 跳走）、primary = 主显示器、其余为设置面板列出的十进制序号（1 起）。
     /// </summary>
