@@ -527,6 +527,8 @@ public partial class DockWindow : AcrylicWindow
         _repositionDebounce?.Stop();                 // 作废挂起的条带重排（OnClosing 后不再 ABM_SETPOS）
         _iconRebindDebounce?.Stop();                 // 作废挂起的图标重烘（OnClosing 后不再重建可视树）
         _previewDwell?.Stop();                       // 作废挂起的预览驻留
+        FluentMenu.CloseCurrent();                   // 关掉在显右键菜单（v3.1：菜单里有"结束任务/清空回收站"，
+                                                     // 重载 Dock 后孤儿弹层不该还能点到旧快照上的破坏性动作）
         _preview?.Dispose();                         // 注销缩略图句柄 + 销毁宿主窗口（Task 13，必走，防句柄泄漏）
         _preview = null;
         _mediaPanel?.Close();                        // 面板随 Dock 一起关闭（Closed 处理器会清空引用）

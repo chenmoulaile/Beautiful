@@ -35,11 +35,12 @@ public class DockContextMenuPlanTests
         };
 
     private static DockContextMenuInput WindowItem(IntPtr self, IReadOnlyList<DockWindowSnap> siblings,
-                                                   IntPtr fg = default, bool pinned = false)
+                                                   IntPtr fg = default, bool pinned = false,
+                                                   string launchPath = @"C:\Windows\notepad.exe")
         => new()
         {
             Kind = DockItemKind.Window,
-            LaunchPath = @"C:\Windows\notepad.exe",
+            LaunchPath = launchPath,
             LaunchPathExists = true,
             HasExecutableTarget = true,
             IsPinned = pinned,
@@ -89,15 +90,23 @@ public class DockContextMenuPlanTests
     }
 
     [Fact]
-    public void 启动目标文件不存在时文件位置与属性都置灰带原因()
+    public void 启动目标文件不存在时启动与shell项一并置灰带原因()
     {
         var plan = DockContextMenuPlan.Build(Pinned(exists: false));
-        foreach (var a in new[] { DockContextAction.OpenFileLocation, DockContextAction.Properties })
+        // 目标文件已不在盘上：Process.Start 只会抛一次被我们兜住的异常，屏上什么也不发生 —— 那同样是死项，
+        // 所以"打开/打开新窗口"与两条 shell 项用同一个尺子（存在才给亮的）。
+        foreach (var a in new[]
+                 {
+                     DockContextAction.Open, DockContextAction.OpenNewWindow,
+                     DockContextAction.OpenFileLocation, DockContextAction.Properties
+                 })
         {
-            var e = plan.Single(x => x.Action == a);
+            var e = plan.Single(x => !x.IsSeparator && x.Action == a);
             Assert.False(e.IsEnabled);
             Assert.Equal("启动目标文件不存在", e.DisabledReason);
         }
+        // 取消固定与文件在不在无关（它删的是 dock.json 里那一行）
+        Assert.True(plan.Single(x => !x.IsSeparator && x.Action == DockContextAction.Unpin).IsEnabled);
     }
 
     [Fact]
@@ -174,6 +183,19 @@ public class DockContextMenuPlanTests
         Assert.True(plan.Single(e => e.Action == DockContextAction.CloseAllWindows).IsEnabled);
         Assert.Equal("取消固定", plan.Single(e => e.Action == DockContextAction.Unpin).Label);
         Assert.DoesNotContain(plan, e => e.Action == DockContextAction.Pin);
+    }
+
+    [Fact]
+    public void 读不到程序路径的运行窗口_固定项置灰而不是给一格点了没反应的()
+    {
+        // 权限受限进程（以管理员身份运行的窗口）与部分商店应用宿主读不到映像路径 → LaunchPath 为空，
+        // 而执行器的 PinExecutable/Unpin 都有"空路径直接 return"的守卫：菜单若照旧给亮的，用户点了什么也不会发生。
+        var plan = DockContextMenuPlan.Build(WindowItem(H1, new[] { Win(H1, "甲") }, launchPath: ""));
+        var pin = plan.Single(e => e.Action == DockContextAction.Pin);
+        Assert.False(pin.IsEnabled);
+        Assert.Equal("无法确定该窗口的程序路径", pin.DisabledReason);
+        // 窗口级动作不依赖程序路径，照样给亮的
+        Assert.True(plan.Single(e => e.Action == DockContextAction.CloseWindow).IsEnabled);
     }
 
     [Fact]

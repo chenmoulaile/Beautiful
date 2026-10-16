@@ -161,6 +161,11 @@ public sealed class DockContextMenuEntry
     public string? ProcessName { get; init; }
     public string? TargetPath { get; init; }
 
+    /// <summary>
+    /// 分隔线。注意：分隔符同样要有一个 <see cref="DockContextAction"/> 值（记录里它是"非动作行"），
+    /// 这里填的是无害占位 <see cref="DockContextAction.Open"/>——**按 Action 检索条目的代码必须先排除
+    /// <see cref="IsSeparator"/>**（否则一条分隔线会被当成一个"打开"项命中），App 侧的渲染与执行都遵守这一条。
+    /// </summary>
     internal static DockContextMenuEntry Sep(string id) => new() { Id = id, Action = DockContextAction.Open, Label = string.Empty, IsSeparator = true };
 }
 
@@ -210,14 +215,31 @@ public static class DockContextMenuPlan
         _ => Array.Empty<DockContextMenuEntry>()
     };
 
+    /// <summary>dock.json 里那条路径的文件已经不在盘上了：启动类与 shell 类动作此刻都做不到。</summary>
+    private const string MissingTarget = "启动目标文件不存在";
+
+    /// <summary>窗口所属进程的可执行路径读不到（权限受限进程 / 商店应用宿主）：固定类动作没有可写的路径。</summary>
+    private const string NoExePath = "无法确定该窗口的程序路径";
+
     /// <summary>固定应用条目：未运行 = 启动 + 固定 + shell 三项；运行中再多一段"窗口/关闭/退出"与末尾的强制结束。</summary>
     private static IReadOnlyList<DockContextMenuEntry> PinnedMenu(DockContextMenuInput input)
     {
         var running = input.Windows.Count > 0;
+        // 启动两条同样要"目标文件还在"：文件被删/移走后 Process.Start 只会抛一次我们兜住的异常，
+        // 屏上什么也不发生——那正是一格"点了没反应的死项"，与"打开文件位置"同一把尺子处理（置灰 + 说清原因）。
+        var missing = !input.LaunchPathExists;
         var items = new List<DockContextMenuEntry>
         {
-            new() { Id = "open", Action = DockContextAction.Open, Label = "打开", TargetPath = input.LaunchPath },
-            new() { Id = "newwin", Action = DockContextAction.OpenNewWindow, Label = "打开新窗口", TargetPath = input.LaunchPath },
+            new()
+            {
+                Id = "open", Action = DockContextAction.Open, Label = "打开", TargetPath = input.LaunchPath,
+                IsEnabled = !missing, DisabledReason = missing ? MissingTarget : null
+            },
+            new()
+            {
+                Id = "newwin", Action = DockContextAction.OpenNewWindow, Label = "打开新窗口", TargetPath = input.LaunchPath,
+                IsEnabled = !missing, DisabledReason = missing ? MissingTarget : null
+            },
             DockContextMenuEntry.Sep("sep0"),
         };
 
@@ -274,6 +296,11 @@ public static class DockContextMenuPlan
         var procId = mine?.ProcessId ?? 0u;
 
         var isForeground = input.ForegroundHandle != IntPtr.Zero && input.ThisWindowHandle == input.ForegroundHandle;
+        // 固定语义要有**一个可写进 dock.json 的路径**。运行窗口的路径来自进程映像名，权限受限进程
+        // （以管理员身份运行的窗口）与部分商店应用宿主读不到 → 空路径。此时"固定到 Dock"若还给亮的，
+        // 点下去 <c>DockViewModel.PinExecutable</c> 会因空路径守卫直接 return，用户看到的是"这一格是死的"。
+        // 置灰并说明成因。
+        var hasPath = input.LaunchPath.Length > 0;
         var items = new List<DockContextMenuEntry>
         {
             new()
@@ -309,8 +336,16 @@ public static class DockContextMenuPlan
         };
 
         items.Add(input.IsPinned
-            ? new DockContextMenuEntry { Id = "unpin", Action = DockContextAction.Unpin, Label = "取消固定", TargetPath = input.LaunchPath }
-            : new DockContextMenuEntry { Id = "pin", Action = DockContextAction.Pin, Label = "固定到 Dock", TargetPath = input.LaunchPath });
+            ? new DockContextMenuEntry
+            {
+                Id = "unpin", Action = DockContextAction.Unpin, Label = "取消固定", TargetPath = input.LaunchPath,
+                IsEnabled = hasPath, DisabledReason = hasPath ? null : NoExePath
+            }
+            : new DockContextMenuEntry
+            {
+                Id = "pin", Action = DockContextAction.Pin, Label = "固定到 Dock", TargetPath = input.LaunchPath,
+                IsEnabled = hasPath, DisabledReason = hasPath ? null : NoExePath
+            });
 
         items.Add(DockContextMenuEntry.Sep("sep2"));
         items.Add(ForceKillEntry((procId, procName)));
@@ -366,7 +401,7 @@ public static class DockContextMenuPlan
         Label = label,
         TargetPath = input.LaunchPath,
         IsEnabled = input.LaunchPathExists,
-        DisabledReason = input.LaunchPathExists ? null : "启动目标文件不存在"
+        DisabledReason = input.LaunchPathExists ? null : MissingTarget
     };
 
     /// <summary>

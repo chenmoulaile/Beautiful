@@ -40,8 +40,10 @@ namespace Beautiful.App.Preview;
 /// 三步 HRESULT 全 0，屏幕上却什么都不画；叠加类刷是 <c>BLACK_BRUSH</c>，用户看到的就是一只实心黑框
 /// （"鼠标放在 dock 图标上方无法预览窗口，整个黑框"）。v3.1 起 <see cref="EnsureHost"/> 显式把整块客户区
 /// 开成玻璃（margins = -1，理由与豁免范围见 <see cref="NativeMethods.DwmExtendFrameIntoClientArea"/>），
-/// 并把类刷换成主题卡底色。<b>不变量</b>：宿主玻璃就绪 ⇔ 才允许弹预览；玻璃开不成（无桌面合成 / 驱动不支持）
-/// 就整张卡片不出现并只记一条日志——宁可没有预览，也不给屏幕留黑洞。
+/// 并把类刷换成主题卡底色。<b>守卫</b>：<c>DwmExtendFrameIntoClientArea</c> 返回非 0（系统连玻璃都不受理，
+/// 如完全无桌面合成的环境）就整张卡片不出现并只记一条日志——宁可没有预览，也不给屏幕留黑洞。
+/// 诚实边界：返回 0 只代表"受理"，不代表屏幕上真的合成出缩略图像素（本仓库对背板属性早就下过同一条结论），
+/// 所以"真画出了画面"只能在真机目视确认；即便如此，最坏情况也只是一张与卡片同色的空卡，不再是黑框。
 /// </para>
 /// <para>
 /// <b>源窗口消失 / 最小化</b>：安装时不新增全局钩子（brief 约束）。仅在可见期间跑一个 ~220ms 的
@@ -364,7 +366,10 @@ public sealed class ThumbnailPreview : IDisposable
         // 【缺陷 2 的正解】整块客户区开成玻璃：DWM 缩略图只在玻璃像素上显形，没有这一步时注册与写属性
         // 都会"成功"，但屏幕上不画任何东西（v3 退役本 API 时把这个纯 Win32 宿主一起带走了，是本次回归）。
         // margins 四边 -1 = 全客户区玻璃；GDI 画的不透明标题带/留白环压在玻璃之上照旧可见。
-        // 这一步失败（无桌面合成的环境，如本 VM）就把预览判为不可用：见 Show 的 _hostGlassReady 守卫。
+        // 【这条守卫的诚实边界】hr==0 只证明**系统受理了**玻璃请求，不证明屏幕上真的合成出玻璃像素——
+        // 本 VM 实测就是 hr=0x00000000（日志"缩略图可显形"），因此守卫在这里**不触发**，真机是否真画出画面
+        // 仍只能在用户机器上目视确认。守卫挡得住的是"这一步真的失败"的环境（无桌面合成 / 驱动不支持）：
+        // 那种情况下整张卡片不出现，绝不留一只空框。见 Show 的 _hostGlassReady 守卫。
         var glass = new MARGINS { LeftWidth = -1, RightWidth = -1, TopHeight = -1, BottomHeight = -1 };
         var frameHr = DwmExtendFrameIntoClientArea(_hwnd, ref glass);
         _hostGlassReady = frameHr == 0;

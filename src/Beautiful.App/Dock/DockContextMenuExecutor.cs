@@ -294,6 +294,16 @@ internal sealed class DockContextMenuExecutor
             return;
         }
 
+        // 【pid 复用守卫】菜单是几秒前的快照，而 Windows 会回收并复用进程 id：若用户在菜单开着的时候
+        // 结束掉那个应用、系统随即把同一个 pid 发给另一个进程，按快照 pid 下刀就是杀了**用户没确认过的那一个**。
+        // 进程运行期间映像名不会变，所以"执行时的名字 ≠ 确认文案里点名的名字"只可能是 pid 已被复用。
+        if (!string.Equals(liveName, entry.ProcessName, StringComparison.OrdinalIgnoreCase))
+        {
+            Logger.Error($"Dock 菜单：结束任务被拒——pid={pid} 现在是 {liveName}，" +
+                         $"与确认时点名的 {entry.ProcessName} 不符（进程已退出、id 被系统复用）");
+            return;
+        }
+
         try
         {
             var proc = Process.GetProcessById((int)pid);
