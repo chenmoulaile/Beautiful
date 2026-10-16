@@ -109,6 +109,13 @@ public sealed record AppSettings
     public bool AutoHideDock { get; init; }
 
     /// <summary>
+    /// 首次运行（还没有 <c>dock.json</c>）时，是否把 Windows 原生任务栏上已固定的应用接进 Dock。
+    /// 默认开：用户既然在任务栏固定过，就是要它们在手边，不该再手动固定一遍。
+    /// 只影响<b>第一次</b>建列表那一刻；之后用户怎么整理 Dock 都不再被外部来源改动。
+    /// </summary>
+    public bool ImportTaskbarPins { get; init; } = true;
+
+    /// <summary>
     /// Dock 所在显示器：auto = 启动时光标所在显示器（解析结果按进程粘住，重排不会因鼠标划过别屏而
     /// 让 Dock 跳走）、primary = 主显示器、其余为设置面板列出的十进制序号（1 起）。
     /// </summary>

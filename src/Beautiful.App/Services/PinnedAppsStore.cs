@@ -61,6 +61,36 @@ public sealed class PinnedAppsStore
         }
     }
 
+    /// <summary>
+    /// 首次运行（dock.json 还不存在）时把外部来源（如 Windows 原生任务栏固定项）并进清单并落盘。
+    /// <para>
+    /// 已有 dock.json 一律不动：用户手动整理过的列表被"再同步一次"改掉，比不导入更糟；
+    /// 而且本方法在每次启动都会被调用，不做这个守卫就会变成"每次开机偷偷塞东西"。
+    /// 一个都没并进新项时也不落盘——不凭空造一个和默认值等价的文件。
+    /// </para>
+    /// </summary>
+    /// <param name="candidates">外部来源的条目（.lnk 或 exe 路径），按期望顺序给出。</param>
+    /// <param name="dedupeKey">把条目折算成去重键（<see cref="TaskbarPinsReader.DedupKeyOf"/>）。</param>
+    /// <returns>真的写入了才 true。</returns>
+    public bool ImportIfFirstRun(IEnumerable<string> candidates, Func<string, string> dedupeKey)
+    {
+        try
+        {
+            if (File.Exists(_filePath)) return false;
+            var baseList = Defaults();
+            var merged = DockPinOps.Normalize(baseList.Concat(candidates), dedupeKey);
+            if (merged.Count <= baseList.Count) return false;
+            Save(merged);
+            Logger.Info($"任务栏固定项导入：新增 {merged.Count - baseList.Count} 项，固定清单共 {merged.Count} 项");
+            return true;
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            Logger.Warn($"任务栏固定项导入失败: {ex.Message}");
+            return false;
+        }
+    }
+
     /// <summary>代码默认固定项（dock.json 缺失时的兜底；不落盘，首次固定操作才写）。</summary>
     public static List<string> Defaults()
     {

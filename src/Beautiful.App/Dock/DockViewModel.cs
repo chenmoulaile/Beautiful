@@ -50,11 +50,16 @@ public sealed class DockViewModel
     public ObservableCollection<DockItem> Items { get; } = new();
 
     /// <param name="separatorsEnabled">初始分隔符开关（来自主题 DockSeparatorsEnabled；主题切换经 <see cref="ApplySeparatorPolicy"/> 重放）。</param>
-    public DockViewModel(WindowTracker tracker, PinnedAppsStore? pinnedStore = null, bool separatorsEnabled = false)
+    /// <param name="importTaskbarPins">首次建列表时是否并入 Windows 原生任务栏的固定应用（已有 dock.json 则不动）。</param>
+    public DockViewModel(WindowTracker tracker, PinnedAppsStore? pinnedStore = null, bool separatorsEnabled = false,
+        bool importTaskbarPins = false)
     {
         _tracker = tracker;
         _pinnedStore = pinnedStore ?? new PinnedAppsStore();
         _separatorsEnabled = separatorsEnabled;
+
+        if (importTaskbarPins)
+            _pinnedStore.ImportIfFirstRun(Services.TaskbarPinsReader.Read(), Services.TaskbarPinsReader.DedupKeyOf);
 
         foreach (var path in _pinnedStore.Load()) _pinned.Add(MakePinned(path));
         foreach (var w in tracker.Windows)

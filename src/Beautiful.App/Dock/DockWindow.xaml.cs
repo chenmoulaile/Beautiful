@@ -108,7 +108,8 @@ public partial class DockWindow : AcrylicWindow
         // 分隔符初值取**设置指向的那个主题**（与下面 ThemeManager.Apply 同一表达式），不读 ThemeManager.Current：
         // 此刻本窗口还没应用主题，读 Current 会拿到上一/默认主题 → 首帧少画/多画一道细线。
         _vm = new DockViewModel(_tracker,
-            separatorsEnabled: SettingsService.ThemeDefinitionOf(SettingsService.Current).DockSeparatorsEnabled);
+            separatorsEnabled: SettingsService.ThemeDefinitionOf(SettingsService.Current).DockSeparatorsEnabled,
+            importTaskbarPins: SettingsService.Current.ImportTaskbarPins);
         DataContext = _vm;
         WireSurface();
         // 【终审 I-6】ThemeChanged 静态订阅移出构造函数（原 :94）：构造期任何一步抛异常都会留下
