@@ -175,25 +175,44 @@ public class TrayLayoutTests
 
     // ---------- 归类 ----------
 
+    /// <summary>
+    /// 只有<b>整名相等</b>才允许判成系统项：子串匹配会把真实应用的图标藏起来
+    /// （"PowerToys 托盘"里有 power、"百度网盘"、"XX 通知助手"里有"通知"）——
+    /// 而这些格子根本不该被藏，界面和日志都不会说原因，是最难反馈的故障形态。
+    /// </summary>
     [Theory]
     [InlineData("Discord", null, TrayIconCategory.Unknown)]
     [InlineData("网易云音乐", null, TrayIconCategory.Unknown)]
-    [InlineData(null, "AppExceptionDialog", TrayIconCategory.Unknown)]   // 只有 AutomationId：认不准也要列出来
+    [InlineData("PowerToys 托盘", null, TrayIconCategory.Unknown)]     // 含 power，但不是整名 → 必须留下
+    [InlineData("百度网盘", null, TrayIconCategory.Unknown)]             // 含"网" → 必须留下
+    [InlineData("XX 通知助手", null, TrayIconCategory.Unknown)]          // 含"通知" → 必须留下
+    [InlineData("Volume 混合器", null, TrayIconCategory.Unknown)]        // 名单随版本过期：认不准就照常列出
+    [InlineData(null, "AppExceptionDialog", TrayIconCategory.Unknown)]
     [InlineData("显示隐藏的图标", null, TrayIconCategory.SystemOwned)]
     [InlineData("Show hidden icons", null, TrayIconCategory.SystemOwned)]
-    [InlineData("Notification Chevron", "SystemTray.NotifyIconOverflow", TrayIconCategory.SystemOwned)]
-    [InlineData("Volume 混合器", null, TrayIconCategory.SystemOwned)]
+    [InlineData("Notification Chevron", null, TrayIconCategory.SystemOwned)]
+    [InlineData("音量", null, TrayIconCategory.SystemOwned)]
     [InlineData("Internet 访问", null, TrayIconCategory.SystemOwned)]
-    [InlineData(" battery ", null, TrayIconCategory.SystemOwned)]
-    public void 只把有把握的系统项剔掉(string? label, string? automationId, TrayIconCategory expected)
-        => Assert.Equal(expected, TrayLayout.Classify(label, automationId));
+    [InlineData(" battery ", null, TrayIconCategory.SystemOwned)]       // 首尾空白与大小写不影响整名相等
+    [InlineData(null, "SystemTray.NotifyIconShowHiddenIcons", TrayIconCategory.SystemOwned)]
+    public void 只把有把握的系统项剔掉(
+        string? label, string? automationId, TrayIconCategory expected)
+        => Assert.Equal(expected, TrayLayout.Classify(label, automationId, TrayIconOrigin.UiaElement));
+
+    [Theory]
+    [InlineData("Discord", TrayIconCategory.ThirdParty)]
+    [InlineData("音量", TrayIconCategory.SystemOwned)]     // 系统名单优先：整名命中就剔
+    [InlineData("", TrayIconCategory.ThirdParty)]          // 没名字也确信：那个工具栏按构造只放应用图标
+    public void 经典路给得出第三方这个确信(string label, TrayIconCategory expected)
+        => Assert.Equal(expected, TrayLayout.Classify(label, null, TrayIconOrigin.ClassicToolbar));
 
     [Fact]
-    public void 空名字空编号_按第三方列出而不是藏起来()
+    public void 认不准的条目照样显示_不藏起来()
     {
         // 藏起来是"用户看不到、日志里也没有"的故障；多列一格会带 ToolTip 说明来源，代价小得多
-        Assert.Equal(TrayIconCategory.Unknown, TrayLayout.Classify(null, null));
+        Assert.Equal(TrayIconCategory.Unknown, TrayLayout.Classify(null, null, TrayIconOrigin.UiaElement));
         Assert.True(TrayLayout.ShouldDisplay(TrayIconCategory.Unknown));
+        Assert.True(TrayLayout.ShouldDisplay(TrayIconCategory.ThirdParty));
         Assert.False(TrayLayout.ShouldDisplay(TrayIconCategory.SystemOwned));
     }
 

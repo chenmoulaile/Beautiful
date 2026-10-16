@@ -77,9 +77,6 @@ public sealed record TrayReadResult
 
     /// <summary>树里有没有"显示隐藏的图标"按钮（有才有"展开隐藏区"这条真动作，没有就不放这个按钮）。</summary>
     public bool HasShowHiddenButton { get; init; }
-
-    /// <summary>两路都没给出任何要显示的条目（空态文案的触发条件）。</summary>
-    public bool NothingFound => Items.Count == 0;
 }
 
 /// <summary>
@@ -367,7 +364,7 @@ public sealed class TrayIconSource
             Key = TrayLayout.MergeKey(label, (uint)btn.idCommand),
             Label = label,
             Origin = TrayIconOrigin.ClassicToolbar,
-            Category = TrayLayout.Classify(label, null),
+            Category = TrayLayout.Classify(label, null, TrayIconOrigin.ClassicToolbar),
             Uid = (uint)btn.idCommand,
             OwnerHwnd = owner,
             CallbackMessage = callback,
@@ -696,7 +693,7 @@ public sealed class TrayIconSource
             Key = TrayLayout.MergeKey(label, 0),
             Label = label,
             Origin = TrayIconOrigin.UiaElement,
-            Category = TrayLayout.Classify(name, automationId),
+            Category = TrayLayout.Classify(name, automationId, TrayIconOrigin.UiaElement),
             UiaName = name,
             UiaAutomationId = automationId,
             HasRect = hasRect,

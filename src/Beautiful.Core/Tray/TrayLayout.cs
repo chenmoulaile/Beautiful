@@ -15,14 +15,18 @@ public enum TrayIconOrigin
 /// <summary>条目归类。判定只用于"要不要把 shell 自己的控件也当托盘图标列出来"，见 <see cref="TrayLayout.Classify"/>。</summary>
 public enum TrayIconCategory
 {
-    /// <summary>第三方应用的通知区域图标：本功能的目标。</summary>
+    /// <summary>
+    /// 第三方应用的通知区域图标：本功能的目标。<b>只有经典路能给出这个确信</b>
+    /// （<c>User Promoted Notification Area</c> 工具栏按构造只放应用注册的图标，见
+    /// <see cref="TrayLayout.Classify"/>）。
+    /// </summary>
     ThirdParty,
 
     /// <summary>系统自己的通知区域控件（网络/音量/电池/"显示隐藏的图标"/通知中心）：不进平铺区。
     /// 它们是 shell 的部件，列出来只会让用户点到一个不像托盘图标的东西；面板底部另有"系统通知设置…"这条出路。</summary>
     SystemOwned,
 
-    /// <summary>认不准的条目。<b>按第三方处理</b>（宁可多列一个真图标，也不要因为一张过期的名单把用户的图标藏起来）。</summary>
+    /// <summary>认不准的条目。<b>按第三方一样显示</b>（宁可多列一个真图标，也不要因为一张过期的名单把用户的图标藏起来）。</summary>
     Unknown
 }
 
@@ -213,51 +217,61 @@ public static class TrayLayout
     // ---------- 归类 ----------
 
     /// <summary>
-    /// shell 自己的通知区域控件（按 Name/AutomationId 的子串匹配，忽略大小写）。
-    /// 【为什么用子串而不是全等】这些名字随版本与界面语言变化（"显示隐藏的图标"/"Show hidden icons"/
-    /// "Hidden Icons"），AutomationId 相对稳定但没有公开承诺；子串命中是"认错方向"代价最小的一侧。
+    /// shell 自己的"部件"（不是某个应用的图标）：<b>整名相等</b>才认（忽略大小写与首尾空白）。
+    /// 【为什么用整名相等而不是子串】子串会吃掉真实应用的图标名——"PowerToys 托盘"里有 <c>power</c>、
+    /// "百度网盘"里有"网"、"XX 通知助手"里有"通知"。把这些格子藏起来的故障是"用户的图标不见了、
+    /// 界面与日志都不说原因"，比多显示一格系统状态项严重得多。
     /// </summary>
-    private static readonly string[] ShellPartHints =
-    [
-        "显示隐藏的图标", "隐藏图标", "show hidden", "hidden icons", "overflow",
-        "通知区域", "notification area", "taskbar button list", "tray overflow",
-        "windows 语音识别", "windows voice",
-        "笔操作", "pen operation", "触摸键盘", "touch keyboard", "insertion mark",
-    ];
+    private static readonly HashSet<string> ShellPartNames = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "显示隐藏的图标", "隐藏图标", "show hidden icons", "hidden icons", "notification chevron",
+        "通知区域", "notification area", "taskbar button list",
+    };
 
     /// <summary>
-    /// 系统状态项（网络/音量/电池一类）。它们<b>是</b>托盘图标，但不是"第三方托盘图标"：
-    /// 在自家面板里放一个假的音量格子，用户会以为点它等于点系统音量——所以按 <see cref="TrayIconCategory.SystemOwned"/>
-    /// 归类，界面用"系统托盘在 Windows 里"这条真出路代替（同 WiFi 面板"企业级网络 → 系统网络设置…"的处理）。
+    /// 系统自己的状态项（网络/音量/电池一类）。同样<b>整名相等</b>才认（名单随版本与语言过期是常态）。
+    /// <para>【认错方向的代价其实很小】这些格子即使显示出来也不是"假控件"：点它走的是同一条转发链路，
+    /// 等于点真实的那一个（真实音量图标被 Invoke 就打开真实音量浮层）。所以宁可漏认——漏认只是多一格，
+    /// 误认才是把第三方图标藏起来。</para>
     /// </summary>
-    private static readonly string[] SystemStatusHints =
-    [
-        "网络", "network", "internet", "internet 访问", "internet access",
-        "音量", "volume", "mixer", "声音",
-        "电池", "battery", "power", "电源",
+    private static readonly HashSet<string> SystemStatusNames = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "网络", "internet 访问", "internet access", "network",
+        "音量", "volume", "音量混合器", "volume mixer", "扬声器", "speakers",
+        "电池", "battery", "电源", "power",
         "时钟", "日期和时间", "date and time", "clock",
-        "windows 安全中心", "security center", "windows defender",
-        "one drive", "onedrive", "操作中心", "action center", "focus", "通知", "notification",
-    ];
+        "windows 安全中心", "windows security center", "security center",
+        "操作中心", "action center", "通知", "notifications", "焦点", "focus",
+        "one drive", "onedrive", "触摸键盘", "touch keyboard", "笔操作", "pen operation",
+        "windows 语音识别", "windows voice access",
+    };
 
     /// <summary>
     /// 归类一个条目。
-    /// <para>【为什么默认判"第三方"】这个功能的目标就是"把第三方托盘图标平铺出来"。任何一张
-    /// "系统控件名单"都会随 Windows 版本与界面语言过期，而把认不准的判成系统项等于<b>悄悄把用户的图标
-    /// 藏起来</b>（界面看不到、日志也没有，是最难反馈的一类 bug）。判成第三方最多多出一格，
-    /// 那一格的 ToolTip 会写明来源与能力，代价小得多。</para>
+    /// <para>【为什么默认判 <see cref="TrayIconCategory.Unknown"/>（=照常列出）】这个功能的目标是
+    /// "把第三方托盘图标平铺出来"，而任何一张"系统控件名单"都会随 Windows 版本与界面语言过期。
+    /// 判成系统项等于<b>悄悄把用户的图标藏起来</b>；判成第三方最多多出一格，那一格的 ToolTip 会写明
+    /// 来源与能力，代价小得多。名单见 <see cref="ShellPartNames"/> 与 <see cref="SystemStatusNames"/>。</para>
+    /// <para>【两条路能给的确信度不同，这个差别值得写进类型】<paramref name="origin"/> 是经典路时判
+    /// <see cref="TrayIconCategory.ThirdParty"/>：<c>User Promoted Notification Area</c> 那个工具栏
+    /// 按构造只放<b>应用</b>自己注册的图标，shell 的状态项不在里面，所以"没落到系统名单上"在这里
+    /// 是真的能确定。UIA 路只能判 <see cref="TrayIconCategory.Unknown"/>——那棵树把状态项和第三方图标
+    /// 混在同一层里，光看 Name 分不出来。</para>
     /// </summary>
     /// <param name="label">UIA Name 或工具栏 tooltip 文本（可为空）。</param>
-    /// <param name="automationId">UIA AutomationId（经典路没有，传 null）。</param>
-    public static TrayIconCategory Classify(string? label, string? automationId)
+    /// <param name="automationId">UIA AutomationId（经典路没有，传 null）。只用它认"展开隐藏区"那一个按钮。</param>
+    /// <param name="origin">哪一路读到的（决定"没命中名单"能推到哪一步）。</param>
+    public static TrayIconCategory Classify(string? label, string? automationId, TrayIconOrigin origin)
     {
-        var haystack = $"{label ?? ""}|{automationId ?? ""}".ToLowerInvariant();
-        if (haystack.Length == 0) return TrayIconCategory.Unknown;
-        foreach (var hint in ShellPartHints)
-            if (haystack.Contains(hint, StringComparison.Ordinal)) return TrayIconCategory.SystemOwned;
-        foreach (var hint in SystemStatusHints)
-            if (haystack.Contains(hint, StringComparison.Ordinal)) return TrayIconCategory.SystemOwned;
-        return TrayIconCategory.Unknown;
+        var name = (label ?? "").Trim();
+        if (name.Length > 0 && (ShellPartNames.Contains(name) || SystemStatusNames.Contains(name)))
+            return TrayIconCategory.SystemOwned;
+        // AutomationId 是宿主自己写的英文常量，比本地化名字稳定；只认这一个明确的 token，
+        // 不认包含 "overflow"/"tray" 之类的宽泛子串——隐藏区里的第三方图标也可能带这类前缀。
+        var id = (automationId ?? "").Trim();
+        if (id.Length > 0 && id.Contains("ShowHiddenIcons", StringComparison.OrdinalIgnoreCase))
+            return TrayIconCategory.SystemOwned;
+        return origin == TrayIconOrigin.ClassicToolbar ? TrayIconCategory.ThirdParty : TrayIconCategory.Unknown;
     }
 
     /// <summary>
