@@ -101,6 +101,16 @@ public sealed class DockViewModel
         Reconcile();
     }
 
+    /// <summary>
+    /// 运行窗口块（与 <see cref="WindowTracker.Windows"/> 下标一一对应）。右键菜单要按"同一个可执行文件 /
+    /// 同一个进程"把该应用的其它窗口找出来，数据源只有这一块——暴露只读视图，不暴露可写引用。
+    /// </summary>
+    public IReadOnlyList<DockItem> RunningWindows => _windows;
+
+    /// <summary>该路径所代表的应用是否已在固定列表（.lnk 与其目标 exe 视为同一个应用，与固定判重同源）。</summary>
+    public bool IsPinnedPath(string path) =>
+        DockPinOps.IndexOfTarget(_pinnedStore.Load(), ResolveTarget(path), ResolveTarget) >= 0;
+
     /// <summary>将 exe 路径加入固定列表（已固定则无操作），写回 dock.json 并重载固定块。</summary>
     public void PinExecutable(string path)
     {
@@ -181,8 +191,12 @@ public sealed class DockViewModel
         catch (Exception ex) { reason = ex.Message; return false; }
     }
 
-    /// <summary>解析 dock.json 条目 / 拖放文件到"去重用的目标"：.lnk 取其真实目标 exe，其余原样。</summary>
-    private static string ResolveTarget(string path)
+    /// <summary>
+    /// 解析 dock.json 条目 / 拖放文件到"去重用的目标"：.lnk 取其真实目标 exe，其余原样。
+    /// internal：右键菜单的"这个应用是不是已经在固定块里"必须用**同一把尺子**，另写一份就会漂移
+    /// （本仓库的固定/取消固定反复出现"删不掉那一条"就是两套判重不一致的代价）。
+    /// </summary>
+    internal static string ResolveTarget(string path)
     {
         if (!path.EndsWith(".lnk", StringComparison.OrdinalIgnoreCase)) return path;
         try

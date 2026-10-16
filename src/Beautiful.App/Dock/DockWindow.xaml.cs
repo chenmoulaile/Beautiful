@@ -810,11 +810,8 @@ public partial class DockWindow : AcrylicWindow
                 break;
 
             case DockItemKind.RecycleBin:
-                try
-                {
-                    Process.Start(new ProcessStartInfo("explorer.exe", "shell:RecycleBinFolder") { UseShellExecute = true });
-                }
-                catch (Exception ex) { Logger.Warn($"打开回收站失败: {ex.Message}"); }
+                // 与右键菜单同一条落地路径（Dock 里"打开回收站"有两个入口，不该有两份实现）
+                RecycleBin.Open();
                 break;
 
             case DockItemKind.Pinned:
@@ -835,39 +832,44 @@ public partial class DockWindow : AcrylicWindow
         }
     }
 
-    // ---------- 右键菜单：固定 / 取消固定（FluentMenu，Task 15） ----------
+    // ---------- 右键菜单：macOS Dock / Windows 跳转列表的真实条目（v3.1） ----------
 
     /// <summary>
-    /// 右键条目在光标处弹 <see cref="FluentMenu"/>（自绘高级弹层，观感与托盘/顶栏菜单一致；
-    /// v2 Task 15 前这里是原生 ContextMenu——"菜单无高级感"不满的残留路径，已随本次迁移删除）。
-    /// 语义不变：Window 项可"固定到 Dock"（写其 exe LaunchPath），Pinned 项可"取消固定"，
-    /// 均经 <see cref="DockViewModel"/> 写回 dock.json；媒体/回收站无固定语义不弹。
-    /// 仍走"代码后置手动开关"而非 ContextMenuService：实测后者在本 AppBar 窗口把事件路由到
-    /// ItemsControl 层（Source=Surface），容器菜单永远不打开。条目命中由 DockSurface.HitTestItem
-    /// 用放大后矩形给出；锚点 Surface.PointToScreen 返回物理像素（FluentMenu.Show 口径一致）。
+    /// 菜单动作执行器（惰性一个，随窗口存活）：所有 Win32 / 进程 / shell 动作都只住在它里，
+    /// 本窗口只做"取快照 → 弹层 → 把动作交给它"。前台切换委托给 <see cref="App.CommitWindowForeground"/>
+    /// （切换器的既有链路，不另写第二条），启动弹跳则把 <see cref="DockSurface.StartBounce"/> 注回去，
+    /// 于是执行器完全不需要认识渲染器。
+    /// </summary>
+    private DockContextMenuExecutor? _menuExecutor;
+
+    private DockContextMenuExecutor Executor => _menuExecutor ??= new DockContextMenuExecutor(
+        _tracker, _vm, App.CommitWindowForeground,
+        item => { if (SettingsService.Current.BounceEnabled) Surface.StartBounce(item); });
+
+    /// <summary>
+    /// 右键条目在光标处弹 <see cref="FluentMenu"/>（自绘高级弹层，观感与托盘/顶栏菜单一致）。
+    /// <para>
+    /// 【v3.1 为什么重写这里】用户真机原话："dock 栏中右键只有固定到 dock 栏的选项，没有其他 windows 自带
+    /// 或者 mac os 自带右键菜单选项，这不还原。"旧实现把菜单内容写死在这段 code-behind 的两个 if 里，
+    /// 于是能给的只剩固定/取消固定。现在条目树由 Core 的 <see cref="DockContextMenuPlan"/> 决定
+    /// （纯数据、单测覆盖），本方法只剩三件事：弹层前取真实前台句柄、采集快照建菜单、把点击交给执行器。
+    /// </para>
+    /// <para>
+    /// 前台句柄必须在 <see cref="FluentMenu.Show"/> <b>之前</b>取：弹层是激活式窗口，一显示前台就是菜单自己，
+    /// 现场再读会把"当前前台窗"永远判成没有。分隔符与媒体胶囊不弹（Core 返回空表 = 保持现状）。
+    /// 仍走"代码后置手动开关"而非 ContextMenuService：实测后者在本 AppBar 窗口把事件路由到 ItemsControl 层
+    /// （Source=Surface），容器菜单永远不打开。锚点 Surface.PointToScreen 返回物理像素（FluentMenu.Show 口径一致）。
+    /// </para>
     /// </summary>
     private void OpenItemContextMenu(DockItem item, Point anchorInSurface)
     {
-        var canPin = item is { Kind: DockItemKind.Window, LaunchPath.Length: > 0 };
-        var canUnpin = item.Kind == DockItemKind.Pinned;
-        if (!canPin && !canUnpin) return;
+        var menu = DockContextMenuBuilder.Build(item, _vm, _tracker, NativeMethods.GetForegroundWindow());
+        if (menu is null || menu.Entries.Count == 0) return;
 
-        var items = new List<MenuItemView>();
-        if (canPin)
-            items.Add(new MenuItemView
-            {
-                Id = "pin", Label = "固定到 Dock", Glyph = "",
-                Invoke = () => _vm.PinExecutable(item.LaunchPath), // 固定当前窗口的 exe 路径（去重，写回 dock.json）
-            });
-        if (canUnpin)
-            items.Add(new MenuItemView
-            {
-                Id = "unpin", Label = "取消固定", Glyph = "",
-                Invoke = () => _vm.Unpin(item.LaunchPath),
-            });
-
+        var views = DockContextMenuBuilder.ToViews(menu, Executor);
         var p = Surface.PointToScreen(anchorInSurface);
-        FluentMenu.Show(new FluentPopupHost(), new Point(p.X, p.Y), items, i => i.Invoke?.Invoke());
+        // 不传 onSelect：叶子项自带 Invoke（已闭包捕获快照与条目），父项（窗口列表/确认链）不带，点击即展开
+        FluentMenu.Show(new FluentPopupHost(), new Point(p.X, p.Y), views);
     }
 
     // ---------- 悬停实时预览（Task 13）----------

@@ -324,6 +324,16 @@ public partial class App : Application
     public static void ApplyTopBarGeometry() => (Current as App)?._topBar?.RefreshLayoutFromSettings();
 
     /// <summary>
+    /// 把一扇外部窗口带到前台（Dock 右键菜单"切到该窗口"用，v3.1）。
+    /// 【为什么开这个口子】前台切换在这台机器上是条多步链路（SetForegroundWindow → 前台锁被压制时
+    /// AttachThreadInput → 再不行合成一次 Alt 抬起），已经在切换器里被真机打磨过一份。
+    /// Dock 菜单再写一条 SetForegroundWindow 就是第二条激活路径——本仓库栽过的"两条路径各自漂移"
+    /// 正是这类重复。这里只把切换器那次尝试借出去，返回它自己的成败判定。
+    /// 切换器未装配（启动降级/重载窗口那一刻）时返回 false，由调用方退回 <c>WindowTracker</c> 的既有路径。
+    /// </summary>
+    public static bool CommitWindowForeground(IntPtr hwnd) => (Current as App)?._switcher?.Commit(hwnd) ?? false;
+
+    /// <summary>
     /// 设置页改动<b>顶栏时钟形态</b>（秒/日期/星期/12 小时制）后的即时生效入口（v3.1 缺陷 3）：
     /// 重算文本并按新形态重排定时器步长（显示秒=对齐秒边界，关秒=对齐分边界）。
     /// 顶栏未启用/未创建时静默跳过——下次创建走 OnSourceInitialized 里的同一个入口读当前设置。

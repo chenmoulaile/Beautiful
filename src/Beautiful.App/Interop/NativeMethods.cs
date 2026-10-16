@@ -686,4 +686,32 @@ internal static partial class NativeMethods
 
     [DllImport("user32.dll", SetLastError = true)]
     public static extern bool PostMessage(IntPtr hWnd, uint msg, IntPtr wParam, IntPtr lParam);
+
+    // ---------- Dock 右键菜单（v3.1）：窗口状态切换与回收站 ----------
+    // ShowWindow 的另外两档：Dock 菜单的"最大化/还原"必须走 ShowWindow（系统自己管动画与任务栏状态），
+    // 绝不用 SetWindowPos 手写矩形——那会绕开 WMSZ_* 的约束，多屏/DPI 下必错。
+    public const int SwMaximize = 3, SwRestore = 9;
+
+    /// <summary>
+    /// 清空回收站的**唯一**允许路径：shell API 自己处理每个卷的元数据、安全描述符与"不可恢复"语义。
+    /// 本项目绝不做递归删除（<c>Directory.Delete</c> 删的是元数据，会让回收站状态真的坏掉）。
+    /// 三个标志只在**我们已经自己确认过**之后使用：不弹系统确认框、不弹进度、不出声（弹层里叠一个系统
+    /// 模态框会抢掉菜单的激活，观感与焦点都乱）。
+    /// </summary>
+    [DllImport("shell32.dll", CharSet = CharSet.Unicode)]
+    public static extern uint SHEmptyRecycleBin(IntPtr hwnd, string? rootPath, uint flags);
+
+    public const uint SherbNoConfirmation = 0x1, SherbNoProgressUi = 0x2, SherbNoSound = 0x4;
+
+    /// <summary>回收站读数（条目数/字节数）。菜单据此决定"清空回收站"是真能做还是已无可清。</summary>
+    [StructLayout(LayoutKind.Sequential)]
+    public struct SHQUERYRBINFO
+    {
+        public int cbSize;
+        public long i64Size;
+        public long i64NumItems;
+    }
+
+    [DllImport("shell32.dll", CharSet = CharSet.Unicode)]
+    public static extern uint SHQueryRecycleBin(string? rootPath, ref SHQUERYRBINFO info);
 }
