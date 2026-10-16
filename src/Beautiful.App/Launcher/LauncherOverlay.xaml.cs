@@ -6,6 +6,7 @@ using System.Windows.Media;
 using Beautiful.App.Controls;   // FluentPopupHost 宿主
 using Beautiful.App.Services;
 using Beautiful.Core.Launcher;
+using Beautiful.Core.Layout;
 using KeyEventArgs = System.Windows.Input.KeyEventArgs;   // UseWindowsForms 隐式 using 与 Forms.KeyEventArgs 冲突
 using Brush = System.Windows.Media.Brush;                 // 同上，System.Drawing.Brush
 using Brushes = System.Windows.Media.Brushes;             // 同上，System.Drawing.Brushes
@@ -29,8 +30,11 @@ namespace Beautiful.App.Launcher;
 /// 未处理的键继续正常进输入框。
 /// </para>
 /// </summary>
-public partial class LauncherOverlay : UserControl, IBackdropAware
+public partial class LauncherOverlay : UserControl, IBackdropAware, IPopupShadow
 {
+    /// <summary>投影留白 = XAML 里 <c>Shell.Margin</c> 的唯一来源，宿主据此对齐<b>卡片</b>而非窗口外框。</summary>
+    public PopupShadow ShadowInset => new(Shell.Margin.Left, Shell.Margin.Top, Shell.Margin.Right, Shell.Margin.Bottom);
+
     /// <summary>一次显示的结果条数上限（超过就靠用户继续敲字收窄，而不是让卡片长过屏幕）。</summary>
     public const int MaxResults = 8;
 

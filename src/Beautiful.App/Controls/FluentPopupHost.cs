@@ -16,6 +16,17 @@ using Size = System.Windows.Size; // 同上，System.Drawing.Size
 namespace Beautiful.App.Controls;
 
 /// <summary>
+/// 弹层内容自报"我给自绘投影留了多大一圈"（DIP）。宿主据此把<b>锚点解释成可见卡片的位置</b>
+/// 而不是窗口外框的位置 —— 否则卡片会整体右下偏移一圈投影，且偏移量随 DPI 放大。
+/// 实现一律从自己根元素的 <c>Margin</c> 取，避免 XAML 与代码两处常数各说各话。
+/// </summary>
+public interface IPopupShadow
+{
+    /// <summary>内容根元素为投影让位的 Margin（DIP）。</summary>
+    PopupShadow ShadowInset { get; }
+}
+
+/// <summary>
 /// 无边框高级弹层宿主：Topmost、不进任务栏、<c>ShowActivated=true</c> + <c>Focusable=true</c>
 /// （评审 Important#3：菜单须键盘可达 → 采用"激活式弹层"模型：窗口显示即夺取前台激活与键盘焦点）。
 /// <para>
@@ -117,7 +128,7 @@ public class FluentPopupHost : Window
             new Point(anchorPhysicalPx.X, anchorPhysicalPx.Y + DropdownGap),
             new Point(anchorPhysicalPx.X, anchorPhysicalPx.Y - TaskbarLift));
 
-    /// <summary>双锚点摆位：放得下则左上角贴 <paramref name="primary"/>，否则右边贴 <paramref name="flip"/>.X / 底边贴 <paramref name="flip"/>.Y。</summary>
+    /// <summary>双锚点摆位：放得下则<b>卡片</b>左上角贴 <paramref name="primary"/>，否则卡片右边贴 <paramref name="flip"/>.X / 底边贴 <paramref name="flip"/>.Y。</summary>
     internal void ShowAtPhysical(Point primary, Point flip)
     {
         var hwnd = new WindowInteropHelper(this).EnsureHandle();
@@ -128,27 +139,33 @@ public class FluentPopupHost : Window
         // PerMonitorV2 下 GetDpiForWindow 返回初置/主屏 DPI，副屏 150% 时会让 230DIP 测成 230px
         // 而 WPF 随后按目标屏重排成 345px → 翻转判定/底边计算差 ~1.5 倍。
         double wPx = 0, hPx = 0;
+        var shadowPx = PopupShadow.None;
         if (Content is FrameworkElement fe)
         {
             fe.Measure(new Size(double.PositiveInfinity, double.PositiveInfinity));
             double scale = ScaleOfAnchor(primary, hwnd);
             wPx = fe.DesiredSize.Width * scale;
             hPx = fe.DesiredSize.Height * scale;
+            // 投影留白由内容自己报（取自它根元素的 Margin，不在这里抄一份常数）：
+            // 分层窗口的阴影只能画在自己表面上，所以窗口外框比可见卡片大一圈，
+            // 把这圈当成锚点偏移会让卡片整体右下错位，且偏移量随 DPI 放大。
+            var dip = (Content as IPopupShadow)?.ShadowInset ?? PopupShadow.None;
+            shadowPx = new PopupShadow(dip.Left * scale, dip.Top * scale, dip.Right * scale, dip.Bottom * scale);
         }
 
-        var work = WorkAreaOf(primary);
-        _flipX = false;
-        double x = primary.X;
-        if (x + wPx > work.Right - EdgeInset) { x = flip.X - wPx; _flipX = true; } // 右边收拢到 flip 锚点
-        if (x < work.Left + EdgeInset) x = work.Left + EdgeInset;
-
-        _flipY = false;
-        double y = primary.Y;
-        if (y + hPx > work.Bottom - EdgeInset) { y = flip.Y - hPx; _flipY = true; } // 底边收拢到 flip 锚点
-        if (y < work.Top + EdgeInset) y = work.Top + EdgeInset;
-
-        var ix = (int)Math.Round(x);
-        var iy = (int)Math.Round(y);
+        var workRect = WorkAreaOf(primary);
+        var work = new PhysicalRect((int)workRect.X, (int)workRect.Y, (int)workRect.Right, (int)workRect.Bottom);
+        var placed = PopupPlacer.Place(
+            work,
+            primary.X, primary.Y,
+            flip.X, flip.Y,
+            Math.Max(0, wPx - shadowPx.LeftPx - shadowPx.RightPx),
+            Math.Max(0, hPx - shadowPx.TopPx - shadowPx.BottomPx),
+            shadowPx, EdgeInset);
+        _flipX = placed.FlipX;
+        _flipY = placed.FlipY;
+        var ix = placed.WindowX;
+        var iy = placed.WindowY;
 
         // 【抓屏必须在 Show 之前】此刻本窗口不可见，取回的是"面板下方"的干净内容；
         // 显示之后再抓就会把弹层自己的像素抓进背板（鬼影）。捕获区已由 ScreenBlurBackdrop 外扩余量，

@@ -7,6 +7,7 @@ using System.Windows.Input;
 using System.Windows.Media;
 using System.Windows.Threading;
 using Beautiful.App.Services;
+using Beautiful.Core.Layout;
 // UseWindowsForms 隐式全局 using 引入 WinForms 同名类型，此处定向消歧：
 using KeyEventArgs = System.Windows.Input.KeyEventArgs;
 using MouseEventArgs = System.Windows.Input.MouseEventArgs;
@@ -34,8 +35,11 @@ namespace Beautiful.App.Controls;
 /// 优先级派发回调（退出/开窗动作不与弹层拆除打架，也无焦点劫持）。
 /// </para>
 /// </summary>
-public partial class FluentMenu : UserControl, IBackdropAware
+public partial class FluentMenu : UserControl, IBackdropAware, IPopupShadow
 {
+    /// <summary>投影留白 = XAML 里 <c>Shell.Margin</c> 的唯一来源，宿主据此对齐<b>卡片</b>而非窗口外框。</summary>
+    public PopupShadow ShadowInset => new(Shell.Margin.Left, Shell.Margin.Top, Shell.Margin.Right, Shell.Margin.Bottom);
+
     private const int SubmenuDwellMs = 140; // 悬停父项多久滑出子菜单
     private const int SubmenuDecayMs = 260; // 移开到普通项后子菜单延迟关闭（防横扫闪烁）
 

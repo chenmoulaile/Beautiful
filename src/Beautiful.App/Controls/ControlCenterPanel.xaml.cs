@@ -9,6 +9,7 @@ using Beautiful.App.Services;
 using Beautiful.App.Themes;
 using Beautiful.App.TopBar;
 using Beautiful.Core.Controls;
+using Beautiful.Core.Layout;
 using Brush = System.Windows.Media.Brush; // UseWindowsForms 隐式全局 using 与 System.Drawing.Brush 冲突
 using Brushes = System.Windows.Media.Brushes; // 同上
 using RadioButton = System.Windows.Controls.RadioButton; // 同上（分段选项：WPF 只有 RadioButton 带 GroupName）
@@ -36,8 +37,11 @@ namespace Beautiful.App.Controls;
 /// 本类只做渲染与事件接线——所以界面与设置页永远不会对同一个设置项给出两种解释。
 /// </para>
 /// </summary>
-public partial class ControlCenterPanel : UserControl, IBackdropAware
+public partial class ControlCenterPanel : UserControl, IBackdropAware, IPopupShadow
 {
+    /// <summary>投影留白 = XAML 里 <c>Shell.Margin</c> 的唯一来源，宿主据此对齐<b>卡片</b>而非窗口外框。</summary>
+    public PopupShadow ShadowInset => new(Shell.Margin.Left, Shell.Margin.Top, Shell.Margin.Right, Shell.Margin.Bottom);
+
     /// <summary>主题分段的 ToggleButton 组名（同组互斥；也用作 <see cref="Segment_Checked"/> 的分派键）。</summary>
     private const string ThemeGroup = "ccTheme";
 
