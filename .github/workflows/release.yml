@@ -37,13 +37,34 @@ jobs:
         run: Compress-Archive -Path publish/* -DestinationPath Beautiful-win-x64-${{ github.ref_name }}.zip
         shell: pwsh
 
+      # 安装程序：与 zip 是同一件产物（同一个 publish 目录），只是多了卸载器、开始菜单与"装前请退出旧实例"。
+      # 版本号要剥掉 tag 的前导 v：Inno 的 VersionInfoVersion 只收纯数字。
+      - name: 打安装程序（Inno Setup）
+        shell: pwsh
+        run: |
+          $ver = "${{ github.ref_name }}".TrimStart('v')
+          $iscc = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe"
+          if (-not (Test-Path $iscc)) {
+            choco install innosetup --no-progress -y
+            if (-not (Test-Path $iscc)) { throw "Inno Setup 不可用：镜像里没有，choco 也没装上" }
+          }
+          & $iscc "/DAppVersion=$ver" "/DSourceDir=$PWD\publish" "/DOutputDir=$PWD\installer-out" installer\Beautiful.iss
+          if ($LASTEXITCODE -ne 0) { throw "ISCC 失败（退出码 $LASTEXITCODE）" }
+
       - name: 创建 Release 并上传
         uses: softprops/action-gh-release@v2
         with:
-          files: Beautiful-win-x64-${{ github.ref_name }}.zip
+          files: |
+            Beautiful-win-x64-${{ github.ref_name }}.zip
+            installer-out/Beautiful-Setup-*.exe
           body: |
-            Beautiful ${{ github.ref_name }} — Windows 11 悬浮 Dock：macOS/Linux/鸿蒙三主题 + macOS 顶栏 + SMTC 媒体控制与双语歌词 + Alt+Tab 替换切换器。
-            解压后运行 `Beautiful.exe`（自包含，无需另装 .NET 运行时）。
+            Beautiful ${{ github.ref_name }} — Windows 11 桌面美化套件：macOS/Linux/鸿蒙三主题悬浮 Dock + macOS 顶栏 + SMTC 媒体控制与双语歌词 + Alt+Tab 替换切换器 + macOS 式 genie 最小化动画。
+
+            **两种拿法，内容是同一件产物：**
+            - `Beautiful-Setup-v*.exe` — 安装程序（按用户安装、免管理员；开始菜单快捷方式 + 控制面板可卸载）
+            - `Beautiful-win-x64-v*.zip` — 免安装压缩包，解压后直接运行 `Beautiful.exe`
+
+            两者都是自包含的，不需要另装 .NET 运行时。
           make_latest: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

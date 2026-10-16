@@ -105,8 +105,23 @@ internal static partial class NativeMethods
                       HshellAppCommand = 12;
 
     [DllImport("user32.dll", CharSet = CharSet.Unicode)]
-    private static extern IntPtr FindWindowW(string lpClassName, string? lpWindowName);
+    private static extern IntPtr FindWindowW(string? lpClassName, string? lpWindowName);
     public static IntPtr FindWindowClass(string className) => FindWindowW(className, null);
+
+    /// <summary>按窗口标题找顶层窗口（找不到返回 Zero）。</summary>
+    public static IntPtr FindWindowByTitle(string title) => FindWindowW(null, title);
+
+    /// <summary>
+    /// "请干净退出"的进程间信号（注册消息，跨进程唯一）。
+    /// 安装/卸载器要靠 <c>Beautiful.exe --exit</c> 让在跑的实例走完整退出链路，
+    /// 而不是被强杀——强杀会把任务栏 autohide 位与 Alt+Tab 钩子留在系统里。
+    /// </summary>
+    public const string ExitRequestMessageName = "Beautiful_ExitRequest";
+
+    private static readonly ushort ExitRequestCached = RegisterWindowMessage(ExitRequestMessageName);
+
+    /// <summary>本进程的注册消息号（0 = 注册失败，调用方按"没有这条通道"处理）。</summary>
+    public static ushort ExitRequestMessage => ExitRequestCached;
 
     [DllImport("user32.dll", CharSet = CharSet.Unicode)]
     public static extern ushort RegisterWindowMessage(string message);

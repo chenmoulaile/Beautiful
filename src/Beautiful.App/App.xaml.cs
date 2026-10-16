@@ -3,6 +3,7 @@ using System.Threading.Tasks;
 using System.Windows;
 using System.Windows.Threading;
 using Beautiful.App.Dock;
+using Beautiful.App.Interop;   // 退出信号要用 FindWindowByTitle / PostMessage / 注册消息号
 using Beautiful.App.Services;
 using Beautiful.App.Shell;
 using Beautiful.App.Themes;
@@ -63,6 +64,15 @@ public partial class App : Application
         DispatcherUnhandledException += OnDispatcherUnhandledException;
         AppDomain.CurrentDomain.UnhandledException += OnAppDomainUnhandledException;
         TaskScheduler.UnobservedTaskException += OnUnobservedTaskException;
+
+        // 2.5 `--exit`：让**正在运行的那个实例**走完整退出链路，本实例发完信号就退。
+        // 必须排在单实例检查之前——否则它会被当成"第二实例"直接弹窗退出，什么也没发出去。
+        if (e.Args.Contains("--exit", StringComparer.OrdinalIgnoreCase))
+        {
+            var sent = RequestExitOfRunningInstance();
+            Environment.Exit(sent ? 0 : 3);   // 3 = 没有找到在跑的实例（未安装/已退出）
+            return;
+        }
 
         // 3. 单实例：互斥体已被持有 → 弹窗提示后退出
         if (!AcquireSingleInstanceMutex())
@@ -682,6 +692,19 @@ public partial class App : Application
     /// <summary>托盘"退出"：完整清理链路后显式关停（退出路径幂等，_exiting 防重入）。
     /// 清理全程 try/finally：任何一步抛异常都必须走到 Shutdown（T19 QA）——否则 _exiting 卡死、
     /// 后续退出尝试全部被吞；finally 兜底后 OnExit 仍会幂等重放剩余清理。</summary>
+    /// <summary>
+    /// 向在跑的实例发一条"干净退出"信号。顶栏是它必然存在且标题固定的顶层窗口
+    /// （任务栏被隐藏时顶栏就是逃生入口，顶栏在 = 应用在），所以按标题找它。
+    /// </summary>
+    private static bool RequestExitOfRunningInstance()
+    {
+        var message = NativeMethods.ExitRequestMessage;
+        if (message == 0) return false;
+        var hwnd = NativeMethods.FindWindowByTitle("Beautiful TopBar");
+        if (hwnd == IntPtr.Zero) return false;
+        return NativeMethods.PostMessage(hwnd, message, IntPtr.Zero, IntPtr.Zero);
+    }
+
     private void ExitApp()
     {
         if (_exiting) return;

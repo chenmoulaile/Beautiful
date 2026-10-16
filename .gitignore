@@ -16,3 +16,6 @@ docs/
 v3-*.png
 v31-*.png
 dist/
+
+# 安装器产物（55MB 级，随 GitHub Release 分发，不进版本库）
+installer/out/

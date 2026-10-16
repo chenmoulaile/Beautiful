@@ -69,6 +69,9 @@ public partial class TopBarWindow : AcrylicWindow
     private IntPtr _hwnd;
     private uint _appbarMsg;
     private uint _taskbarCreatedMsg;
+
+    /// <summary>`Beautiful.exe --exit` 的注册消息号（0 = 注册失败，等于没有这条通道）。</summary>
+    private readonly uint _exitRequestMsg = NativeMethods.ExitRequestMessage;
     private NativeMethods.APPBARDATA _abd;
     private bool _appbarRegistered;
     private bool _closing;
@@ -316,6 +319,15 @@ public partial class TopBarWindow : AcrylicWindow
             handled = true;
             // ABN_POSCHANGED：shell 重排了条带（实测会连带把本窗口摆到工作区顶边）→ 重申目标矩形。
             if (wParam.ToInt32() == NativeMethods.AbnPosChanged) Dispatcher.BeginInvoke(AssertWindowRect);
+            return IntPtr.Zero;
+        }
+        // 安装/卸载器发的"干净退出"信号（`Beautiful.exe --exit`）：走完整退出链路，
+        // 而不是被 taskkill 掉——强杀会把任务栏 autohide 位与 Alt+Tab 钩子留在系统里。
+        if (_exitRequestMsg != 0 && msg == _exitRequestMsg)
+        {
+            handled = true;
+            Logger.Info("收到退出请求（--exit），走完整退出链路");
+            Dispatcher.BeginInvoke(_context.Exit);
             return IntPtr.Zero;
         }
         // 任何来源的位置变化都过一遍比对。用 BeginInvoke 排到本次落位之后执行，所以自己写的
