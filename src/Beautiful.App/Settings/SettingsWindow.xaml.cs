@@ -7,6 +7,7 @@ using Beautiful.App.MediaWidget;
 using Beautiful.App.Services;
 using Beautiful.Core.Settings;
 using Beautiful.Core.Themes;
+using Beautiful.Core.TopBar;   // 时钟样张与顶栏共用同一套 Core 折算（ClockFormat / ClockFormatter）
 using Beautiful.App.Themes;
 using Application = System.Windows.Application; // UseWindowsForms 隐式 using 消歧（下同）
 using App = Beautiful.App.App;                   // 设置窗口在 Beautiful.App.Settings 下，显式绑定 App 类避免命名空间/类型歧义
@@ -24,13 +25,14 @@ namespace Beautiful.App.Settings;
 /// <summary>
 /// 设置窗口 v2（入口：托盘"设置"/托盘双击/顶栏"设置…"/--settings 命令行；App 侧单例管理）。
 /// 全部改动即时生效并持久化，无"确定/应用"按钮；非模态、非置顶，不遮挡 Dock。
-/// 分组：外观（主题/图标大小/放大强度/倒影/弹跳）· 系统（任务栏策略/顶栏/自启 + 退出提示）·
+/// 分组：外观（主题/图标大小/放大强度/倒影/弹跳）· 系统（任务栏策略/顶栏/顶栏时钟四项/自启 + 退出提示）·
 /// 显示器（Dock 与顶栏各自所在显示器，v3 T1）· 窗口切换器（接管开关/样式/全屏直通/应急键说明）·
 /// 媒体与歌词（胶囊/失焦收起/偏移/预览）· 固定应用。
 /// 各 live 目标：
 /// 主题 → ThemeManager.Apply（DockWindow 订阅 ThemeChanged 自行重落尺寸/放大/遮罩）；
 /// 图标大小/放大强度/倒影 → App.ApplyDockLayout（DockWindow 重排条目几何 + 覆盖 ThemeIconSize/遮罩 + 按需重排条带）；
-/// 任务栏 → TaskbarManager.Apply；顶栏 → App.SetTopBarEnabled；自启 → 注册表；
+/// 任务栏 → TaskbarManager.Apply；顶栏 → App.SetTopBarEnabled；顶栏时钟四项 → App.ApplyTopBarClock
+/// （重算文本 + 按"是否显示秒"重排定时器步长）；自启 → 注册表；
 /// 显示器选择 → App.ApplyDockLayout / App.ApplyTopBarGeometry（按新屏的 rcMonitor 与有效 DPI 重新协商条带并搬窗）；
 /// 切换器接管 → App.SetSwitcherEnabled；样式 → 持久化（面板下次呼出重读）；全屏直通 → App.ApplySwitcherHotkey；
 /// 偏移 → MediaViewModel.ApplyLyricsOffset；胶囊/失焦收起 → MediaViewModel 标志；
@@ -103,6 +105,12 @@ public partial class SettingsWindow : Window
 
         AutostartCheck.IsChecked = s.Autostart;
         TopBarCheck.IsChecked = s.TopBarEnabled;
+        // 顶栏时钟四项（v3.1）：直接落 AppSettings 的四个 bool，样张由 Core 的同一套折算给出
+        ClockSecondsCheck.IsChecked = s.ClockShowSeconds;
+        ClockDateCheck.IsChecked = s.ClockShowDate;
+        ClockWeekdayCheck.IsChecked = s.ClockShowWeekday;
+        Clock24Check.IsChecked = s.ClockUse24Hour;
+        UpdateClockSample();
         SwitcherCheck.IsChecked = s.SwitcherEnabled;
         FullscreenPassthroughCheck.IsChecked = s.FullscreenPassthrough;
         // 倒影是三态设置：用户没显式动过（null）时显示**当前主题默认**（现代 macOS/GNOME/鸿蒙都无倒影），
@@ -279,6 +287,33 @@ public partial class SettingsWindow : Window
         App.SetTopBarEnabled(TopBarCheck.IsChecked == true); // 内部 UpdateAndSave + 创建/销毁顶栏
     }
 
+    /// <summary>
+    /// 顶栏时钟四项变更（v3.1）：四个勾选框共用这一个处理器，一次把四个 bool 整体写进
+    /// <see cref="AppSettings"/>（避免"改一项丢三项"），落盘后立即重放顶栏——<b>无需重启</b>：
+    /// 顶栏按新形态重排自己的时钟定时器（显示秒=对齐秒边界的每秒，关秒=对齐分边界的每分钟）。
+    /// </summary>
+    private void Clock_Changed(object sender, RoutedEventArgs e)
+    {
+        if (_loading) return;
+        var s = SettingsService.Current;
+        SettingsService.UpdateAndSave(s with
+        {
+            ClockShowSeconds = ClockSecondsCheck.IsChecked == true,
+            ClockShowDate = ClockDateCheck.IsChecked == true,
+            ClockShowWeekday = ClockWeekdayCheck.IsChecked == true,
+            ClockUse24Hour = Clock24Check.IsChecked == true
+        });
+        App.ApplyTopBarClock();
+        UpdateClockSample();
+    }
+
+    /// <summary>把当前四项折算出的模板渲染成"此刻长什么样"，勾选即见结果（与顶栏同一个格式化函数）。</summary>
+    private void UpdateClockSample()
+    {
+        var format = ClockFormat.From(SettingsService.Current);
+        ClockSample.Text = ClockFormatter.Format(DateTime.Now, format.Pattern);
+    }
+
     private void Autostart_Changed(object sender, RoutedEventArgs e)
     {
         if (_loading) return;
@@ -404,6 +439,8 @@ public partial class SettingsWindow : Window
         SettingsService.SetAutostart(s.Autostart);
         App.SetTopBarEnabled(s.TopBarEnabled);
         App.ApplyTopBarGeometry();   // 恢复默认后 TopBarMonitor 回到 auto：已存在的顶栏须按新屏重算条带
+        App.ApplyTopBarClock();      // 恢复默认后时钟回到"日期+星期+24 小时制、不显示秒"（v3.0.0 观感）
+        UpdateClockSample();
         App.SetSwitcherEnabled(s.SwitcherEnabled);
         // 恢复默认后必须连同"触发键 + 全屏直通"整体重放（Task 16 评审 Important#2）：
         // SwitcherService.SetHookEnabled 仅在钩子**未启动**时才回读 Hook.FullscreenPassthrough，

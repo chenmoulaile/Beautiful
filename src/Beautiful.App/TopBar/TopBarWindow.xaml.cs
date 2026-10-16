@@ -19,7 +19,6 @@ using Brush = System.Windows.Media.Brush;
 using Brushes = System.Windows.Media.Brushes;
 // UseWindowsForms 隐式全局 using 与下列 WPF 类型同名，定向消歧：
 using Button = System.Windows.Controls.Button;
-using Color = System.Windows.Media.Color;
 using Control = System.Windows.Controls.Control; // 消歧：WinForms 隐式 using 带入同名类型（控制中心打开态要清它的 Background 属性）
 using FontFamily = System.Windows.Media.FontFamily;
 using HorizontalAlignment = System.Windows.HorizontalAlignment; // 消歧：WinForms 隐式 using 带入同名枚举（含 Center/Left/Right）
@@ -37,7 +36,9 @@ namespace Beautiful.App.TopBar;
 /// <para>
 /// 【形态（v3 T2/T3）】<see cref="AcrylicWindow"/> 分层窗口：<c>AllowsTransparency=true</c> +
 /// <c>Background={x:Null}</c>，条带矩形由 XAML 三层自绘底（tint + 顶部内高光 + 下缘亮边）铺满，
-/// 不留任何未绘制像素；<see cref="ApplyTheme"/> 另请求一次 best-effort 旧亚克力作系统侧模糊增强。
+/// 不留任何未绘制像素；<see cref="ApplyTheme"/> 只写一次 <c>AccentState.Disabled</c>，用于清除 v3.0.0
+    /// 留在本窗口上的旧亚克力状态（v3.1：那条"best-effort 系统模糊增强"在 Win11 24H2/25H2 上会把 tint
+    /// 平铺满整个窗口矩形，已从 UI 路径删除）。
 /// v2 的"非分层 + <c>DWMWA_SYSTEMBACKDROP_TYPE</c>"已在真机上被证伪（条带矩形内露桌面），已退役。
 /// </para>
 /// <para>
@@ -45,8 +46,10 @@ namespace Beautiful.App.TopBar;
 /// 右区 = 媒体迷你 + 时钟 + 音量 + 网络 + 电量。全部菜单/浮层经 <see cref="FluentMenu"/>/
 /// <see cref="FluentPopupHost"/> 承载（共享 macOS 质感与背板规则）。依赖（跟踪器/媒体 VM/系统动作）经
 /// <see cref="TopBarContext"/> 注入，顶栏不持有 Dock 生命周期。
-/// 状态项配色/字体走 DynamicResource（换主题即时生效，无需重建）；时钟/网络/电量共用一条每分钟
-/// <see cref="DispatcherTimer"/>（常驻表面，无逐秒分配）；前台应用名沿用 WinEventHook + 2s 对账（Task 8）。
+/// 状态项配色/字体走 DynamicResource（换主题即时生效，无需重建）；网络/电量共用一条每分钟
+/// <see cref="DispatcherTimer"/>（常驻表面，无逐秒分配）；时钟单独一条，步长与边界对齐由
+/// <see cref="Core.TopBar.ClockFormat"/> 按"是否显示秒"决定（v3.1 缺陷 3 的定时器纪律）。
+/// 前台应用名沿用 WinEventHook + 2s 对账（Task 8）。
 /// </para>
 /// </summary>
 public partial class TopBarWindow : AcrylicWindow
@@ -88,7 +91,8 @@ public partial class TopBarWindow : AcrylicWindow
     private IntPtr _menuFgSnapshot;
 
     // Task 9：状态项
-    private DispatcherTimer? _statusTimer;   // 每分钟：时钟/网络/电量对账
+    private DispatcherTimer? _statusTimer;   // 每分钟：网络/电量对账
+    private DispatcherTimer? _clockTimer;    // 时钟专用：步长与边界对齐由 ClockFormat 决定（见 ApplyClockSettings）
     private Button? _mediaButton;
     private TextBlock? _mediaText;
     private Button? _clockButton;
@@ -325,13 +329,13 @@ public partial class TopBarWindow : AcrylicWindow
     private void ApplyTheme(ThemeDefinition theme)
     {
         if (_closing) return;
-        var tint = Color.FromArgb(theme.AcrylicTint.A, theme.AcrylicTint.R,
-                                  theme.AcrylicTint.G, theme.AcrylicTint.B);
         // 顶栏是**常驻**表面：不做抓屏背板（重抓会把自身像素抓进去 = 鬼影；为抓屏先隐藏一帧 = 闪烁），
         // 也绝不依赖系统是否画得出模糊。可见底恒由 XAML 的 BarBackground/BarGlow/BarEdge 三层铺满整条
-        // （DynamicResource 随主题即时变色），这里只把旧亚克力当一次性增强请求出去。
-        // 于是"顶栏上方露壁纸"这类问题的成因被彻底收在几何侧（T1），渲染侧不再有"背板胜出/失败"两种形态。
-        ApplyTintFallback(tint, theme.BlurEnabled);
+        // （DynamicResource 随主题即时变色），渲染侧不再有"背板胜出/失败"两种形态。
+        // v3.1：这里唯一的系统调用是清掉 v3.0.0 遗留的旧亚克力状态（缺陷 1：Win11 上它把 tint 平铺满
+        // 整个窗口矩形）。theme 参数仍是本方法的语义入口（换主题即重落底色），底色值本身走 XAML 的
+        // DynamicResource，不需要在这里搬运。
+        ClearLegacyAccent("顶栏");
     }
 
     // ---------- 前台应用名（Task 8） ----------
@@ -493,7 +497,10 @@ public partial class TopBarWindow : AcrylicWindow
         _mediaButton.Click += (_, _) => { _context.OpenMediaPanel(); };
         RightHost.Children.Add(_mediaButton);
 
-        // 时钟 + 日期（每分钟更新；点击 → 日历浮层）
+        // 时钟（形态与步长见 ApplyClockSettings；点击 → 日历浮层）。
+        // 【宽度变化不跳动】RightHost 是 HorizontalAlignment=Right 的横向栈：时钟变宽/变窄只会让它在
+        // **左侧**扩张，右邻（音量/网络/电量/启动器/控制中心）始终钉在条带右缘不动。因此"显示秒"这种
+        // 增减 3 个字符的改动不会让整个状态区左右抖动，唯一会位移的是最左的媒体迷你，而它有 MaxWidth 钳制。
         (_clockButton, _clockText) = MakeStatusItem("时钟", iconFont: false);
         _clockButton.Click += (_, _) => OpenCalendar();
         RightHost.Children.Add(_clockButton);
@@ -557,32 +564,89 @@ public partial class TopBarWindow : AcrylicWindow
         return (b, tb);
     }
 
-    // ---------- 状态刷新（每分钟共用一条定时器；无常驻逐秒分配） ----------
+    // ---------- 状态刷新（网络/电量每分钟一条定时器；时钟单独一条，秒显时才逐秒） ----------
 
     private void StartStatusTracking()
     {
-        // 终审 M-1：首帧对齐分钟边界——启动时刻若在 mm:50，固定 1 分钟间隔会让时钟到 mm+1:50 才跳，
+        // 终审 M-1：首帧对齐分钟边界——启动时刻若在 mm:50，固定 1 分钟间隔会让状态到 mm+1:50 才跳，
         // 最多累计滞后约 2 分钟。首 Interval 只等到下一整分（DispatcherTimer 每次 Tick 按当前
         // Interval 重排），随后固定 1 分钟，此后每分钟整点刷新。
-        _statusTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(60 - DateTime.Now.Second) };
+        // v3.1：时钟从这条定时器里**拆出去**单独走（见 RestartClockTimer），因为它现在可能要逐秒刷新，
+        // 而网络/电量逐秒去查是纯浪费（电量是 P/Invoke、网络是枚举网卡）。
+        _statusTimer = new DispatcherTimer { Interval = SecondsToNextMinuteBoundary() };
         _statusTimer.Tick += (_, _) =>
         {
             if (_statusTimer is not null) _statusTimer.Interval = TimeSpan.FromMinutes(1);
-            UpdateClock(); UpdateNetwork(); UpdateBattery();
+            UpdateNetwork(); UpdateBattery();
         };
         _statusTimer.Start();
+        ApplyClockSettings();   // 建/重排时钟定时器（顺带把文本立刻画出来，首帧不空白）
     }
 
     private void StopStatusTracking()
     {
         _statusTimer?.Stop();
         _statusTimer = null;
+        _clockTimer?.Stop();
+        _clockTimer = null;
+    }
+
+    /// <summary>
+    /// 设置页勾选"秒/日期/星期/12 小时制"后的即时生效入口（App.ApplyTopBarClock 调用）：
+    /// 文本马上重算 + 定时器按新形态重排步长与对齐。顶栏关闭时没有实例，下次创建由
+    /// <see cref="OnSourceInitialized"/> 经同一方法取当前设置，因此不需要额外通知。
+    /// </summary>
+    public void ApplyClockSettings()
+    {
+        if (_closing || _clockText is null) return;
+        var format = ClockFormat.From(SettingsService.Current);
+        UpdateClock();
+        RestartClockTimer(format);
+        Logger.Info($"顶栏时钟形态 秒={format.ShowSeconds} 日期={format.ShowDate} 星期={format.ShowWeekday} " +
+                    $"24小时制={format.Use24Hour} 步长={format.TickSeconds}s 模板={format.Pattern}");
+    }
+
+    /// <summary>
+    /// 时钟定时器：<b>首个 Interval 是"到下一个边界的余量"</b>（显示秒 → 下一整秒，关秒 → 下一整分），
+    /// 落地后即归到 <see cref="ClockFormat.TickSeconds"/>。因此：
+    /// ① 关秒时绝不会逐秒醒（v2"定时器对齐"的既有裁定不回归）；
+    /// ② 开秒时也不会变成 100ms 轮询——一秒一次、且正好压在秒边界上；
+    /// ③ 勾选变化当场重排（<see cref="DispatcherTimer.Start"/> 会按新 Interval 重新开始计时）。
+    /// </summary>
+    private void RestartClockTimer(ClockFormat format)
+    {
+        if (_clockTimer is null)
+        {
+            _clockTimer = new DispatcherTimer();
+            _clockTimer.Tick += (_, _) =>
+            {
+                // 每拍重读形态：步长永远与"是否显示秒"一致，不必额外搭一条设置变更通知。
+                var f = ClockFormat.From(SettingsService.Current);
+                if (_clockTimer is not null) _clockTimer.Interval = TimeSpan.FromSeconds(f.TickSeconds);
+                UpdateClock();
+            };
+        }
+        var now = DateTime.Now;
+        _clockTimer.Interval = format.ShowSeconds
+            ? TimeSpan.FromMilliseconds(1000 - now.Millisecond)                    // 到下一整秒（1..1000ms）
+            : SecondsToNextMinuteBoundary();                                       // 到下一整分
+        _clockTimer.Start();
+    }
+
+    /// <summary>到下一个分钟边界的余量（毫秒级精度，避免 60-Second 那种"整分还差半秒也要等下一拍"的偏差）。</summary>
+    private static TimeSpan SecondsToNextMinuteBoundary()
+    {
+        var now = DateTime.Now;
+        var rest = TimeSpan.FromSeconds(59 - now.Second) + TimeSpan.FromMilliseconds(1000 - now.Millisecond);
+        // 恰好压在分边界上时余量为 0，DispatcherTimer 的 Interval 必须 > 0。
+        return rest <= TimeSpan.Zero ? TimeSpan.FromMilliseconds(50) : rest;
     }
 
     private void UpdateClock()
     {
         if (_clockText is null) return;
-        _clockText.Text = ClockFormatter.Format(DateTime.Now, ClockFormatter.FullPattern);
+        // 折算全在 Core 的纯函数里（模板 + 渲染），顶栏只负责把结果写进 TextBlock。
+        _clockText.Text = ClockFormatter.Format(DateTime.Now, ClockFormat.From(SettingsService.Current).Pattern);
     }
 
     private void UpdateNetwork()

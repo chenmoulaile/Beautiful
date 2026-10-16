@@ -125,8 +125,9 @@ public sealed class ScreenBackdrop
 /// <para>
 /// 【只在瞬态表面用】切换器、托盘/顶栏菜单、媒体面板这类"显示一次"的表面在**首次 Show 之前**抓屏，
 /// 抓到的一定是干净的下方内容。常驻表面（顶栏、Dock）绝不调用本类：重抓会把自己已有的像素抓进去
-/// （鬼影），而为了抓屏先隐藏一帧就是可见的闪烁——那条路按裁定走"自绘半透明 tint + best-effort 旧亚克力"，
-/// 见 <see cref="AcrylicWindow.ApplyTintFallback"/>。
+/// （鬼影），而为了抓屏先隐藏一帧就是可见的闪烁——那条路按裁定走"**只有**自绘半透明底"（v3.1 起连
+/// best-effort 旧亚克力也不再请求：它在 Win11 24H2/25H2 上会把 tint 平铺满整个窗口矩形，见
+/// <see cref="AcrylicWindow.ClearLegacyAccent"/> 的成因说明）。
 /// </para>
 /// <para>
 /// 【降级不得变黑】抓屏失败（无显示器 / 安全桌面 / 全零帧 / GDI 异常）一律返回 null，

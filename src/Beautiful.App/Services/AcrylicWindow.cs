@@ -1,11 +1,9 @@
 using System.Runtime.InteropServices;
 using System.Windows;
 using System.Windows.Interop;
-using System.Windows.Media;
 using Beautiful.App.Interop;
 using static Beautiful.App.Interop.NativeMethods;
 using Brushes = System.Windows.Media.Brushes;   // UseWindowsForms 隐式全局 using 与 System.Drawing.Brushes 冲突
-using Color = System.Windows.Media.Color;        // 同上，System.Drawing.Color
 
 namespace Beautiful.App.Services;
 
@@ -18,26 +16,31 @@ namespace Beautiful.App.Services;
 /// 用户真机证伪：半透明卡底下的客户端像素不会被合成，结果就是一块带硬边的黑矩形。
 /// </para>
 /// <para>
-/// 【玻璃感从哪来】两条路，都不碰 DWM 材质 API：
+/// 【玻璃感从哪来（v3.1 收口）】两条路，**两条都不碰 DWM/旧亚克力的"系统自己画底"API**：
 /// <list type="bullet">
 /// <item><description>瞬态表面（切换器、菜单弹层、媒体面板）——显示前抓屏自绘模糊，见
 /// <see cref="ScreenBlurBackdrop"/>。透明负责"形状"，抓屏负责"材质"。</description></item>
-/// <item><description>常驻表面（顶栏、Dock）——自绘半透明 tint（主题 <c>ThemeDockBackground</c> /
-/// <c>ThemeBackdropTint</c> + 顶部内高光 + 1px 亮边）作为**唯一可见底**，再叠加一次 best-effort 的旧
-/// <c>SetWindowCompositionAttribute(ACCENT_ENABLE_ACRYLICBLURBEHIND)</c>（见
-/// <see cref="ApplyTintFallback"/>）。</description></item>
+/// <item><description>常驻表面（顶栏、Dock）——自绘半透明 tint（主题 <c>ThemeDockBackground</c> +
+/// 顶部内高光 + 1px 亮边）就是**唯一可见底**。</description></item>
 /// </list>
 /// </para>
 /// <para>
-/// 【best-effort 的取舍（README 引用这段）】常驻表面不能做实时抓屏：重抓会把窗口自己已经画好的像素
-/// 一起抓进背板（鬼影），而为了抓屏先隐藏一帧就是肉眼可见的闪烁。因此它们只求系统侧那层模糊作为
-/// 锦上添花（Dock 自 v1 起即此形态，ModernFlyouts / MyDockFinder 同思路）：系统认账 → 背后是真模糊；
-/// 系统不认账（本 VM、部分 Win11 配置）→ 看到的仍是我们自绘的 tint 底。两种结果都不会是黑，
-/// 返回值只落日志，绝不作为渲染前提。
+/// 【v3.1 为什么把旧亚克力增强删干净（缺陷 1）】v3.0.0 在这里另发一次
+/// <c>SetWindowCompositionAttribute(ACCENT_ENABLE_ACRYLICBLURBEHIND)</c> 当作锦上添花。真机（Win11
+/// 24H2/25H2）上它已经不模糊，而是把 <c>GradientColor</c>（我们传的主题 tint）**平铺满整个窗口矩形**：
+/// Dock 的窗口矩形 = 全显示器宽 ×（面板 + 放大余量），于是屏幕底边出现一条全宽深色带，遮住后面窗口的
+/// 下一行——正是用户报的"dock 栏还是有一段是黑的"。本 VM 不合成，画不出这条带，所以 v3 全程没发现。
+/// 现在常驻表面的观感**只**由 XAML 决定：条带里除面板以外的像素保持真透明（<c>Background={x:Null}</c>
+/// 的分层窗口未绘制区不参与合成也不参与命中测试），屏上不可能再出现"窗口矩形被系统涂满"。
+/// </para>
+/// <para>
+/// 【剩下的一次系统调用是清理，不是增强】见 <see cref="ClearLegacyAccent"/>。
 /// </para>
 /// </summary>
 public class AcrylicWindow : Window
 {
+    private bool _legacyAccentCleared;
+
     public AcrylicWindow()
     {
         WindowStyle = WindowStyle.None;
@@ -48,32 +51,45 @@ public class AcrylicWindow : Window
     }
 
     /// <summary>
-    /// 常驻表面的底色策略：可见底由 XAML 自绘（<c>ThemeDockBackground</c> 等 DynamicResource，换主题即变色），
-    /// 本方法只额外请求一次旧亚克力模糊作为 best-effort 增强；<paramref name="accentEnabled"/>=false
-    /// 时把该增强关掉（Linux 主题禁模糊 = 纯实底形态，与"关掉玻璃"是同一常规分支，不是异常）。
+    /// 常驻表面（顶栏 / Dock）的底色落地：可见底恒由派生类 XAML 自绘（<c>ThemeDockBackground</c> 等
+    /// DynamicResource，换主题即变色），本方法只做一件事——把 <b>v3.0.0 遗留在本窗口上的旧亚克力状态关掉</b>。
+    /// <para>
+    /// 【为什么这一句不能一起删】accent 状态是挂在窗口上的进程外可见效果：跑过 v3.0.0 的机器，它的顶栏与
+    /// Dock 窗口已被写入 <c>AcrylicBlurBehind</c>，升级到 v3.1 之后没有任何代码会再去碰它，那块全宽填充
+    /// 就会一直留在屏上。所以每个窗口第一次落主题时显式写一次 <see cref="AccentState.Disabled"/>
+    /// （=0）清除；这是本进程唯一一次、也是唯一允许的一次 <c>SetWindowCompositionAttribute</c> 调用。
+    /// </para>
+    /// <para>
+    /// 【幂等与频次】Disabled 是"关掉"，重复写无害，但为了日志可读，每个窗口实例只写一次
+    /// （<see cref="_legacyAccentCleared"/>）。之后换主题不再调用系统 API，纯 DynamicResource 变色。
+    /// </para>
     /// </summary>
-    /// <param name="tint">主题 AcrylicTint（含 alpha）：只有旧亚克力路径会把它当渐变底用（GradientColor）。</param>
-    /// <param name="accentEnabled">是否请求系统侧模糊。</param>
-    protected void ApplyTintFallback(Color tint, bool accentEnabled = true)
+    /// <param name="surfaceName">日志里的表面名（"顶栏" / "Dock"），便于真机日志一眼定位是哪一块。</param>
+    protected void ClearLegacyAccent(string surfaceName)
     {
+        if (_legacyAccentCleared) return;
         var hwnd = new WindowInteropHelper(this).EnsureHandle();
-        var ok = TryApplyAccent(hwnd, tint, accentEnabled ? AccentState.AcrylicBlurBehind : AccentState.Disabled);
-        Logger.Info($"常驻表面底色 hwnd=0x{hwnd.ToInt64():X} 自绘tint=必画 " +
-                    $"best-effort旧亚克力={(accentEnabled ? (ok ? "已请求" : "未生效") : "已关闭")}" +
-                    "（不生效时观感=纯自绘半透明底，绝不落黑）");
+        if (hwnd == IntPtr.Zero) return;   // 句柄未就绪（正常调用点都在 OnSourceInitialized 之后）：下次主题落地再清
+        _legacyAccentCleared = true;
+        var ok = TryDisableAccent(hwnd);
+        // 运行期断言（缺陷 1 的取证点）：日志里出现的 state 只可能是 Disabled(0)，源码里也没有别的可写值
+        // （AccentState 枚举只剩 Disabled 一个成员，见 Interop/NativeMethods.cs）。
+        Logger.Info($"常驻表面底色 {surfaceName} hwnd=0x{hwnd.ToInt64():X} 可见底=XAML自绘三层 " +
+                    $"旧亚克力=清除(state=Disabled(0)，下发={(ok ? "成功" : "系统未受理")}) " +
+                    "本进程不写任何非 Disabled 的 accent 状态");
     }
 
     /// <summary>
-    /// 旧 <c>SetWindowCompositionAttribute</c> 亚克力（分层窗口上唯一还可能出现的系统侧模糊）。
-    /// 成功返回 true；任何异常都吞掉并按"没有增强"处理——底色早已由内容画好，这里失败不改变可读性。
+    /// 写一次 <c>AccentState.Disabled</c> 关掉遗留亚克力。任何异常都吞掉——这里失败的最坏结果只是
+    /// "老用户的那条带这次没清成"，绝不会引入新的可见效果（我们不再请求任何系统材质）。
     /// </summary>
-    private static bool TryApplyAccent(IntPtr hwnd, Color tint, AccentState state)
+    private static bool TryDisableAccent(IntPtr hwnd)
     {
         var accent = new ACCENT_POLICY
         {
-            AccentState = state,
-            AccentFlags = 2,
-            GradientColor = ToAbgr(tint),
+            AccentState = AccentState.Disabled,
+            AccentFlags = 0,
+            GradientColor = 0,
             AnimationId = 0
         };
         var ptr = Marshal.AllocHGlobal(Marshal.SizeOf<ACCENT_POLICY>());
@@ -90,7 +106,7 @@ public class AcrylicWindow : Window
         }
         catch (Exception ex)
         {
-            Logger.Warn($"旧亚克力增强请求失败（不影响自绘底色）: {ex.Message}");
+            Logger.Warn($"清除遗留旧亚克力失败（不影响自绘底色）: {ex.Message}");
             return false;
         }
         finally { Marshal.FreeHGlobal(ptr); }

@@ -8,21 +8,25 @@ namespace Beautiful.App.Interop;
 
 internal static partial class NativeMethods
 {
-    // ---------- 旧亚克力（SetWindowCompositionAttribute）/ DWM ----------
-    // v3 起本 API **只**用于常驻表面（顶栏 / Dock）的 best-effort 增强：系统认账就有真模糊，
-    // 不认账也只是看不到它（我们自绘的半透明 tint 底始终铺在那里，绝不落黑）。
-    // 瞬态表面（切换器/菜单/媒体面板）不再调用它——那条路改走自绘抓屏模糊，见 Services/ScreenBlurBackdrop.cs。
+    // ---------- 旧亚克力（SetWindowCompositionAttribute）：v3.1 起**只用于清除** ----------
+    // 【为什么这段互操必须留着，而它原来的功能已经被删掉】v3.0.0 把 ACCENT_ENABLE_ACRYLICBLURBEHIND(4)
+    // 当作常驻表面（顶栏 / Dock）的 best-effort 模糊增强。Win11 24H2/25H2 上它已经不再模糊，而是把
+    // AccentPolicy.GradientColor 平铺满**整个窗口矩形**：Dock 的窗口矩形是"全显示器宽 ×（面板高 +
+    // 放大余量）"，于是用户真机看到屏幕底边一条全宽深色带，并遮挡住后面窗口的下一行（缺陷 1）。
+    // 本 VM 无桌面合成 → 画不出这个填充，所以 v3 全程没看见。
+    // v3.1 的裁定：**UI 路径不再写入任何非 Disabled 的 accent 状态**，常驻表面的可见底恒为 XAML 自绘三层。
+    // 但"删掉这段互操"不等于"删掉这个功能"——跑过 v3.0.0 的机器上，顶栏与 Dock 的窗口上已经挂着一个
+    // acrylic 状态，它不会随版本升级消失，只能由我们在下一次启动时对同一批窗口显式写一次 0=Disabled
+    // 关掉（Services/AcrylicWindow.ClearLegacyAccent）。留着这一次写，老用户升级后黑带才会消失；
+    // 删掉它，黑带就永久留在他们的屏幕上。除此之外本文件不再暴露任何可用取值。
     public const int WcaAccentPolicy = 19;
 
+    /// <summary>accent 状态：本项目只写 <see cref="Disabled"/>（=清除遗留状态）。
+    /// 其余取值（Gradient / TransparentGradient / BlurBehind / AcrylicBlurBehind / HostBackdropBlurBehind）
+    /// 一律不提供——它们把"屏上画什么"交给未公开的 Windows 内部实现，正是缺陷 1 的成因。</summary>
     public enum AccentState : uint
     {
-        Disabled = 0,
-        Gradient = 1,
-        TransparentGradient = 2,
-        BlurBehind = 3,
-        AcrylicBlurBehind = 4,
-        HostBackdropBlurBehind = 5,
-        Invalid = 6
+        Disabled = 0
     }
 
     [StructLayout(LayoutKind.Sequential)]
@@ -30,7 +34,7 @@ internal static partial class NativeMethods
     {
         public AccentState AccentState;
         public uint AccentFlags;
-        public uint GradientColor;   // AABBGGRR
+        public uint GradientColor;   // AABBGGRR：只在 Disabled 之外才有意义，本项目恒传 0
         public uint AnimationId;
     }
 
@@ -44,9 +48,6 @@ internal static partial class NativeMethods
 
     [DllImport("user32.dll")]
     public static extern bool SetWindowCompositionAttribute(IntPtr hwnd, ref WINDOWCOMPOSITIONATTRIBDATA data);
-
-    public static uint ToAbgr(System.Windows.Media.Color c)
-        => (uint)(c.A << 24 | c.B << 16 | c.G << 8 | c.R);
 
     // ---------- AppBar ----------
     public const uint AbmNew = 0, AbmRemove = 1, AbmQueryPos = 2, AbmSetPos = 3,
@@ -294,17 +295,33 @@ internal static partial class NativeMethods
 
     // ---------- DWM 系统背板（v3 已从 UI 表面路径退役）----------
     // DWMWA_SYSTEMBACKDROP_TYPE(38) / DWMWA_MICA_EFFECT(1029) / DWMWA_USE_IMMERSIVE_DARK_MODE(20)
-    // 与 DwmExtendFrameIntoClientArea 一起删除：真机取证证明"非分层窗口 + 玻璃层 + 半透明内容"并不会
+    // 已删除：真机取证证明"非分层窗口 + 玻璃层 + 半透明内容"并不会
     // 把客户端 alpha 与系统材质合成（Alt+Tab 面板画成黑矩形、顶栏矩形内露桌面），v3 的模糊改由
     // Services/ScreenBlurBackdrop.cs 自己抓屏合成。保留的唯一 DWM 属性是下面 33=圆角：它服务的是
     // Preview/ThumbnailPreview.cs 那个**纯 Win32 宿主窗口**（客户区只承载 DWM 实时缩略图，无 WPF airspace），
     // 那里没有逐像素 alpha 需求，圆角是窗口自身的形状，属可靠路径（v2 截图已验证）。
+    // 同一个宿主窗口还独享下面那段"玻璃边距"豁免——理由见该处注释；WPF 表面一律不得请求。
     // DWMWA_WINDOW_CORNER_PREFERENCE(33)：0=DEFAULT(跟随系统) 1=DONOTROUND 2=ROUND(系统圆角) 3=SMALLROUND。
     public const int DwmwaWindowCornerPreference = 33;
     public const int DwmwcpRound = 2;
 
     [DllImport("dwmapi.dll")]
     public static extern int DwmSetWindowAttribute(IntPtr hwnd, int attr, ref int pvAttribute, int cbAttribute);
+
+    // ---------- DWM 玻璃边距（v3.1 唯一调用点：Preview/ThumbnailPreview.cs 的缩略图宿主）----------
+    // 【为什么只有这一个窗口例外】v3 把 DwmExtendFrameIntoClientArea 整体退役是对的：真机取证证明
+    // "非分层 WPF 窗口 + 玻璃层 + 半透明内容"并不会把客户端 alpha 与系统材质合成（Alt+Tab 面板画成
+    // 带硬边的黑矩形）。但缩略图宿主**不是 WPF 表面**：它是纯 Win32 弹层（CS_DROPSHADOW + WS_POPUP），
+    // 客户区里唯一的内容就是 DWM 自己合成的实时画面。而 DWM 缩略图**只在玻璃像素上显形**——没有玻璃层时
+    // DwmRegisterThumbnail / DwmUpdateThumbnailProperties 的 HRESULT 全是 0、句柄也确实注册上了，屏幕上
+    // 一个像素都不画（用户真机看到的"整个黑框"= 没玻璃 + 类刷是 BLACK_BRUSH 的组合，缺陷 2）。
+    // 四边都填 -1 = 整块客户区都是玻璃；GDI 画的不透明标题带/留白环照旧盖在其上可见（v2 截图验证过该形态）。
+    // 这条豁免不改变 v3 的总裁定：任何 WPF 表面（顶栏 / Dock / 弹层 / 媒体面板）依旧不得请求玻璃。
+    [StructLayout(LayoutKind.Sequential)]
+    public struct MARGINS { public int LeftWidth, RightWidth, TopHeight, BottomHeight; }
+
+    [DllImport("dwmapi.dll")]
+    public static extern int DwmExtendFrameIntoClientArea(IntPtr hwnd, ref MARGINS margins);
 
     // ---------- DWM 缩略图（Task 13 悬停实时预览）----------
     // 与上面三个"属性类"DWM API 不同，缩略图是一组**句柄型** API：DwmRegisterThumbnail 在目标窗口
@@ -420,7 +437,8 @@ internal static partial class NativeMethods
     }
 
     [DllImport("gdi32.dll")] public static extern IntPtr CreateSolidBrush(uint color);  // 0x00BBGGRR
-    [DllImport("gdi32.dll")] public static extern IntPtr GetStockObject(int fn);
+    // GetStockObject 已删除：它在本项目唯一的用法是给预览宿主填 BLACK_BRUSH 类刷，而"未合成的宿主"
+    // 因此变成一块实心黑洞（缺陷 2）。类刷现在与卡片底色同源（CreateSolidBrush + 主题色）。
     // FillRect 在 user32.dll（不在 gdi32！）——误标 gdi32 会 EntryPointNotFoundException，
     // 且它发生在 WndProc 的 WM_PAINT 栈上 → 直接崩掉驻留进程（Task 13 实测踩过）。
     [DllImport("user32.dll")] public static extern bool FillRect(IntPtr hdc, ref RECT rect, IntPtr brush);

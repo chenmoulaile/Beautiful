@@ -17,13 +17,14 @@
 
     <!-- 形态（v3 T2/T3 裁定，替换 v2 的"非分层 + DWMWA_SYSTEMBACKDROP_TYPE 真背板"）：
          顶栏是**常驻**表面，不能做实时抓屏（重抓会把自身像素抓进背板 = 鬼影；为抓屏先隐藏一帧 = 闪烁），
-         因此走"分层窗口 + 自绘半透明底 + best-effort 旧亚克力"：
+         因此走"分层窗口 + 自绘半透明底"（v3.1：旧的 best-effort 亚克力增强已删除——Win11 24H2/25H2 上
+         它把 tint 平铺满整个窗口矩形，见 Services/AcrylicWindow.cs 头注释）：
          ① AllowsTransparency=True + Background={x:Null}：逐像素 alpha 由 WPF 自己保证，任何机型一致；
          ② BarBackground/BarGlow/BarEdge 三层把**整条矩形铺满**，条带内不得有一个未绘制像素——
             v2 真机"顶栏上方露一截壁纸"就是矩形里出现了没画到的那一块；
-         ③ ApplyTintFallback 只请求系统侧模糊作增强（系统认账就有真模糊，不认账仍是②的自绘底，绝不黑）。
-         主题值全部走 ThemeManager 合并字典 DynamicResource（换字典即时生效）；tint 与模糊开关在代码侧
-         随 ThemeChanged 重刷（见 ApplyTheme）。 -->
+         ③ ApplyTheme 只写一次 AccentState.Disabled，用于清掉 v3.0.0 留在本窗口上的旧亚克力状态。
+         主题值全部走 ThemeManager 合并字典 DynamicResource（换字典即时生效）；模糊开关不再参与任何渲染分支，
+         tint 与底色都只由 XAML 决定（见 ApplyTheme）。 -->
 
     <!-- macOS 顶栏扁平按钮：透明底 + 悬停强调底色（ThemePanelBackground，DynamicResource 随主题）。
          左区菜单按钮与右区状态项共用；圆角 5 贴合系统菜单栏选中态。 -->

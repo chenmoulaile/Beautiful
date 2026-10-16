@@ -23,7 +23,10 @@ namespace Beautiful.App.Controls;
 /// alpha 的模式，圆角与自绘投影留白因此真的透明；v2 那句"启用模糊的主题走非分层 + DWM 系统背板"
 /// 已在用户真机上被证伪（半透明卡底下面是不被合成的客户端像素 → 黑卡 + 硬边），连同
 /// <c>DwmExtendFrameIntoClientArea</c> / <c>DWMWA_SYSTEMBACKDROP_TYPE</c> /
-/// <c>DWMWA_WINDOW_CORNER_PREFERENCE</c> 一起退役。入场淡入动画 <c>Content.Opacity</c> 的习惯保留：
+/// <c>DWMWA_WINDOW_CORNER_PREFERENCE</c> 一起退役。
+/// v3.1 补充：这条禁令只针对 **WPF 表面**；唯一的例外是 <c>Preview/ThumbnailPreview.cs</c> 的纯 Win32
+/// 缩略图宿主——它客户区里装的就是 DWM 自己合成的画面，没有客户端 alpha 可言，玻璃边距是它显示的前提。
+/// 入场淡入动画 <c>Content.Opacity</c> 的习惯保留：
 /// 分层窗口动画 <c>Window.Opacity</c> 会额外叠一层整窗混合，内容层淡入既够用又更省。
 /// <para>
 /// 【玻璃感来自抓屏自绘模糊】落位算出窗口物理矩形后、<b>Show 之前</b>调

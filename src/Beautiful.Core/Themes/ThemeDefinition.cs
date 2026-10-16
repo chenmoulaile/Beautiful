@@ -15,7 +15,8 @@ namespace Beautiful.Core.Themes;
 public sealed record ThemeDefinition(
     string Id, string DisplayName,
     Color DockBackground,         // Dock 面板底色（亚克力 tint 另计）
-    Color AcrylicTint,            // 窗口级 tint（含 alpha，传 ToAbgr）
+    Color AcrylicTint,            // 主题 tint 声明值（含 alpha）：v3.1 起不再交给旧亚克力 API（缺陷 1），
+                                  // 同一色值由各主题 XAML 的自绘底承担
     bool BlurEnabled,
     double PanelCornerRadius,
     double IconCornerRadiusRatio, // 0=不遮罩；0.25=鸿蒙 squircle；其余=圆角方形（半径=ratio·IconSize）

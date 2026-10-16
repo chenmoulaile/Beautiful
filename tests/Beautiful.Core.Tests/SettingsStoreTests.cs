@@ -325,6 +325,43 @@ public class AppSettingsStoreTests : IDisposable
         Assert.True(s.LauncherEnabled);       // v3 T7：启动器默认开（关掉它等于没有这个功能）
         Assert.False(s.UseWallpaperAccent);   // 壁纸取色默认关：主题观感与取色功能上线前完全一致
         Assert.False(s.AutoHideDock);
+        // v3.1 新增的顶栏时钟四项：旧文件里没有这些键，必须落在"与 v3.0.0 观感一致"的代码默认，
+        // 而不是布尔零值（零值会把日期/星期/24 小时制全关掉，顶栏就只剩一个光秃秃的时间）。
+        Assert.False(s.ClockShowSeconds);
+        Assert.True(s.ClockShowDate);
+        Assert.True(s.ClockShowWeekday);
+        Assert.True(s.ClockUse24Hour);
+    }
+
+    [Fact]
+    public void 顶栏时钟四项_写入后原样读回()
+    {
+        Directory.CreateDirectory(_dir);
+        _store.Save(new AppSettings
+        {
+            ClockShowSeconds = true,
+            ClockShowDate = false,
+            ClockShowWeekday = true,
+            ClockUse24Hour = false
+        });
+        var s = _store.Load();
+        Assert.True(s.ClockShowSeconds);
+        Assert.False(s.ClockShowDate);
+        Assert.True(s.ClockShowWeekday);
+        Assert.False(s.ClockUse24Hour);
+    }
+
+    [Fact]
+    public void 顶栏时钟非布尔JSON_按损坏文件自愈回代码默认()
+    {
+        // 布尔字段没有"钳制"可言：类型不符即 JsonException → 整体自愈（删文件 + 代码默认）。
+        // 这条钉住"不会留下半套值、也不会把异常抛到调用方"。
+        Directory.CreateDirectory(_dir);
+        File.WriteAllText(Path.Combine(_dir, "settings.json"), """{"ClockShowSeconds":"yes","Theme":"macos"}""");
+        var s = _store.Load();
+        Assert.Equal("harmonyos", s.Theme);
+        Assert.False(s.ClockShowSeconds);
+        Assert.True(s.ClockShowDate);
     }
 
     [Fact]

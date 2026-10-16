@@ -14,4 +14,5 @@ shot*.png
 # 内部规划文档（不随仓库发布）
 docs/
 v3-*.png
+v31-*.png
 dist/

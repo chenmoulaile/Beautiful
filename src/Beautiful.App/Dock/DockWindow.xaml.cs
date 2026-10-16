@@ -19,7 +19,6 @@ using Beautiful.Core.Dock;
 using Beautiful.Core.Layout;
 using Beautiful.Core.Themes;
 using Application = System.Windows.Application;
-using Color = System.Windows.Media.Color;
 using Point = System.Windows.Point;
 using Rect = System.Windows.Rect;
 using MouseEventArgs = System.Windows.Input.MouseEventArgs;   // 与 System.Windows.Forms.MouseEventArgs 歧义（UseWindowsForms）
@@ -312,21 +311,25 @@ public partial class DockWindow : AcrylicWindow
     /// 主题切换落地：窗口级底色策略 + 间距参数；放大开关与 MaxScale 由动画/悬停路径
     /// 直读 ThemeManager.Current；底色/圆角/图标尺寸/字体/指示样式走字典 DynamicResource 即时生效。
     /// <para>
-    /// 【v3 T2 裁定：常驻表面不做抓屏，只做自绘底 + best-effort 系统模糊】本窗口的点击穿透依赖 XAML 的
-    /// <c>Background="{x:Null}"</c>（未绘制区域不参与命中测试 → 面板两侧的条带空白可点到底下的桌面/
-    /// 图标），而 WPF 里"未绘制区域真的透明"只有 <c>AllowsTransparency=true</c>（分层窗口）能做到。
-    /// Dock 又是常驻表面：实时抓屏会把已画好的面板像素抓进背板（鬼影），为抓屏先隐藏一帧又是可见闪烁，
-    /// 所以它不调用 <see cref="ScreenBlurBackdrop"/>，而是"DockPanelRoot 自绘 ThemeDockBackground + 1px 亮边"
-    /// 作为唯一可见底，另发一次旧 <c>SetWindowCompositionAttribute</c> 请求（<see cref="AcrylicWindow.ApplyTintFallback"/>）
-    /// 作增强：系统认账就有真模糊，不认账看到的仍是自绘底，两种结果都不落黑。
+    /// 【v3 T2 裁定：常驻表面不做抓屏】本窗口的点击穿透依赖 XAML 的 <c>Background="{x:Null}"</c>
+    /// （未绘制区域不参与命中测试 → 面板两侧的条带空白可点到底下的桌面/图标），而 WPF 里"未绘制区域真的
+    /// 透明"只有 <c>AllowsTransparency=true</c>（分层窗口）能做到。Dock 又是常驻表面：实时抓屏会把已画好
+    /// 的面板像素抓进背板（鬼影），为抓屏先隐藏一帧又是可见闪烁，所以它不调用 <see cref="ScreenBlurBackdrop"/>，
+    /// "DockPanelRoot 自绘 ThemeDockBackground + 1px 亮边"就是**唯一可见底**；面板之外（条带两侧与放大
+    /// 余量）恒为真透明，点得穿、也看得见底下的桌面。
     /// 真模糊的抓屏路径只给"显示一次"的瞬态表面（切换器 / 菜单弹层 / 媒体面板）。
+    /// </para>
+    /// <para>
+    /// 【v3.1 缺陷 1：旧的 best-effort 亚克力增强已删除】v3.0.0 在这里另发一次
+    /// <c>SetWindowCompositionAttribute(ACCENT_ENABLE_ACRYLICBLURBEHIND)</c>。Win11 24H2/25H2 上它不模糊，
+    /// 而是把 tint 平铺满**整个窗口矩形**（= 全显示器宽 × 面板+放大余量）→ 用户真机看到的"屏幕底边一条
+    /// 全宽黑带、遮住 qoder 窗口下一行"。现在 Dock 只可能通过 <see cref="AcrylicWindow.ClearLegacyAccent"/>
+    /// 与这个 API 打交道，而那一句写的是 Disabled（清除老版本留下的状态）。
     /// </para>
     /// </summary>
     private void ApplyTheme(ThemeDefinition theme)
     {
-        ApplyTintFallback(Color.FromArgb(theme.AcrylicTint.A, theme.AcrylicTint.R,
-                                         theme.AcrylicTint.G, theme.AcrylicTint.B),
-                          theme.BlurEnabled);
+        ClearLegacyAccent("Dock");
         // 排布参数：底色/圆角/字体走 DynamicResource，尺寸/间距/放大写入 DockSurface。
         // IconSize/MaxScale 由设置项驱动（DockIconSize / MagnificationStrength），主题只提供"是否放大"与间距，
         // 见 ApplySurfaceLayoutParams。尺寸变化会改条带高度 → 顺带重排 AppBar（若尚未注册则 no-op，

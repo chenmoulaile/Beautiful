@@ -29,6 +29,24 @@ public sealed record AppSettings
     /// <summary>是否显示 macOS 风格顶栏（Finder 栏）。</summary>
     public bool TopBarEnabled { get; init; } = true;
 
+    // ---------- 顶栏时钟形态（v3.1 缺陷 3：此前顶栏只有一种写法，用户无法配置） ----------
+    // 四个开关的**语义与组合规则全在 Core.TopBar.ClockFormat**（模板拼装 + 刷新步长），这里只是持久化载体；
+    // 默认值 (false, true, true, true) 与 v3.0.0 顶栏逐字符一致，所以升级后观感不变。
+    // 布尔项无需 <see cref="Normalized"/> 钳制：JSON 里写成非布尔会触发 JsonException，
+    // 由 AppSettingsStore 按"损坏文件"整体自愈（回到代码默认），不会留下半套值。
+
+    /// <summary>顶栏时钟是否显示秒。<b>它同时决定刷新节奏</b>：开=对齐秒边界每秒重算，关=对齐分边界每分钟重算。</summary>
+    public bool ClockShowSeconds { get; init; }
+
+    /// <summary>顶栏时钟是否显示"几月几日"。</summary>
+    public bool ClockShowDate { get; init; } = true;
+
+    /// <summary>顶栏时钟是否显示"周几"（与日期独立：可以只要"周三 21:27"）。</summary>
+    public bool ClockShowWeekday { get; init; } = true;
+
+    /// <summary>顶栏时钟是否用 24 小时制（false = 12 小时制 + 上午/下午）。</summary>
+    public bool ClockUse24Hour { get; init; } = true;
+
     /// <summary>是否接管 Alt+Tab（安装低阶键盘钩子）。</summary>
     public bool SwitcherEnabled { get; init; } = true;
 

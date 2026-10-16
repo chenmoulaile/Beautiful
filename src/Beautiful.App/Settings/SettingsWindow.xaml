@@ -134,6 +134,32 @@
 
                         <CheckBox x:Name="TopBarCheck" Content="显示 macOS 风格顶部菜单栏"
                                   Margin="0,16,0,0" Checked="TopBar_Changed" Unchecked="TopBar_Changed"/>
+
+                        <!-- 顶栏时钟形态（v3.1）：四个勾选各对应 AppSettings 的一个 bool，
+                             "组合出什么字符串、以什么节奏刷新"全部由 Core.TopBar.ClockFormat 推导（有单测），
+                             UI 里没有任何格式化分支。即时生效，无需重启：勾"显示秒数"会把时钟定时器改成
+                             对齐秒边界的每秒，取消则回到对齐分边界的每分钟（不做 100ms 轮询）。 -->
+                        <TextBlock Text="顶栏时钟" FontWeight="Medium" Margin="0,14,0,0"/>
+                        <WrapPanel Margin="0,6,0,0">
+                            <CheckBox x:Name="ClockSecondsCheck" Content="显示秒数" Margin="0,0,18,0"
+                                      Checked="Clock_Changed" Unchecked="Clock_Changed"/>
+                            <CheckBox x:Name="ClockDateCheck" Content="显示日期" Margin="0,0,18,0"
+                                      Checked="Clock_Changed" Unchecked="Clock_Changed"/>
+                            <CheckBox x:Name="ClockWeekdayCheck" Content="显示星期" Margin="0,0,18,0"
+                                      Checked="Clock_Changed" Unchecked="Clock_Changed"/>
+                            <CheckBox x:Name="Clock24Check" Content="24 小时制"
+                                      Checked="Clock_Changed" Unchecked="Clock_Changed"/>
+                        </WrapPanel>
+                        <!-- 实时样张：直接把 Core.TopBar.ClockFormat 折算出的模板渲染成当前时刻的样子，
+                             勾选即见结果，用户不必去顶栏找变化（与顶栏用的是同一个格式化函数，绝不会出现
+                             “设置里一个样、顶栏另一个样”）。 -->
+                        <StackPanel Orientation="Horizontal" Margin="0,8,0,0">
+                            <TextBlock Text="预览" Width="56" VerticalAlignment="Center" Opacity="0.85"/>
+                            <TextBlock x:Name="ClockSample" FontWeight="Medium" VerticalAlignment="Center"/>
+                        </StackPanel>
+                        <TextBlock Style="{StaticResource HintText}"
+                                   Text="时钟宽度变化只会向左扩张：右侧的音量/网络/电量等状态项钉在条带右缘不动。顶栏关闭时这几项不影响显示，打开顶栏即按当前勾选呈现。"/>
+
                         <CheckBox x:Name="AutostartCheck" Content="开机自启"
                                   Margin="0,8,0,0" Checked="Autostart_Changed" Unchecked="Autostart_Changed"/>
 

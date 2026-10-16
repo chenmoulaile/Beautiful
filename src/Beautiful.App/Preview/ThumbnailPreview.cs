@@ -35,6 +35,15 @@ namespace Beautiful.App.Preview;
 /// 窗口。因此"注册次数 == 注销次数"，句柄数不随悬停次数单调上涨（见 task-13 报告的实测计数）。
 /// </para>
 /// <para>
+/// <b>"注册成功"不等于"屏上看得见"（v3.1 缺陷 2 的教训）</b>：DWM 缩略图只在宿主的<b>玻璃像素</b>上显形。
+/// v3 整体退役 <c>DwmExtendFrameIntoClientArea</c> 时把这个宿主一起带走了，于是注册、查尺寸、写属性
+/// 三步 HRESULT 全 0，屏幕上却什么都不画；叠加类刷是 <c>BLACK_BRUSH</c>，用户看到的就是一只实心黑框
+/// （"鼠标放在 dock 图标上方无法预览窗口，整个黑框"）。v3.1 起 <see cref="EnsureHost"/> 显式把整块客户区
+/// 开成玻璃（margins = -1，理由与豁免范围见 <see cref="NativeMethods.DwmExtendFrameIntoClientArea"/>），
+/// 并把类刷换成主题卡底色。<b>不变量</b>：宿主玻璃就绪 ⇔ 才允许弹预览；玻璃开不成（无桌面合成 / 驱动不支持）
+/// 就整张卡片不出现并只记一条日志——宁可没有预览，也不给屏幕留黑洞。
+/// </para>
+/// <para>
 /// <b>源窗口消失 / 最小化</b>：安装时不新增全局钩子（brief 约束）。仅在可见期间跑一个 ~220ms 的
 /// <see cref="DispatcherTimer"/> 做有界轮询：<c>!IsWindow(src)</c> 或 <c>IsIconic(src)</c> → 立即隐藏；
 /// 否则重查源尺寸，变化则 <see cref="UpdateSourceSize"/>（源窗口被拖动改变大小即时跟新）。空闲零开销。
@@ -62,6 +71,10 @@ public sealed class ThumbnailPreview : IDisposable
     private IntPtr _thumb;                // 当前缩略图句柄（Zero = 未注册）
     private IntPtr _source;               // 当前源窗口句柄（Zero = 无）
     private DispatcherTimer? _watchd;     // 仅可见期间运行
+    // 宿主玻璃层是否真的开起来了（见类型注释的不变量）。false ⇒ 一次都不弹卡片，绝不显示空黑框。
+    private bool _hostGlassReady;
+    // 不可用成因（玻璃开不成 / 注册失败）只把详情写进日志一次（悬停会反复重试，逐次 Warn 只会刷满日志）。
+    private bool _unavailableLogged;
 
     // 供 WndProc 的 GDI 绘制读取（每次 Show/主题变更后刷新）
     private string _title = string.Empty;
@@ -103,13 +116,21 @@ public sealed class ThumbnailPreview : IDisposable
 
         EnsureHost();
         if (_hwnd == IntPtr.Zero) return;
+        // 玻璃没开成的宿主 = 缩略图永远不可能显形（HRESULT 照样全 0，屏幕上一个像素都不画）。
+        // 这种情况直接把预览判定为"本次运行不可用"：不弹卡片，宁可没有预览也不给屏幕留一只黑框。
+        if (!_hostGlassReady)
+        {
+            LogUnavailableOnce($"预览宿主玻璃层未就绪（DwmExtendFrameIntoClientArea 未成功），已跳过弹卡片 src=0x{sourceHwnd.ToInt64():X}");
+            return;
+        }
 
         RefreshThemeColors();   // 每次弹出重读主题色（换主题后下次悬停即生效）
 
         var hr = DwmRegisterThumbnail(_hwnd, sourceHwnd, out var thumb);
         if (hr != 0 || thumb == IntPtr.Zero)
         {
-            Logger.Warn($"DwmRegisterThumbnail 失败 hr=0x{hr:X8} src=0x{sourceHwnd.ToInt64():X}");
+            // 失败即"绝不留下卡片"：宿主保持隐藏（下面这句是防御性重复，确保任何调用序下屏上都没有半张卡）。
+            LogUnavailableOnce($"DwmRegisterThumbnail 失败 hr=0x{hr:X8} src=0x{sourceHwnd.ToInt64():X}");
             ShowWindow(_hwnd, SwHide);
             return;
         }
@@ -157,7 +178,7 @@ public sealed class ThumbnailPreview : IDisposable
     /// <summary>按当前主题资源刷新卡片配色 / 字体度量（GDI 绘制读这几个值）。Show 时调用。</summary>
     private void RefreshThemeColors()
     {
-        _bgRef = ToGdi(ReadColor("ThemeDockBackground", Color.FromRgb(0x20, 0x20, 0x20)));
+        _bgRef = CardColorRef();   // 与窗口类刷同一取色函数：换主题后卡片底与"空卡底"始终是同一个色
         // 标题带：取底色与纯白之间一点亮度做分隔；文字用主题主文字色；强调条用 ThemeAccent。
         _textRef = ToGdi(ReadColor("ThemeTextPrimary", Colors.White));
         _accentRef = ToGdi(ReadColor("ThemeAccent", Color.FromRgb(0x0A, 0x59, 0xF7)));
@@ -340,12 +361,33 @@ public sealed class ThumbnailPreview : IDisposable
         // Win11 原生圆角（背板无关，非分层窗口同样生效）：把窗口裁成系统圆角，卡片四角不再方。
         var round = DwmwcpRound;
         DwmSetWindowAttribute(_hwnd, DwmwaWindowCornerPreference, ref round, sizeof(int));
+        // 【缺陷 2 的正解】整块客户区开成玻璃：DWM 缩略图只在玻璃像素上显形，没有这一步时注册与写属性
+        // 都会"成功"，但屏幕上不画任何东西（v3 退役本 API 时把这个纯 Win32 宿主一起带走了，是本次回归）。
+        // margins 四边 -1 = 全客户区玻璃；GDI 画的不透明标题带/留白环压在玻璃之上照旧可见。
+        // 这一步失败（无桌面合成的环境，如本 VM）就把预览判为不可用：见 Show 的 _hostGlassReady 守卫。
+        var glass = new MARGINS { LeftWidth = -1, RightWidth = -1, TopHeight = -1, BottomHeight = -1 };
+        var frameHr = DwmExtendFrameIntoClientArea(_hwnd, ref glass);
+        _hostGlassReady = frameHr == 0;
+        Logger.Info($"预览宿主玻璃层 hwnd=0x{_hwnd.ToInt64():X} DwmExtendFrameIntoClientArea(-1) hr=0x{frameHr:X8}" +
+                    $" → {(frameHr == 0 ? "缩略图可显形" : "本环境开不出玻璃，预览不弹卡片（绝不留黑框）")}");
+    }
+
+    /// <summary>不可用成因只播第一条 Warn（悬停每次都重试，全量记只会把日志刷满而不增加信息）。</summary>
+    private void LogUnavailableOnce(string reason)
+    {
+        if (_unavailableLogged) return;
+        _unavailableLogged = true;
+        Logger.Warn($"悬停缩略图预览不可用（已按失败即不显示处理，同类原因后续不再逐次记录）：{reason}");
     }
 
     private static void EnsureClass()
     {
         if (_classAtom != 0) return;
         _classProc = WndProc;   // 存静态字段防 GC
+        // 类刷底色取主题卡底色（读不到主题时的兜底 #202020 与卡片同色），**不再是 BLACK_BRUSH**：
+        // v3.0.0 用 GetStockObject(BLACK_BRUSH) 是为了"初绘不留白闪"，但一旦缩略图没能显形（缺玻璃），
+        // 类刷就成了用户看到的整只黑框（缺陷 2）。黑永远不该是任何一个未填充状态的默认答案。
+        // 该句柄随窗口类活到进程结束，故意不 DeleteObject（删了类刷就变成悬空指针）。
         var wc = new WNDCLASSEXW
         {
             cbSize = (uint)Marshal.SizeOf<WNDCLASSEXW>(),
@@ -356,7 +398,7 @@ public sealed class ThumbnailPreview : IDisposable
             hInstance = GetModuleHandle(null),
             hIcon = IntPtr.Zero,
             hCursor = IntPtr.Zero,
-            hbrBackground = GetStockObject(4),   // BLACK_BRUSH：初绘不留白闪，随后 WM_PAINT 用主题底色覆盖
+            hbrBackground = CreateSolidBrush(CardColorRef()),
             lpszMenuName = null,
             lpszClassName = ClassName,
             hIconSm = IntPtr.Zero
@@ -459,6 +501,12 @@ public sealed class ThumbnailPreview : IDisposable
 
     /// <summary>WPF Color → GDI COLORREF（0x00BBGGRR）。</summary>
     private static uint ToGdi(Color c) => (uint)(c.B << 16 | c.G << 8 | c.R);
+
+    /// <summary>
+    /// 主题卡片底色（GDI 无 alpha，取 RGB）。<b>窗口类刷与 WM_PAINT 底色同源</b>：
+    /// 这样"缩略图还没画上来"的那一小段时间里，屏上是一块与卡片同色的空卡，而不是黑洞。
+    /// </summary>
+    private static uint CardColorRef() => ToGdi(ReadColor("ThemeDockBackground", Color.FromRgb(0x20, 0x20, 0x20)));
 
     private static Color ReadColor(string key, Color fallback)
     {
