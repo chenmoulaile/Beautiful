@@ -74,9 +74,19 @@ public partial class App : Application
             return;
         }
 
-        // 3. 单实例：互斥体已被持有 → 弹窗提示后退出
+        // 3. 单实例：互斥体已被持有 → 带 --settings 就把请求转给在跑的实例，否则弹窗提示后退出
         if (!AcquireSingleInstanceMutex())
         {
+            // 用户在跑着 Dock 的情况下双击/命令行再开一次带 --settings 的 exe，他要的是那个设置窗口，
+            // 不是"已在运行"的模态提示。转发成功就静默退场；失败（没找到窗口）退回原来的提示，
+            // 因为此时确实什么都没发生，不吭声只会让人以为双击没反应。
+            if (e.Args.Contains("--settings", StringComparer.OrdinalIgnoreCase)
+                && PostToRunningInstance(NativeMethods.SettingsRequestMessage))
+            {
+                Logger.Info("第二实例：已把 --settings 转发给在跑的实例");
+                Environment.Exit(0);
+                return;
+            }
             Logger.Warn("Beautiful 已在运行，第二实例退出");
             MessageBox.Show("Beautiful 已在运行", "Beautiful",
                 MessageBoxButton.OK, MessageBoxImage.Information);
@@ -689,22 +699,34 @@ public partial class App : Application
         else DestroyTopBar();
     }
 
+    /// <summary>
+    /// 向在跑的实例发一条注册消息：按标题找它的常驻顶层窗口。
+    /// 先找 Dock 再退回顶栏——Dock 是主 UI，只要应用在跑它必然存在；顶栏是用户可关的设置项，
+    /// 只认顶栏会让"关掉顶栏"的用户失去 <c>--exit</c> 这条通道（安装器就会在文件被占用时硬装）。
+    /// </summary>
+    private static bool PostToRunningInstance(ushort message)
+    {
+        if (message == 0) return false;   // 注册消息号拿不到 = 没有这条通道
+        foreach (var title in new[] { "Beautiful Dock", "Beautiful TopBar" })
+        {
+            var hwnd = NativeMethods.FindWindowByTitle(title);
+            if (hwnd != IntPtr.Zero && NativeMethods.PostMessage(hwnd, message, IntPtr.Zero, IntPtr.Zero))
+                return true;
+        }
+        return false;
+    }
+
+    private static bool RequestExitOfRunningInstance() => PostToRunningInstance(NativeMethods.ExitRequestMessage);
+
+    /// <summary>外部（本进程的另一个窗口 / 第二个 exe 实例）请求干净退出。日志由调用点发，避免两处各写一份。</summary>
+    internal static void ExitFromExternal() => (Current as App)?.ExitApp();
+
+    /// <summary>外部请求打开设置窗口。<see cref="OpenSettings"/> 自己是单例的，重复请求只会激活。</summary>
+    internal static void OpenSettingsFromExternal() => (Current as App)?.OpenSettings();
+
     /// <summary>托盘"退出"：完整清理链路后显式关停（退出路径幂等，_exiting 防重入）。
     /// 清理全程 try/finally：任何一步抛异常都必须走到 Shutdown（T19 QA）——否则 _exiting 卡死、
     /// 后续退出尝试全部被吞；finally 兜底后 OnExit 仍会幂等重放剩余清理。</summary>
-    /// <summary>
-    /// 向在跑的实例发一条"干净退出"信号。顶栏是它必然存在且标题固定的顶层窗口
-    /// （任务栏被隐藏时顶栏就是逃生入口，顶栏在 = 应用在），所以按标题找它。
-    /// </summary>
-    private static bool RequestExitOfRunningInstance()
-    {
-        var message = NativeMethods.ExitRequestMessage;
-        if (message == 0) return false;
-        var hwnd = NativeMethods.FindWindowByTitle("Beautiful TopBar");
-        if (hwnd == IntPtr.Zero) return false;
-        return NativeMethods.PostMessage(hwnd, message, IntPtr.Zero, IntPtr.Zero);
-    }
-
     private void ExitApp()
     {
         if (_exiting) return;

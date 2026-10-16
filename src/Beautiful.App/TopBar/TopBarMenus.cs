@@ -114,7 +114,10 @@ public static class TopBarMenus
             items.Add(new MenuItemView
             {
                 Id = "win:" + captured.Handle,
-                Label = captured.Title,
+                // 标题压短：菜单宽度由最长的一条决定，而 Windows 的窗口标题常是"完整路径 • 工程 - 编辑器"。
+                // 原文进 ToolTip，压窄不丢信息。
+                Label = Beautiful.Core.TopBar.WindowMenuLabel.Compact(captured.Title),
+                ToolTip = captured.Title,
                 Icon = captured.Icon,       // 真实窗口位图图标（无则 HasIcon=false → 回退空列）
                 Glyph = "\uE7C3",           // 无图标时的占位字形（窗口）
                 IsChecked = isActive,

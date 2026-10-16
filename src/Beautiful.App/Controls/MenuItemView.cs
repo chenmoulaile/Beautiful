@@ -29,6 +29,12 @@ public sealed class MenuItemView
     /// <summary>标题文本。</summary>
     public string Label { get; init; } = string.Empty;
 
+    /// <summary>
+    /// 悬停提示。<b>标签被压短时用来承载原文</b>（"窗口"菜单只显文件名，完整路径/标题放这里），
+    /// 这样"变窄"不会变成"丢信息"。null = 不设提示。
+    /// </summary>
+    public string? ToolTip { get; init; }
+
     /// <summary>勾选态：渲染 ✓（强调色）于勾选列；列常驻占位保证标签对齐。</summary>
     public bool IsChecked { get; init; }
 

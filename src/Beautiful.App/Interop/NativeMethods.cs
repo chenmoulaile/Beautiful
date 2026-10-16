@@ -100,8 +100,14 @@ internal static partial class NativeMethods
     public const int WmDisplayChange = 0x007E;
     public const int WmSettingChange = 0x001A;
     public const int WmWindowPosChanged = 0x0047;   // 窗口位置/尺寸/层序已变（条带漂移的检测点）
+    // ShellHook 消息码（shell32 的公开值，抄错不会编译失败，只会静默收不到事件）：
+    // 文档值 HSHELL_ACTIVATED=3 / HSHELL_RUDEAPPACTIVATED=0x8000|3；但本机（Win11 26200）实测
+    // RegisterShellHookWindow 一条 3/0x8003 都不发，激活时到达的是 4 与 0x8004 这一对
+    // （4 在文档里是 HSHELL_LANGUAGE，可见文档码与 shell 实发码在这台系统上并不等价）。
+    // 两组都接，别再"按文档修正"成只剩 3——那会让最小化状态退回 2s 兜底对账的延迟。
     public const uint HshellWindowCreated = 1, HshellWindowDestroyed = 2,
-                      HshellActivated = 4, HshellGetMinRect = 5, HshellRedraw = 6,
+                      HshellActivated = 3, HshellGetMinRect = 5, HshellRedraw = 6,
+                      HshellActivatedCompat = 4, HshellActivatedCompatHigh = 0x8000 | 4,
                       HshellAppCommand = 12;
 
     [DllImport("user32.dll", CharSet = CharSet.Unicode)]
@@ -122,6 +128,17 @@ internal static partial class NativeMethods
 
     /// <summary>本进程的注册消息号（0 = 注册失败，调用方按"没有这条通道"处理）。</summary>
     public static ushort ExitRequestMessage => ExitRequestCached;
+
+    /// <summary>
+    /// "把设置窗口叫出来"的进程间信号。存在的意义是让 <c>Beautiful.exe --settings</c> 在
+    /// **已有实例在跑**时仍然有用：第二实例不再弹"已在运行"的模态框，而是把请求转给在跑的实例。
+    /// </summary>
+    public const string SettingsRequestMessageName = "Beautiful_SettingsRequest";
+
+    private static readonly ushort SettingsRequestCached = RegisterWindowMessage(SettingsRequestMessageName);
+
+    /// <summary>同上，0 = 注册失败。</summary>
+    public static ushort SettingsRequestMessage => SettingsRequestCached;
 
     [DllImport("user32.dll", CharSet = CharSet.Unicode)]
     public static extern ushort RegisterWindowMessage(string message);

@@ -53,7 +53,10 @@ internal static class IconBakeContext
     /// <param name="iconSizeDip">Dock 图标方框边长（DIP，来自设置项）。</param>
     /// <param name="dpiScale">本 Dock 所在显示器的缩放（物理/DIP）。</param>
     /// <param name="treatment">设置项 IconTreatment。</param>
-    public static bool Configure(ThemeDefinition theme, double iconSizeDip, double dpiScale, string? treatment)
+    /// <param name="magnification">Dock 悬停放大的最大倍率（不放大传 1）。图块按它一起放大烘焙，
+    /// 否则 1.8× 放大就是把基础尺寸的位图拉伸——用户看到的"放大起来很水"就是这个。</param>
+    public static bool Configure(ThemeDefinition theme, double iconSizeDip, double dpiScale, string? treatment,
+        double magnification = 1.0)
     {
         var (mask, ratio, shadow, highlight, _) = IconTreatment.Resolve(
             treatment, theme.IconMask, theme.IconMaskRadiusRatio, theme.IconShadow);
@@ -65,7 +68,8 @@ internal static class IconBakeContext
             Mask = mask,
             MaskRadiusRatio = ratio,
             Shadow = shadow,
-            Highlight = highlight
+            Highlight = highlight,
+            Magnification = magnification,
         };
         var canonical = IconTreatment.Canonical(treatment);
 
@@ -77,6 +81,7 @@ internal static class IconBakeContext
         Treatment = canonical;
         Cache.Clear();   // 参数变了旧位图就没有再命中的可能：立刻让路，而不是留在 LRU 里占上限
         Logger.Info($"图标烘焙参数: 主题={theme.Id} 尺寸={spec.IconSizeDip}DIP dpi={spec.Scale:0.##} " +
+                    $"放大上限={spec.MagnificationFactor:0.##}× " +
                     $"图块={spec.TilePx}px 形状={spec.Mask} 半径={spec.RadiusPx}px " +
                     $"投影={(spec.ShadowFits ? $"{spec.ShadowOffsetPx}px/模糊{spec.ShadowBlurPx}px" : "关")} " +
                     $"高光={spec.HighlightPx}px 方式={canonical} → 缓存已清空");

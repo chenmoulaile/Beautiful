@@ -85,6 +85,11 @@ public partial class DockWindow : AcrylicWindow
     private IntPtr _hwnd;
     private uint _appbarMsg;
     private uint _taskbarCreatedMsg;
+
+    /// <summary>安装/卸载器的"干净退出"与第二实例的"--settings 转发"两个注册消息号（0 = 没有这条通道）。
+    /// Dock 是主 UI，应用在跑它就在，所以这两个进程间信号在这里也接一份——顶栏被关掉时不断链。</summary>
+    private readonly uint _exitRequestMsg = NativeMethods.ExitRequestMessage;
+    private readonly uint _settingsRequestMsg = NativeMethods.SettingsRequestMessage;
     private NativeMethods.APPBARDATA _abd;
     private NativeMethods.RECT _screenRect; // **窗口**物理矩形（含顶部放大余量），非 AppBar 预留带——物理光标校验用，见 IsCursorOutsideWindow
     private PhysicalRect _windowTarget;     // 最近一次协商出的目标窗口矩形：shell 重排条带时用它重申落位（见 AssertWindowRect）
@@ -432,8 +437,12 @@ public partial class DockWindow : AcrylicWindow
     /// </summary>
     private void ScheduleIconRebind()
     {
+        // 图块按"放大上限"一起放大烘焙：不放大时传 1，行为与过去完全一致；
+        // 放大开着时按 MaxScale 烘，1.8× 的悬停放大才是从大图向下采样而不是拉伸。
+        var magnification = Surface.ShowMagnification ? Surface.MaxScale : 1.0;
         var changed = IconBakeContext.Configure(ThemeManager.Current, Surface.IconSize,
-                                                CurrentDpiScale(), SettingsService.Current.IconTreatment);
+                                                CurrentDpiScale(), SettingsService.Current.IconTreatment,
+                                                magnification);
         if (changed) ThemeManager.ApplyIconSize(Surface.IconSize, Application.Current);  // 属主可能翻转 → 重落 clip
         if (!changed) return;
 
@@ -746,6 +755,22 @@ public partial class DockWindow : AcrylicWindow
 
     private IntPtr WndProc(IntPtr hwnd, int msg, IntPtr wParam, IntPtr lParam, ref bool handled)
     {
+        // 跨进程信号：--exit 走完整退出链路，--settings（第二实例转发）打开设置窗口。
+        // BeginInvoke 而不是就地执行——钩子跑在消息派发栈里，直接建窗/关窗会把重入面摊到 WPF 内部。
+        if (_exitRequestMsg != 0 && msg == _exitRequestMsg)
+        {
+            handled = true;
+            Logger.Info("收到退出请求（--exit），走完整退出链路");
+            Dispatcher.BeginInvoke(App.ExitFromExternal);
+            return IntPtr.Zero;
+        }
+        if (_settingsRequestMsg != 0 && msg == _settingsRequestMsg)
+        {
+            handled = true;
+            Logger.Info("收到设置窗口请求（第二实例 --settings）");
+            Dispatcher.BeginInvoke(App.OpenSettingsFromExternal);
+            return IntPtr.Zero;
+        }
         if (_appbarMsg != 0 && msg == _appbarMsg)
         {
             handled = true;
@@ -819,6 +844,9 @@ public partial class DockWindow : AcrylicWindow
 
     private void ActivateItem(DockItem item)
     {
+        // 先取"点击发生时用户面对的是谁"——必须排在动作之前，后面的分支会改前台。
+        var front = ForegroundBeforeDockClick();
+        Logger.Info($"Dock 条目点击：{item.Kind} '{item.Label}' 前台=0x{front.ToInt64():X}");
         // 点击 = 取消挂起的预览弹出（brief：clicking cancels the pending show），并收起已在显示的预览。
         CancelPreview();
         switch (item.Kind)
@@ -827,7 +855,7 @@ public partial class DockWindow : AcrylicWindow
                 var wi = item.WindowHandle is { } h
                     ? _tracker.Windows.FirstOrDefault(w => w.Handle == h)
                     : null;
-                if (wi is not null) _tracker.ActivateOrMinimize(wi);
+                if (wi is not null) _tracker.ActivateOrMinimize(wi, front);
                 break;
 
             case DockItemKind.RecycleBin:
@@ -837,6 +865,10 @@ public partial class DockWindow : AcrylicWindow
 
             case DockItemKind.Pinned:
                 if (item.LaunchPath.Length == 0) break;
+                // macOS 语义：点一个**正在跑**的应用图标 = 把它带到前台；它已经在前台 = 隐藏它。
+                // 过去固定项无条件再 Start 一次，于是"点 Dock 图标关不掉窗口"——固定项与运行项
+                // 是两条独立条目，用户点的常常是固定那条，而能隐藏的语义只长在运行项上。
+                if (ToggleOrActivateRunningWindow(item, front)) break;
                 try
                 {
                     Process.Start(new ProcessStartInfo(item.LaunchPath) { UseShellExecute = true });
@@ -851,6 +883,50 @@ public partial class DockWindow : AcrylicWindow
                 ToggleMediaPanel();
                 break;
         }
+    }
+
+    /// <summary>
+    /// 这次点击发生时"用户面对的是哪个窗口"。现前台还是别人的，就照实返回；
+    /// 一旦现前台已经变成 Dock 自己（点条带会把前台换给 Dock），改用跟踪器记下的最后一次外部激活。
+    /// 不这么做的后果就是用户报的那条："点 Dock 图标关不掉窗口"——判"是不是前台"的那一步
+    /// 永远拿到 Dock，最小化分支于是永远走不到。
+    /// </summary>
+    private IntPtr ForegroundBeforeDockClick()
+    {
+        var live = NativeMethods.GetForegroundWindow();
+        if (live != _hwnd) return live;
+        var last = _tracker.LastExternalForeground;
+        return last != IntPtr.Zero ? last : live;
+    }
+
+    /// <summary>
+    /// 固定项点击时先看"这个应用有没有在跑的窗口"：有就按 macOS 语义切换
+    /// （前台→最小化 / 最小化→还原置前 / 其它→置前）并返回 true，调用方就不再启动新实例。
+    /// <para>
+    /// 比对用**进程映像基础名**（<see cref="MostRecentWindowForExe"/> 同一口径），不是整路径相等：
+    /// Win11 的 <c>System32\notepad.exe</c> 只是个桩，真正在跑的镜像在
+    /// <c>Program Files\WindowsApps\Microsoft.WindowsNotepad_...\notepad.exe</c>，按整路径比永远对不上，
+    /// 于是"点固定项隐藏窗口"在最常见的那个应用上失效。两边都先解 <c>.lnk</c> 再取基础名，
+    /// 快捷方式与 Store 应用一并覆盖。解析不出目标（协议类/UWP 启动别名）时返回 false，
+    /// 行为退回"照旧启动"，不会误伤。
+    /// </para>
+    /// </summary>
+    private bool ToggleOrActivateRunningWindow(DockItem item, IntPtr front)
+    {
+        var target = ExeBaseName(ResolveExePath(item.IconSource ?? item.LaunchPath));
+        if (target.Length == 0) return false;
+
+        var mine = _tracker.Windows
+            .Where(w => string.Equals(ExeBaseName(w.ExePath), target, StringComparison.OrdinalIgnoreCase))
+            .ToList();
+        if (mine.Count == 0) return false;
+
+        var pick = mine.FirstOrDefault(w => w.Handle == front)
+                   ?? mine.FirstOrDefault(w => !w.IsMinimized)
+                   ?? mine[0];
+        Logger.Info($"固定项点击 → 切换在跑窗口 {target}（{mine.Count} 个候选）hwnd=0x{pick.Handle.ToInt64():X} 当前最小化={pick.IsMinimized}");
+        _tracker.ActivateOrMinimize(pick, front);
+        return true;
     }
 
     // ---------- 右键菜单：macOS Dock / Windows 跳转列表的真实条目（v3.1） ----------

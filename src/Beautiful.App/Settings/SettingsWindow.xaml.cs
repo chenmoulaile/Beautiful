@@ -1,8 +1,11 @@
 using System.Collections.ObjectModel;
+using System.Reflection;
 using System.Windows;
+using System.Windows.Interop;
 using System.Windows.Media;
 using System.Windows.Threading;
 using Beautiful.App.Dock;
+using Beautiful.App.Interop;
 using Beautiful.App.MediaWidget;
 using Beautiful.App.Services;
 using Beautiful.Core.Settings;
@@ -24,7 +27,8 @@ namespace Beautiful.App.Settings;
 
 /// <summary>
 /// 设置窗口 v2（入口：托盘"设置"/托盘双击/顶栏"设置…"/--settings 命令行；App 侧单例管理）。
-/// 全部改动即时生效并持久化，无"确定/应用"按钮；非模态、非置顶，不遮挡 Dock。
+/// 全部改动即时生效并持久化，无"确定/应用"按钮；非模态，默认可被别的窗口压住，绿点可临时置顶。
+/// 标题栏是自绘的 macOS 三点（关闭/最小化/置顶开关），系统 chrome 已退役，见 XAML 头部注释。
 /// 分组：外观（主题/图标大小/放大强度/倒影/弹跳）· 系统（任务栏策略/顶栏/顶栏时钟四项/自启 + 退出提示）·
 /// 显示器（Dock 与顶栏各自所在显示器，v3 T1）· 窗口切换器（接管开关/样式/全屏直通/应急键说明）·
 /// 媒体与歌词（胶囊/失焦收起/偏移/预览）· 固定应用。
@@ -74,6 +78,17 @@ public partial class SettingsWindow : Window
 
         LoadState();
         _loading = false;
+        VersionLine.Text = $"Beautiful v{ProductVersion()} · 配置与日志在 {AppContext.BaseDirectory}";
+    }
+
+    /// <summary>
+    /// 显示用的版本号：取 InformationalVersion（MSBuild 由 Directory.Build.props 的 &lt;Version&gt; 生成），
+    /// 并砍掉 SourceLink 可能追加的 <c>+提交哈希</c> 后缀——那一串对报障没用，只会占掉整行宽度。
+    /// </summary>
+    private static string ProductVersion()
+    {
+        var v = typeof(App).Assembly.GetCustomAttribute<AssemblyInformationalVersionAttribute>()?.InformationalVersion;
+        return string.IsNullOrWhiteSpace(v) ? "未知" : v.Split('+')[0];
     }
 
     /// <summary>固定应用路径列表（ListBox 绑定；变更即写 dock.json 并触发 Dock 重载）。</summary>
@@ -509,4 +524,35 @@ public partial class SettingsWindow : Window
     }
 
     private void Close_Click(object sender, RoutedEventArgs e) => Close();
+
+    // ---------- 自绘标题栏（macOS 三点）----------
+
+    /// <summary>
+    /// Win11 的圆角策略默认只覆盖"带标题栏的窗口"：WindowStyle=None 后系统会给一个方角窗口，
+    /// 与 macOS 的圆润轮廓直接冲突，所以在这里显式请求 ROUND。走的是 DWM 自己的圆角——
+    /// 客户区内容被 DWM 裁剪，不需要 AllowsTransparency，字体因此仍是次像素渲染。
+    /// 返回值不检查：属性请求失败只是回到方角，不影响任何功能，为它写分支属于噪声。
+    /// </summary>
+    protected override void OnSourceInitialized(EventArgs e)
+    {
+        base.OnSourceInitialized(e);
+        var corner = NativeMethods.DwmwcpRound;
+        NativeMethods.DwmSetWindowAttribute(
+            new WindowInteropHelper(this).Handle,
+            NativeMethods.DwmwaWindowCornerPreference, ref corner, sizeof(int));
+    }
+
+    private void Minimize_Click(object sender, RoutedEventArgs e) => WindowState = WindowState.Minimized;
+
+    /// <summary>
+    /// 绿点 = 置顶开关，不是"最大化"：本窗口 SizeToContent + MaxHeight，最大化只会得到一块
+    /// 居中的窄条，是个没有意义的动作。置顶则有真实用途——Dock 条带与部分全屏窗口会压住设置页，
+    /// 勾选态用 Tag="on" 驱动模板里的状态环（没有可见状态的开关会被当成坏掉的按钮）。
+    /// </summary>
+    private void Zoom_Click(object sender, RoutedEventArgs e)
+    {
+        Topmost = !Topmost;
+        ZoomDot.Tag = Topmost ? "on" : null;
+        ZoomDot.ToolTip = Topmost ? "取消置顶" : "保持置顶";
+    }
 }

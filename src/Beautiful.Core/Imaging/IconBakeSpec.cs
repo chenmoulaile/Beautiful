@@ -78,6 +78,21 @@ public sealed record IconBakeSpec
     public int Supersample { get; init; } = DefaultSupersample;
 
     /// <summary>
+    /// Dock 悬停放大的最大倍率（<c>MaxScale</c>；不放大时为 1）。
+    /// <para>
+    /// 【为什么烘焙尺寸必须乘上它】图块过去只按 <c>IconSizeDip·DpiScale</c> 烘，也就是**静止时**的
+    /// 大小；而放大到 1.8× 时 WPF 是把这张"基础尺寸"的位图**拉伸**到 1.8 倍画出来——
+    /// 用户看到的"放大起来质感很水"就是这个拉伸，不是图标源图不行（源图按 256px 取，分辨率够）。
+    /// 按最大倍率烘，放大过程就变成从大图向下采样，这才是清晰的。
+    /// </para>
+    /// </summary>
+    public double Magnification { get; init; } = 1.0;
+
+    /// <summary>合法化的放大倍率：非有限值或 &lt;1 一律按 1（不放大）处理，上限 4。</summary>
+    public double MagnificationFactor =>
+        double.IsFinite(Magnification) && Magnification > 1.0 ? Math.Min(4.0, Magnification) : 1.0;
+
+    /// <summary>
     /// 合法化后的缩放：NaN/Inf/≤0/超出 [0.25,4] 一律 1.0。
     /// 【为什么不钳到边界值而是回落 1.0】0 会让位图退化成 1px（图标消失），4.5 会把缓存内存放大到
     /// 计划外；1.0 是"看得见的图标 + 可预期的尺寸"，且真实显示器缩放不可能越出 [0.25,4]。
@@ -85,8 +100,12 @@ public sealed record IconBakeSpec
     public double Scale =>
         double.IsFinite(DpiScale) && DpiScale >= MinDpiScale && DpiScale <= MaxDpiScale ? DpiScale : 1.0;
 
-    /// <summary>烘焙位图边长 = 图块物理像素 = round(IconSizeDip·Scale)，恒 ≥1、恒 ≤<see cref="MaxTilePx"/>。</summary>
-    public int TilePx => Math.Clamp((int)Math.Round(Math.Max(1, IconSizeDip) * Scale), 1, MaxTilePx);
+    /// <summary>
+    /// 烘焙位图边长 = 图块物理像素 = <c>round(IconSizeDip·Scale·MagnificationFactor)</c>，恒 ≥1、
+    /// 恒 ≤<see cref="MaxTilePx"/>。乘放大倍率是故意的：见 <see cref="Magnification"/>。
+    /// </summary>
+    public int TilePx => Math.Clamp(
+        (int)Math.Round(Math.Max(1, IconSizeDip) * Scale * MagnificationFactor), 1, MaxTilePx);
 
     /// <summary>钳制后的**期望**超采样倍数（实际用几倍由 <see cref="SupersampleForSource"/> 定）。</summary>
     public int SupersampleFactor => Math.Clamp(Supersample, MinSupersample, MaxSupersample);

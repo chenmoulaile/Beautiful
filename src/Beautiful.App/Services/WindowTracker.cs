@@ -61,7 +61,8 @@ public sealed class WindowItem : INotifyPropertyChanged
 public sealed class WindowTracker : IDisposable
 {
     // 可见性过滤规则已抽到 WindowEligibility（Dock 与切换器共用同一实现，避免两份规则漂移）
-    private const long HshellRudeAppActivated = 0x8004;    // HSHELL_ACTIVATED(4) | HSHELL_HIGHBIT
+    private const long HshellHighBit = 0x8000;    // ShellHook 的"通知型"变体一律带高位
+    private const long HshellRudeAppActivated = HshellHighBit | NativeMethods.HshellActivated;
     private const int SwMinimize = 6, SwRestore = 9;
 
     private readonly Dispatcher _dispatcher;
@@ -72,6 +73,7 @@ public sealed class WindowTracker : IDisposable
 
     private HwndSource? _hookSource;
     private IntPtr _hookHwnd;
+    private IDisposable? _foregroundSubscription;
     private DispatcherTimer? _timer;
     private bool _started;
     private bool _disposed;
@@ -86,6 +88,16 @@ public sealed class WindowTracker : IDisposable
 
     /// <summary>被跟踪的窗口集合。新窗口按枚举（Z）序插入，不随 Z 序实时重排，避免 Dock UI 抖动。</summary>
     public ObservableCollection<WindowItem> Windows => _windows;
+
+    /// <summary>
+    /// 最后一个被激活的**外部**窗口（自己进程的窗口不算，0 = 还没发生过）。
+    /// <para>
+    /// 存在的理由：点 Dock 图标这件事本身会把前台换给 Dock，等到 MouseLeftButtonUp 里再问
+    /// <c>GetForegroundWindow()</c> 拿到的是 Dock，于是"点前台应用的图标 = 隐藏它"永远判不出来。
+    /// 这里记的是"换给 Dock 之前用户面对的是谁"，来源是共享的 EVENT_SYSTEM_FOREGROUND 钩子。
+    /// </para>
+    /// </summary>
+    public IntPtr LastExternalForeground { get; private set; }
 
     /// <summary>
     /// 创建专用隐藏宿主窗口并注册 ShellHook，随后做一次初始 EnumWindows 扫描并启动 2s 兜底对账定时器。
@@ -116,17 +128,33 @@ public sealed class WindowTracker : IDisposable
         _timer.Tick += (_, _) => Reconcile();
         _timer.Start();
 
+        // 前台跟踪走 WinEvent，不走 ShellHook：本机（Win11 26200）实测 RegisterShellHookWindow
+        // 只收到 2/4/6/0x10 这一组码，文档里的 HSHELL_ACTIVATED=3 一条都不发，
+        // 拿它当"用户刚才在哪个窗口里"的依据会永远为空。
+        // 回调里**重查**当前前台而不是用事件参数带来的句柄：OUTOFCONTEXT 钩子在那个参数上
+        // 可以给出 0（顶栏同样是重查口径），照单全收的话这里永远记不下东西。
+        _foregroundSubscription = ForegroundWatcher.Subscribe(_ => RememberForeground());
+
         Reconcile(); // 初始扫描
     }
 
-    /// <summary>前台即该窗口 → 最小化；已最小化 → 还原并置前；否则置前。</summary>
-    public void ActivateOrMinimize(WindowItem item)
+    /// <summary>
+    /// 前台即该窗口 → 最小化；已最小化 → 还原并置前；否则置前。
+    /// <para>
+    /// <paramref name="foregroundHint"/> = "点击发生时用户面对的那个窗口"。Dock 自己会被点击激活，
+    /// 等到 MouseLeftButtonUp 再问 <see cref="NativeMethods.GetForegroundWindow"/> 拿到的常常是 Dock，
+    /// 于是"点前台应用的图标 = 隐藏它"永远判不出来。调用方取 <see cref="LastExternalForeground"/>
+    /// 顶替即可（见 DockWindow.ForegroundBeforeDockClick）。传 null 表示调用方没有这个信息，
+    /// 退回现问前台（原行为）。
+    /// </para>
+    /// </summary>
+    public void ActivateOrMinimize(WindowItem item, IntPtr? foregroundHint = null)
     {
         EnsureUiThread();
         ObjectDisposedException.ThrowIf(_disposed, this);
         var h = item.Handle;
         if (!NativeMethods.IsWindow(h)) return;
-        if (NativeMethods.GetForegroundWindow() == h)
+        if ((foregroundHint ?? NativeMethods.GetForegroundWindow()) == h)
         {
             NativeMethods.ShowWindow(h, SwMinimize);
         }
@@ -165,13 +193,26 @@ public sealed class WindowTracker : IDisposable
                 RemoveWindow(lParam);
                 break;
             case NativeMethods.HshellActivated:
-            case HshellRudeAppActivated: // 全屏切换/最大化激活也以 4|HSHELL_HIGHBIT 形式送达
+            case HshellRudeAppActivated: // 文档值 3 / 0x8003：本机不发，留着以防别的版本发
+            case NativeMethods.HshellActivatedCompat:        // 本机实测的"激活类"事件码
+            case NativeMethods.HshellActivatedCompatHigh:    // 同上，带 HSHELL_HIGHBIT 的变体
+                UpdateStates();
+                break;
             case NativeMethods.HshellGetMinRect:
                 UpdateStates();
                 break;
             // HSHELL_APPCOMMAND(12) 及其余码：忽略
         }
         return IntPtr.Zero;
+    }
+
+    private void RememberForeground()
+    {
+        var hwnd = ForegroundWatcher.Current;
+        if (hwnd == IntPtr.Zero) return;   // 前台丢失：保留上一个，别清空
+        if (NativeMethods.GetWindowThreadProcessId(hwnd, out var pid) == 0) return;
+        if (pid == _ownPid) return;        // 我们自己的窗口（Dock/顶栏/弹层）不改变"用户面对的是谁"
+        LastExternalForeground = hwnd;
     }
 
     private void AddWindow(IntPtr hwnd)
@@ -285,6 +326,8 @@ public sealed class WindowTracker : IDisposable
             _timer.Stop();
             _timer = null;
         }
+        _foregroundSubscription?.Dispose();   // 退订共享 WinEvent 钩子（最后一个订阅者退订时才解绑）
+        _foregroundSubscription = null;
         if (_hookHwnd != IntPtr.Zero)
         {
             NativeMethods.DeregisterShellHookWindow(_hookHwnd); // 必须在销毁 hwnd 之前注销
