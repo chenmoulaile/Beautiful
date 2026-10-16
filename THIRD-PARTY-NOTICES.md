@@ -55,7 +55,15 @@ MIT 许可证原文（各项目的版权与许可声明以其仓库内 LICENSE �
 - **网易云音乐接口**（[music.163.com](https://music.163.com/)）：非官方接口，歌词（含双语翻译）数据来源。仅限个人使用，本项目不对其进行任何商业用途；接口可用性不受本项目控制。
 - **LRCLIB**（[lrclib.net](https://lrclib.net/)）：开放歌词 API，作为歌词兜底来源。
 
-## 5. 华为专有授权字体与图标
+## 5. 算法出处（genie 灯罩曲线）
+
+- **Windhawk mod `macos-minimize-animation`**（作者 Abdullah Masood；其 Modern 引擎由 **Potassiumuncher** 贡献，**MIT** 许可；源码在 <https://github.com/ramensoftware/windhawk-mods> 的 `mods/macos-minimize-animation.wh.cpp`）：本项目 `src/Beautiful.Core/Animation/GenieLamp.cs` 的顶点映射是该 mod 中 `CalculateLampVertexMacOS` 的 **C# 重写**——同一两阶段模型（先把窗口拉长到下缘触到图标，再逐行收窄成"脖子"），并保留那项只在前一阶段起作用的正弦摆动。
+  - **只移植数学，不含任何其代码**：原实现是注入 explorer 进程的 C++ / Direct2D 顶点缓冲；本项目是 WPF 进程内的 `MeshGeometry3D` + `EmissiveMaterial`，没有一行代码相同，也没有引入 Windhawk 本体或其运行时。
+  - 该 mod 同时提供"条带（Classic）"与"网格（Modern）"两种引擎；本项目对应保留 `GenieEngine = strips | mesh` 两个取值（默认 `mesh`）。
+- **Windhawk mod `genie-minimize-animation`**（同仓库，MIT）：仅作为收拢思路的交叉参考，未移植其代码。
+- 口径与本项目一贯做法一致：**借算法与思路，不复制源码**；命名、类型与渲染后端均为自研。
+
+## 6. 华为专有授权字体与图标
 
 **HarmonyOS Sans 字体**与 **HarmonyOS Symbol 图标**版权归华为所有，为华为专有授权资源，不属于任何开源许可证。
 
@@ -63,7 +71,7 @@ MIT 许可证原文（各项目的版权与许可声明以其仓库内 LICENSE �
 - **本项目现状**：当前发布中**未嵌入** HarmonyOS Sans 字体文件或 HarmonyOS Symbol 图标文件，界面通过字体名回退链引用系统已安装字体（未安装时回退默认字体），视觉效果不依赖华为字体资源。
 - **未来若嵌入**：须在发布物中附带华为官方资源页的授权声明，并遵守"随软件分发、不单独分发、不修改字体文件"的条款。
 
-## 6. 商标声明
+## 7. 商标声明
 
 - **Apple 商标**：本项目**未使用** Apple 的商标、名称或徽标。界面中的 "macOS 风格" 仅为设计形态的描述性用语；顶栏 logo 为**自绘原创标记**（主题强调色圆底 + 字母 "B"，见 `TopBarWindow.MakeLogoButton`），不是 Apple 标志。macOS 是本片描述所涉第三方系统的名称，其商标归 Apple Inc. 所有。
 - **HarmonyOS / 鸿蒙**：名称与字体/图标资源版权归华为所有，本项目仅为设计 token 的描述性引用，未嵌入华为资源（见第 5 节）。

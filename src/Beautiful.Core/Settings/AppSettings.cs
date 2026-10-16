@@ -136,6 +136,20 @@ public sealed record AppSettings
     public bool TaskbarGlass { get; init; } = true;
 
     /// <summary>
+    /// genie 的渲染引擎：<c>mesh</c>（默认）= 一张纹理三角网，顶点走 macOS 灯罩曲线，
+    /// 有真正的"脖子"；<c>strips</c> = 水平条带整体缩放，形状差一档但在任何渲染环境下都画得出来。
+    /// <para>
+    /// 留这一条不是怀旧：mesh 走的是 WPF 3D 贴在分层窗口上，这条组合在缺少硬件加速的机器上
+    /// 只能实机看到结果，而"动画变成一块黑卡"比"动画朴素一点"糟得多。用户能一行配置退回去，
+    /// 比等一个版本修复好。
+    /// </para>
+    /// </summary>
+    public string GenieEngine { get; init; } = "mesh";
+
+    /// <summary>合法 genie 引擎标识（小写）。</summary>
+    public static IReadOnlyList<string> KnownGenieEngines { get; } = ["mesh", "strips"];
+
+    /// <summary>
     /// Dock 所在显示器：auto = 启动时光标所在显示器（解析结果按进程粘住，重排不会因鼠标划过别屏而
     /// 让 Dock 跳走）、primary = 主显示器、其余为设置面板列出的十进制序号（1 起）。
     /// </summary>
@@ -222,7 +236,8 @@ public sealed record AppSettings
         MagnificationStrength = Math.Clamp(MagnificationStrength, MinMagnificationStrength, MaxMagnificationStrength),
         DockMonitor = MonitorSelectorOrDefault(DockMonitor),
         TopBarMonitor = MonitorSelectorOrDefault(TopBarMonitor),
-        IconTreatment = Canonical(IconTreatment, "auto", KnownIconTreatments)
+        IconTreatment = Canonical(IconTreatment, "auto", KnownIconTreatments),
+        GenieEngine = Canonical(GenieEngine, "mesh", KnownGenieEngines)
     };
 
     /// <summary>枚举串规范化：null/空白/大小写与首尾空白差异都归一为小写标识；不在白名单内取兜底。</summary>

@@ -37,6 +37,7 @@ namespace Beautiful.App.Animation;
 public sealed class MinimizeAnimator : IDisposable
 {
     private const uint EventSystemMinimizeStart = 0x0016;
+    private const uint EventSystemMinimizeEnd = 0x0017;
     private const uint EventObjectLocationChange = 0x8004;
     private const uint ObjidWindow = 0;
     private const uint WinEventOutOfContext = 0x00000000;
@@ -51,7 +52,8 @@ public sealed class MinimizeAnimator : IDisposable
     /// <summary>收拢后的宽度相对源窗口的比例（≈ Dock 图标宽 / 普通窗口宽）。</summary>
     private const double EndWidthRatio = 0.10;
 
-    private readonly Func<IntPtr, Point?> _dockTarget;
+    /// <summary>Dock 上该窗口图标那一格的物理矩形；null = 这条窗口没进 Dock。</summary>
+    private readonly Func<IntPtr, Rect?> _dockTarget;
     private readonly Dispatcher _dispatcher;
 
     // 委托与钩子句柄都必须留在字段里：回调桩被 GC 的话，原生侧回调就是随机崩溃
@@ -61,12 +63,13 @@ public sealed class MinimizeAnimator : IDisposable
     private IntPtr _locationHook = IntPtr.Zero;
 
     private GhostLayer? _ghost;
+    private GenieMeshGhost? _meshGhost;
     private bool _disabledByEnvironment;
 
     /// <summary>hwnd → 上一次的 (矩形, 是否最大化)。只为识别"从非最大化跳到最大化"那一下。</summary>
     private readonly Dictionary<IntPtr, (RECT Rect, bool Zoomed)> _lastRect = new();
 
-    public MinimizeAnimator(Func<IntPtr, Point?> dockTargetProvider)
+    public MinimizeAnimator(Func<IntPtr, Rect?> dockTargetProvider)
     {
         _dockTarget = dockTargetProvider;
         _dispatcher = Dispatcher.CurrentDispatcher;
@@ -78,8 +81,10 @@ public sealed class MinimizeAnimator : IDisposable
         }
 
         _proc = OnWinEvent;
+        // 一条钩子覆盖 MINIMIZESTART..MINIMIZEEND 这一段：最小化与"从最小化还原"是同一个
+        // 动画的正反两放，分开装两条钩子只会多一份句柄要管
         _minimizeHook = NativeMethods.SetWinEventHook(
-            EventSystemMinimizeStart, EventSystemMinimizeStart, IntPtr.Zero, _proc,
+            EventSystemMinimizeStart, EventSystemMinimizeEnd, IntPtr.Zero, _proc,
             0, 0, WinEventOutOfContext | WinEventSkipOwnProcess);
         _locationHook = NativeMethods.SetWinEventHook(
             EventObjectLocationChange, EventObjectLocationChange, IntPtr.Zero, _proc,
@@ -108,6 +113,13 @@ public sealed class MinimizeAnimator : IDisposable
             if (evt == EventSystemMinimizeStart)
             {
                 _dispatcher.BeginInvoke(() => PlayMinimize(hwnd), DispatcherPriority.Render);
+                return;
+            }
+            if (evt == EventSystemMinimizeEnd)
+            {
+                // 还原方向：此刻窗口已经可见，替身从图标那一行"流出来"长回原尺寸。
+                // 不装这一条的话最小化看着像 mac、点开却瞬间出现，反而更暴露。
+                _dispatcher.BeginInvoke(() => PlayRestore(hwnd), DispatcherPriority.Render);
                 return;
             }
             if (evt == EventObjectLocationChange)
@@ -148,7 +160,7 @@ public sealed class MinimizeAnimator : IDisposable
     /// <summary>最小化：抓一帧盖在原位，再把替身收进该应用在 Dock 上的图标。</summary>
     private void PlayMinimize(IntPtr hwnd)
     {
-        if (!IsRunning || _ghost is not null) return;
+        if (!IsRunning || Busy) return;
         if (NativeMethods.IsIconic(hwnd)) return;   // 已经缩下去了，抓不到画面
 
         var image = WindowCapture.Capture(hwnd);
@@ -156,25 +168,141 @@ public sealed class MinimizeAnimator : IDisposable
         if (!NativeMethods.GetWindowRect(hwnd, out var rect)) return;
 
         var source = ToRect(rect);
-        var target = _dockTarget(hwnd);
-        // 目标点：该应用在 Dock 上的图标中心；找不到就收到条带上沿中央（不是"不做"，
-        // 因为"窗口凭空消失"正是用户抱怨的点，收到条带中央至少给出连续的运动线索）
-        var targetPoint = target ?? new Point((source.Left + source.Right) / 2, source.Bottom + 40);
+        var icon = IconRectFor(source, _dockTarget(hwnd));
+        StartGenie(image, source, icon, MinimizeDurationMs, reverse: false);
+    }
 
-        var scaleX = (double)(targetPoint.X - (source.Left + source.Width / 2)) / source.Width;
-        var scaleY = (double)(targetPoint.Y - source.Top) / source.Height;
-        var endWidth = Math.Clamp(image.PixelWidth > 0 ? 96.0 / image.PixelWidth : EndWidthRatio, 0.04, 0.6);
+    /// <summary>
+    /// 还原方向：窗口此刻已经可见，替身从图标那一行"流出来"长回原尺寸。
+    /// 只装最小化不装还原的话，点开窗口是瞬间出现的，反而把动画衬得更假。
+    /// </summary>
+    private void PlayRestore(IntPtr hwnd)
+    {
+        if (!IsRunning || Busy) return;
+        // 刚还原的窗口需要一点时间把客户区画完，抓太早会得到上一帧或纯色
+        if (!NativeMethods.GetWindowRect(hwnd, out var rect)) return;
+        var source = ToRect(rect);
+        if (source.Width <= 0 || source.Height <= 0) return;
 
-        StartGhost(image, source, MinimizeDurationMs,
-            t => GenieMath.Sample(t, GenieMath.DefaultSlices, GenieMath.DefaultLag,
-                0.5 + scaleX, 1.0 + scaleY, endWidth)
-                .Select(b => (b.Rect, b.Opacity)).ToList());
+        var image = WindowCapture.Capture(hwnd);
+        if (image is null) return;
+        var icon = IconRectFor(source, _dockTarget(hwnd));
+        StartGenie(image, source, icon, MinimizeDurationMs, reverse: true);
+    }
+
+    /// <summary>按设置选引擎：mesh（灯罩三角网，默认）或 strips（条带缩放，兜底）。</summary>
+    private void StartGenie(BitmapSource image, Rect windowRect, Rect iconRect, int durationMs, bool reverse)
+    {
+        if (string.Equals(Services.SettingsService.Current.GenieEngine, "strips", StringComparison.OrdinalIgnoreCase))
+        {
+            StartStripGenie(image, windowRect, iconRect, durationMs, reverse);
+            return;
+        }
+        StartMesh(image, ToLamp(windowRect), ToLamp(iconRect), durationMs, reverse);
+    }
+
+    /// <summary>
+    /// 兜底引擎：把窗口切成水平条带，整体向图标收拢。
+    /// 形状比灯罩网格差一档（没有"脖子"，越靠下的行不会额外多收一些），
+    /// 但它只用 2D 绘制，在任何渲染环境下都画得出来。
+    /// </summary>
+    private void StartStripGenie(BitmapSource image, Rect source, Rect icon, int durationMs, bool reverse)
+    {
+        var scaleX = (icon.X + icon.Width / 2 - (source.Left + source.Width / 2)) / source.Width;
+        var scaleY = (icon.Y - source.Top) / source.Height;
+        var endWidth = Math.Clamp(source.Width > 0 ? icon.Width / source.Width : EndWidthRatio, 0.04, 0.6);
+
+        StartGhost(image, source, durationMs, t =>
+        {
+            var p = reverse ? 1.0 - t : t;
+            return GenieMath.Sample(p, GenieMath.DefaultSlices, GenieMath.DefaultLag,
+                        0.5 + scaleX, 1.0 + scaleY, endWidth)
+                    .Select(b => (b.Rect, b.Opacity)).ToList();
+        });
+    }
+
+    /// <summary>
+    /// 找不到 Dock 条目时的退路：收到条带上沿的中央，宽度取窗口宽的 1/8。
+    /// 不是"不做"——"窗口凭空消失"正是用户抱怨的点，给一条连续的运动线索比什么都不画值钱。
+    /// </summary>
+    private static Rect IconRectFor(Rect source, Rect? dockRect)
+    {
+        if (dockRect is { } d && d.Width > 0) return d;
+        var fallbackWidth = Math.Max(24.0, source.Width / 8.0);
+        return new Rect(
+            source.Left + source.Width / 2 - fallbackWidth / 2,
+            source.Bottom + 40,
+            fallbackWidth, 0);
+    }
+
+    private static LampGeometry ToLamp(Rect r) => new(r.X, r.Y, r.Width, r.Height);
+
+    /// <summary>
+    /// 用纹理网格跑一版 genie。<paramref name="reverse"/> = 还原方向（进度从 1 倒放到 0）。
+    /// </summary>
+    private void StartMesh(BitmapSource image, LampGeometry windowRect, LampGeometry iconRect,
+        int durationMs, bool reverse)
+    {
+        GenieMeshGhost? ghost = null;
+        try
+        {
+            ghost = new GenieMeshGhost(image);
+        }
+        catch (Exception ex) when (ex is InvalidOperationException or OutOfMemoryException)
+        {
+            // 3D 渲染面建不起来（无硬件加速的极端环境等）：这次不动画，别把主流程带崩
+            Logger.Warn($"genie 网格渲染不可用，本次跳过动画：{ex.GetType().Name}");
+            return;
+        }
+
+        _meshGhost = ghost;
+        ghost.Apply(reverse ? 1.0 : 0.0, windowRect, iconRect);
+        ghost.Show();
+        ghost.Place();
+
+        RunClock(durationMs,
+            t => ghost.Apply(reverse ? 1.0 - t : t, windowRect, iconRect),
+            () =>
+            {
+                _meshGhost = null;
+                ghost.Dispose();
+            });
+    }
+
+    /// <summary>vsync 驱动的计时器：进度按真实经过时间算，与帧率无关（裁定：动画必须帧率无关）。</summary>
+    private void RunClock(int durationMs, Action<double> onFrame, Action onDone)
+    {
+        var clock = Stopwatch.StartNew();
+        EventHandler? tick = null;
+        tick = (_, _) =>
+        {
+            try
+            {
+                var t = clock.Elapsed.TotalMilliseconds / durationMs;
+                if (t >= 1.0)
+                {
+                    onFrame(1.0);
+                    CompositionTarget.Rendering -= tick;
+                    onDone();
+                    return;
+                }
+                onFrame(t);
+            }
+            catch (Exception ex)
+            {
+                // 渲染回调抛出去会让整个 UI 线程的渲染停摆：立刻收摊，动画可以没有
+                Logger.Warn($"genie 动画异常终止: {ex.GetType().Name} {ex.Message}");
+                CompositionTarget.Rendering -= tick;
+                onDone();
+            }
+        };
+        CompositionTarget.Rendering += tick;
     }
 
     /// <summary>最大化/还原：替身从旧矩形长到新矩形（单条带，无滞后）。</summary>
     private void PlayZoom(IntPtr hwnd, RECT fromRect, RECT toRect)
     {
-        if (!IsRunning || _ghost is not null) return;
+        if (!IsRunning || Busy) return;
         var image = WindowCapture.Capture(hwnd);
         if (image is null) return;
 
@@ -200,32 +328,7 @@ public sealed class MinimizeAnimator : IDisposable
         _ghost = ghost;
         ghost.Show();
         ghost.Apply(sampler(0));
-
-        var clock = Stopwatch.StartNew();
-        EventHandler? tick = null;
-        tick = (_, _) =>
-        {
-            try
-            {
-                var t = clock.Elapsed.TotalMilliseconds / durationMs;
-                if (t >= 1.0)
-                {
-                    ghost.Apply(sampler(1.0));
-                    CloseGhost();
-                    CompositionTarget.Rendering -= tick;
-                    return;
-                }
-                ghost.Apply(sampler(t));
-            }
-            catch (Exception ex)
-            {
-                // 渲染回调抛出去会让整个 UI 线程的渲染停摆：立刻收摊，动画可以没有
-                Logger.Warn($"最小化动画异常终止: {ex.GetType().Name} {ex.Message}");
-                CompositionTarget.Rendering -= tick;
-                CloseGhost();
-            }
-        };
-        CompositionTarget.Rendering += tick;
+        RunClock(durationMs, t => ghost.Apply(sampler(t)), CloseGhost);
     }
 
     private void CloseGhost()
@@ -237,6 +340,9 @@ public sealed class MinimizeAnimator : IDisposable
         catch (InvalidOperationException) { /* 已被关掉：动画是尽力而为的东西 */ }
     }
 
+    /// <summary>两条动画共用"同一时刻只有一个替身"的闸门：网格与条带谁在跑都算占用。</summary>
+    private bool Busy => _ghost is not null || _meshGhost is not null;
+
     private static Rect ToRect(RECT r) => new(r.Left, r.Top, r.Right - r.Left, r.Bottom - r.Top);
 
     public void Dispose()
@@ -245,6 +351,8 @@ public sealed class MinimizeAnimator : IDisposable
         if (_locationHook != IntPtr.Zero) NativeMethods.UnhookWinEvent(_locationHook);
         _minimizeHook = _locationHook = IntPtr.Zero;
         _proc = null;
+        _meshGhost?.Dispose();
+        _meshGhost = null;
         CloseGhost();
     }
 

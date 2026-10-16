@@ -99,7 +99,7 @@ public partial class App : Application
             {
                 try
                 {
-                    _animator = new Animation.MinimizeAnimator(hwnd => _dock?.IconCenterPhysical(hwnd));
+                    _animator = new Animation.MinimizeAnimator(hwnd => _dock?.IconRectPhysical(hwnd));
                 }
                 catch (Exception ex)
                 {
