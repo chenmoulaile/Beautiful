@@ -122,6 +122,12 @@ public sealed record AppSettings
     public bool MinimizeAnimation { get; init; } = true;
 
     /// <summary>
+    /// 顶栏是否显示"托盘图标区"入口（v3.2）：点开可看到通知区域里被收起的第三方应用图标，
+    /// 点击/右键会转发回图标自己的窗口。关掉只是少一颗按钮，不影响系统托盘本身。
+    /// </summary>
+    public bool ShowTrayInTopBar { get; init; } = true;
+
+    /// <summary>
     /// Dock 所在显示器：auto = 启动时光标所在显示器（解析结果按进程粘住，重排不会因鼠标划过别屏而
     /// 让 Dock 跳走）、primary = 主显示器、其余为设置面板列出的十进制序号（1 起）。
     /// </summary>

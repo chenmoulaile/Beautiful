@@ -112,6 +112,10 @@ public partial class TopBarWindow : AcrylicWindow
     /// <summary>自家音量面板（v3.2）：持有音频端点 COM 引用，关闭时 Shutdown。</summary>
     private FluentPopupHost? _volumeHost;
     private Button? _volumeButton;
+
+    /// <summary>托盘图标面板（v3.2）：服务层持有跨进程读 explorer 的句柄，关闭必须 Dispose。</summary>
+    private FluentPopupHost? _trayHost;
+    private Button? _trayButton;
     private DateTime _controlCenterClosedAt = DateTime.MinValue;
 
     /// <summary>
@@ -532,6 +536,20 @@ public partial class TopBarWindow : AcrylicWindow
         bat.Visibility = Visibility.Collapsed;
         RightHost.Children.Add(bat);
 
+        // 托盘图标区入口（v3.2）：点开自家面板，把通知区域（含"隐藏的图标"）里的第三方图标平铺出来。
+        // 刻意<b>不</b>做"常驻在顶栏上直接排开图标"：经典读取路是从屏幕截图上抠图标，常驻就意味着
+        // 要么持续跨进程读 explorer、要么把 Windows 自己的隐藏区展开来抠——后者会在顶栏上留下
+        // 一次可见的展开动作，与"常驻表面不做实时抓屏"的裁定冲突。点开才读、读一次就停。
+        if (SettingsService.Current.ShowTrayInTopBar)
+        {
+            var (tray, _) = MakeStatusItem("\uE91C", iconFont: true); // Segoe Fluent: 向上飞轮（与 Windows 隐藏区同语义）
+            AutomationProperties.SetName(tray, "托盘图标");
+            tray.ToolTip = "托盘图标：通知区域里被收起的应用";
+            _trayButton = tray;
+            tray.Click += Tray_Click;
+            RightHost.Children.Add(tray);
+        }
+
         // 启动器入口（v3 T7，放大镜字形与搜索语义一致）：放在控制中心<b>左侧</b>而不是最右——
         // 最右一位是"快捷设置"的既有位置（macOS/Win11 都是），新入口不该去抢它，
         // 而验收脚本也是按"控制中心"这个名字点最右一颗的（位置口径不变）。
@@ -825,6 +843,35 @@ public partial class TopBarWindow : AcrylicWindow
         _volumeButton.SetResourceReference(Control.BackgroundProperty, "ThemePanelBackground");
         host.ShowAt(anchor);
         Logger.Info("音量面板已打开");
+    }
+
+    /// <summary>托盘按钮点击：已开即收，否则开托盘图标面板。</summary>
+    private void Tray_Click(object sender, RoutedEventArgs e)
+    {
+        if (_trayHost is { IsLoaded: true }) { _trayHost.Close(); return; }
+        OpenTrayPanel();
+    }
+
+    private void OpenTrayPanel()
+    {
+        if (_trayButton is null) return;
+        var anchor = _trayButton.PointToScreen(new Point(0, _trayButton.ActualHeight));
+        var host = new FluentPopupHost();
+        var panel = new TrayPanel();
+        panel.AttachHost(host);
+        host.Content = panel;
+        host.KeepAliveProbe = () => host.IsActive || host.CursorInInflated(FluentPopupHost.RectInflate);
+        host.Closed += (_, _) =>
+        {
+            _trayHost = null;
+            _trayButton?.ClearValue(Control.BackgroundProperty);
+            panel.Shutdown();          // 释放 OpenProcess/VirtualAllocEx 的句柄（幂等）
+            Logger.Info("托盘图标面板已关闭");
+        };
+        _trayHost = host;
+        _trayButton.SetResourceReference(Control.BackgroundProperty, "ThemePanelBackground");
+        host.ShowAt(anchor);
+        Logger.Info("托盘图标面板已打开");
     }
 
     private void OpenControlCenter()
