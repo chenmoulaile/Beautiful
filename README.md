@@ -109,6 +109,35 @@ v3.6 的 Setup 装到你机器上（`C:\Users\chenk\AppData\Local\Programs\Beaut
 | 放大清晰度 | `图标烘焙参数: 主题=MacOS 尺寸=48DIP dpi=2 放大上限=1.8× 图块=173px` |
 | 点 Dock 图标隐藏窗口 | 你自己在 3.5.0 上的点击日志已经出现 `窗口切换：最小化`×3 / `还原`×3，抓帧 `层=PrintWindow`×10 + `层=屏幕`×5 |
 
+## v3.8 变更（第四条线：Windows 原生美化）
+
+用户一句话点破的缺口："好像只有 mac os linux 和 鸿蒙三个而已呢，windows 版的美化并没有"。
+v3.7 之前"美化 Windows"这件事确实是散的——玻璃壳、托盘、控制中心各干一段，但**主题只有三套，
+没有一套是照着 Windows 自己画的**。这一轮把第四条线立起来，并把 TaskbarLyrics（MIT）里能复用的
+无依赖策略并进来。
+
+| 项 | 做法与证据 |
+| --- | --- |
+| **第四主题 Windows 11** | `ThemeDefinition.Windows()` + `Themes/Windows.xaml`：深色 Mica 底 `#F02B2B2B`、8px 圆角、**图标不加遮罩**（Win11 的图标就是原样方图，套 squircle  mask 一眼假）、`MaxScale=1.0` 无悬停放大、运行指示改成"图标下方居中短横线"。**禁模糊是刻意的**：Win11 深色任务栏是一层接近实色的 Mica，不是 macOS 那种透出桌面轮廓的亚克力，做成半透明模糊反而不像它 |
+| **主题清单改成一处数据源** | 三处 UI（托盘右键子菜单、控制中心主题砖、设置页主题行）此前各自硬列三套主题，加第四套要改三处且必然漏。现在全部从 `QuickSettings.Themes` 生成；设置页那行原本是 `sender == X ? "a" : …` 的三元链，换成每个 RadioButton 自带 `Tag` 主题 id |
+| **切到 Windows 主题时抬升任务栏策略** | `App.ApplyTheme`：策略为 `hide`（任务栏整窗移出屏幕）时抬到 `autohide`——原生任务栏都不在场，贴在它上面的增强层就没有落点。抬升会写日志，不是静默改用户设置 |
+| **全屏避让（玻璃壳）** | 移植 `SmartTopmostPolicy` 的判定为 Core 纯函数 `FullscreenAvoidance`（几何比较与资格条件全在 Core，可单测），App 侧只留 `FullscreenProbe` 取值。玻璃壳此前**无条件 `Topmost=true`**：那是一条用户关不掉、又不属于任何应用的横线，会盖在全屏游戏与 F11 视频上。现在"有窗口把整块屏四条边都盖住"就落到它下面，屏空着就把置顶施加回去 |
+| **两处"全屏"判据的收口** | 切换器的 `IsExclusiveFullscreen` 与装饰层的让位判据保守方向相反（前者错判=Alt+Tab 还给系统一次，后者错判=美化层凭空消失），所以**判据不合并、几何合并**：那条"四条边盖住显示器"的比较统一走 `FullscreenAvoidance.CoversMonitor` |
+| **单测** | `FullscreenAvoidanceTests` 28 条：四边各差 1px 就不算盖住、副屏负坐标、显示器矩形非法、五种资格条件（含 cloak）、让位对象换人、"浮着每轮重施 / 让位只做一次"。全库 Core 单测 **759 通过**（上轮 731），构建 **0 警告 0 错误** |
+
+### 真机取证（`.tools\zorder-probe`，跑的就是生产代码）
+
+只读取证工具，全程不激活、不移动、不关闭任何窗口（`NativeMethods` 是 internal，工具自己声明取样的
+P/Invoke，不为取证去放宽生产可见性）：
+
+| 观测 | 数值 |
+| --- | --- |
+| 任务栏与显示器 | 任务栏 `0,1824,2880,1920`（2880×96px），显示器 `0,0,2880,1920` @缩放 2，`IsDecoratable=True Edge=Bottom` |
+| 最大化的窗口会不会误触发 | 实测最大化的 Chrome：DWM 扩展边框 `0,0,2880,1824`（正好等于工作区），`GetWindowRect` `−13,−13,2893,1837`（外扩一圈不可见缩放边）→ `CoversMonitor=False`。**这就是"最大化不触发让位"的实机依据**，也是取值必须用 DWM 矩形而不是窗口矩形的原因 |
+| 必须靠 cloak 判据的那个窗口 | `TextInputHost.exe` 的 `Windows.UI.Core.CoreWindow`：`IsWindowVisible=true`、矩形 `0,0,2880,1920` 正好铺满、`DWMWA_CLOAKED=2`。全量体检 21 个可见顶层窗口中，铺满整屏的只有它和 `Progman`，分别被 cloak 与 shell 类名挡掉 → **会真的让位的 = 0** |
+| 为什么不按类名拉黑 `Windows.UI.Core.CoreWindow` | 同一个类名既属于输入法宿主（该排除）也属于 UWP 全屏游戏（该让位）；按类名一刀切必然误伤一边，按 `cloaked` 判则两边都对 |
+| 尚未做实机触发的一半 | "出现真全屏应用时装饰层确实落下"这一方向需要一个占满屏幕的全屏程序，会在验证期间挡住正在使用的机器 → 未触发；该方向由单测与上面那组排除性取证共同覆盖 |
+
 ## 不同分辨率、DPI 与多屏
 
 几何的**唯一来源**是"这条带实际落在哪块屏"，不是主屏尺寸：
@@ -155,11 +184,12 @@ v3.6 的 Setup 装到你机器上（`C:\Users\chenk\AppData\Local\Programs\Beaut
 - **常驻表面（顶栏、Dock）不做实时抓屏，也不向系统要任何材质**：它们本来就画在屏幕上，实时重抓会把**自己的像素**抓进背板（鬼影），而为了抓屏先隐藏一帧就是可见的闪烁。顶栏是三层自绘底（tint + 顶部内高光 + 下缘亮边），Dock 是 `ThemeDockBackground` + 1px 亮边，**这就是唯一可见底**；条带里面板之外的像素恒为真透明（分层窗口未绘制区，既点得穿也看得见桌面）。抓屏路径只给"显示一次"的瞬态表面（切换器 / 菜单弹层 / 媒体面板）
 - **v2 的"系统背板协商"与 v3.0.0 的"旧亚克力增强"都已从渲染路径删除**：`DWMWA_SYSTEMBACKDROP_TYPE(38)`（Mica/Acrylic）与未公开的 `DWMWA_MICA_EFFECT(1029)` 不再调用——`hr==0` 只证明属性被接受，不证明屏幕上真糊了，协商结果在真机上会骗人。v3.1 把 `SetWindowCompositionAttribute(ACCENT_ENABLE_ACRYLICBLURBEHIND)` 也一并删掉：Win11 24H2/25H2 上它已经不模糊，而是把 accent 的 `GradientColor`（我们传的主题 tint）**平铺满整个窗口矩形**，Dock 的窗口矩形是全显示器宽 ×（面板 + 放大余量），于是用户真机看到屏幕底边一条全宽深色带并遮挡后面窗口的下一行。现在代码里只剩一种 accent 状态可写（`Disabled`），用途是把老版本留在窗口上的状态清掉一次（`AcrylicWindow.ClearLegacyAccent`）。保留的系统侧调用只剩悬停预览那个**纯 Win32 宿主**窗口的两项：`DWMWA_WINDOW_CORNER_PREFERENCE(33)` 圆角，与 `DwmExtendFrameIntoClientArea(-1)` 玻璃边距——缩略图由 DWM 合成，只在玻璃像素上显形，缺了它就是"HRESULT 全 0 但屏上一片黑"（该项豁免只给这个窗口，任何 WPF 表面依旧禁止）
 
-### 三套主题（默认鸿蒙）
+### 四套主题（默认鸿蒙）
 
 - **鸿蒙**：深色毛玻璃胶囊、squircle（超椭圆）图标、#0A59F7 强调色
 - **macOS**：放大场 + 倒影（可开）
 - **Linux GNOME**：实底左条布局
+- **Windows 11**（v3.8）：深色 Mica 实底、8px 圆角、图标不遮罩、无悬停放大、运行指示为图标下方居中短横线、`Segoe UI Variable`。这套是"照着 Windows 自己画"的，所以它同时是任务栏增强层（玻璃壳／歌词条）的宿主外观——那些层贴着原生任务栏，需要原生任务栏在场，切进来时策略从 `hide` 抬到 `autohide`
 
 ### 原生任务栏接管（三档策略，默认隐藏）
 
@@ -293,6 +323,7 @@ dotnet publish src/Beautiful.App -c Release -r win-x64 --self-contained true -p:
      替身抓帧对 GPU/DirectComposition 窗口可能整幅纯色，此时判为不可用并**不做动画**（判据是 5×4 取样点全同＝纯色）。
    - **WiFi/音量面板**：profile XML、信号档位、排序、加密方式判定都有单测。真机日志已出现 `背板=抓屏模糊 面板=(1833,28)-(2573,292) …` + `WiFi 面板已打开`（面板打开与抓屏背板这条链在实机走通），但**实际扫描到的网络列表、连接结果与端点友好名仍未验证**。
    - **玻璃壳**：几何与"该不该画"有单测；装饰效果、以及与第三方任务栏工具共存时的表现**未验证**。
+17. **全屏避让只做在"贴着原生任务栏"的那一层**：v3.8 的让位判据目前挂在玻璃壳上，**Dock 与顶栏仍是无条件 `Topmost`**——它们注册了 AppBar，但置顶带照样会压在别人的全屏内容上。没一并接的实测理由：这两处是产品主体，改错一帧就是"整个 Dock 不见了"，而验证要起一个真占满屏幕的程序。另外"出现真全屏应用 → 装饰层确实落下"这半个方向在本机**未做实机触发**（取证期间不能占用户的屏）；已实测的是排除性那一半——最大化窗口不触发、`TextInputHost` 与 `Progman` 两个铺满屏的常驻窗口都被挡掉、体检 21 个可见窗口里 0 个会触发让位。
 
 ### 未实现（有意延后）
 
@@ -305,7 +336,12 @@ dotnet publish src/Beautiful.App -c Release -r win-x64 --self-contained true -p:
 - **托盘图标常驻排在顶栏上**（v3.2 只做"点开才读"的面板）：经典读取路是从屏幕截图上抠图标，常驻要么持续跨进程读 explorer，要么把 Windows 自己的隐藏区展开来抠——后者会在顶栏留下一次可见的展开动作，与"常驻表面不做实时抓屏"的裁定冲突
 - **玻璃壳的运行指示条**（v3.2）：要持续跟踪原生任务栏按钮的几何，Win11 24H2 只在 UIA 里暴露这些矩形，且随角标/语言/图标增减实时变动。做不到稳定就不做，不画一条会画歪的线
 - **逐应用混音器**（v3.2 音量面板只做主音量与静音）：`IAudioSessionManager2` 那一套是另一个量级的会话枚举，本版没做，面板里给的是"系统声音设置…"这条明确出路
-- 控制中心的**屏幕亮度**：需要 `WmiMonitorBrightness` 系 WMI 类（.NET 侧要额外引 `System.Management` 包，本仓库 src 侧目前零第三方包），且无背光硬件的机器（虚拟机/台式机）上只能永远停在"置灰"形态——按"不放死滑杆"的裁定整项不做，音量与网络/电量维持原样
+- 逐应用混音器（v3.2 音量面板只做主音量与静音）：`IAudioSessionManager2` 那一套是另一个量级的会话枚举，本版没做，面板里给的是"系统声音设置…"这条明确出路
+
+> 本清单里此前写着"控制中心的**屏幕亮度**不做"，v3.7 已实现并从这条移走：走 `WbemScripting.SWbemLocator`
+> 的 COM 自动化 + C# `dynamic`（`root\wmi` 的 `WmiMonitorBrightness` / `WmiMonitorBrightnessMethods`），
+> 因此**没有**引入 `System.Management` 包，src 侧仍是零第三方依赖；读不到背光硬件时整行置灰并写中文原因，
+> 不给一条死的滑杆。
 
 ## 许可证
 
@@ -324,6 +360,7 @@ dotnet publish src/Beautiful.App -c Release -r win-x64 --self-contained true -p:
 | [wwh1004/NeteaseCloudMusicApi](https://github.com/wwh1004/NeteaseCloudMusicApi) | MIT | 网易云歌词接口端点用法 |
 | [tranxuanthang/lrclib](https://github.com/tranxuanthang/lrclib) | MIT | LRCLIB 开放 API 协议 |
 | [stianhoiland/cmdtab](https://github.com/stianhoiland/cmdtab) | MIT | Alt+Tab 拦截机制参考（`AltTabHook.cs` 就地标注） |
+| [ANYNC/TaskbarLyrics](https://github.com/ANYNC/TaskbarLyrics) | MIT | 全屏避让的 Z 序判定（`Core/Layout/FullscreenAvoidance.cs` 改写自其 `SmartTopmostPolicy`，详见 THIRD-PARTY-NOTICES 第 6 节）；其 WebView2/EF Core/OpenCC 栈一律未引入 |
 | [dososo/HarmonyOS-Design](https://github.com/dososo/HarmonyOS-Design) | Apache-2.0 | 鸿蒙主题设计 token |
 
 以下 GPL/AGPL 项目仅借鉴思路与行为参照，**未复制任何代码**：

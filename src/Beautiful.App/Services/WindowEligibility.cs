@@ -2,13 +2,16 @@ using System;
 using System.Runtime.InteropServices;
 using System.Text;
 using Beautiful.App.Interop;
+using Beautiful.Core.Layout;
 
 namespace Beautiful.App.Services;
 
 /// <summary>
 /// 顶层窗口资格判定与窗口探测的**唯一实现**（v1 WindowTracker 的规则原样抽出，改为共享而非复制）。
 /// Dock（WindowTracker）与切换器（SwitcherService）必须使用同一套可见性规则，否则两处列表会各自漂移
-/// （Dock 里存在的窗口在切换器里消失，或反之）。全屏判定同样集中在这里，供 AltTabHook 直通策略复用。
+/// （Dock 里存在的窗口在切换器里消失，或反之）。切换器那条"无边框全屏"直通判据同样集中在这里
+/// （几何比较共用 <see cref="FullscreenAvoidance.CoversMonitor"/>；装饰层的让位判据是另一套，
+/// 两者为什么不能合并见 <see cref="IsExclusiveFullscreen"/> 的注释）。
 /// </summary>
 internal static class WindowEligibility
 {
@@ -75,6 +78,14 @@ internal static class WindowEligibility
     /// 特意不用 DWM 的 extended frame bounds：常规最大化窗口虽然 IsZoomed，但带标题栏已被排除；
     /// 覆盖整屏且无标题栏的组合，实际只出现在 borderless/exclusive 全屏应用上。
     /// 误判代价是"这一次 Alt+Tab 交给系统"（保守方向），比在反作弊游戏中吞掉按键安全得多。
+    /// <para>
+    /// 【与 <see cref="FullscreenProbe"/> 的分工，别当成重复代码】两处都在判"全屏"，但保守方向相反，
+    /// 所以判据不能合并：这里错判的代价是"Alt+Tab 还给系统一次"，玻璃壳错判的代价是"美化层凭空消失"。
+    /// 于是这里额外要"无标题栏"这一条硬条件、且不查 cloaked（切换器不在乎谁铺满屏，只在乎要不要抢键）；
+    /// 那边用 DWM 可见像素 + cloak/进程/shell 三重资格。
+    /// **唯一共用的是那条"四条边都盖住显示器"的几何**——收口到 <see cref="FullscreenAvoidance.CoversMonitor"/>，
+    /// 免得两份 tolerance 各写各的。
+    /// </para>
     /// </summary>
     public static bool IsExclusiveFullscreen(IntPtr hwnd)
     {
@@ -99,7 +110,9 @@ internal static class WindowEligibility
             if (!NativeMethods.GetMonitorInfo(mon, ref mi)) return false;
 
             var m = mi.rcMonitor;
-            return r.Left <= m.Left && r.Top <= m.Top && r.Right >= m.Right && r.Bottom >= m.Bottom;
+            return FullscreenAvoidance.CoversMonitor(
+                new PhysicalRect(r.Left, r.Top, r.Right, r.Bottom),
+                new PhysicalRect(m.Left, m.Top, m.Right, m.Bottom));
         }
         catch
         {

@@ -196,6 +196,10 @@ internal static partial class NativeMethods
     public static extern bool SetWindowPos(IntPtr hWnd, IntPtr after, int x, int y, int cx, int cy, uint flags);
 
     public const uint SwpNosize = 0x0001;
+    // 纯 Z 序调整（全屏避让）用得上这一组：只动插位，尺寸/位置/焦点一律不碰。
+    // SWP_ASYNCWINDOWPOS(0x0200)：调用线程与窗口属主线程不同时，不要为等窗口重绘而阻塞——
+    // 避让是 1s 轮询里的顺带动作，卡住一个 tick 会让整条装饰链路跟着抖。
+    public const uint SwpNomove = 0x0002, SwpAsyncwindowpos = 0x0200;
 
     // 异步键盘状态（切换面板防卡死看门狗用）：最高位为 1 表示该键此刻物理按下。
     [DllImport("user32.dll")]
@@ -340,6 +344,25 @@ internal static partial class NativeMethods
     [DllImport("dwmapi.dll")]
     public static extern int DwmSetWindowAttribute(IntPtr hwnd, int attr, ref int pvAttribute, int cbAttribute);
 
+    // ---------- 全屏避让取值（v3.8，见 Core/Layout/FullscreenAvoidance.cs）----------
+    // DWMWA_EXTENDED_FRAME_BOUNDS(9)：窗口的**可见像素**矩形。判定"有没有盖住整块屏"只能用这个，
+    // 不能用 GetWindowRect——有边框窗口的外扩一圈不可见缩放边会污染判据。本机实测（2880×1920@200%，
+    // 最大化的 Chrome）：DWM 报 0,0,2880,1824 即工作区，GetWindowRect 报 -13,-13,2893,1837。
+    // 名字与上面那个 int 重载**刻意不同**（而不是重载同名）：两处调用点都用 `out var`，同名重载在
+    // 类型推断下直接 CS0121 二义（第一次尝试即编译失败，WindowEligibility 也被牵连）。
+    public const int DwmwaExtendedFrameBounds = 9;
+
+    [DllImport("dwmapi.dll", EntryPoint = "DwmGetWindowAttribute")]
+    public static extern int DwmGetRectAttribute(IntPtr hwnd, int attr, out RECT value, int size);
+
+    // "前台窗口是不是 shell 自己"：GetAncestor(GA_ROOT=2) 把子窗口归到根，再与桌面/外壳根句柄比。
+    // 桌面（Progman/WorkerW）本来就铺满屏幕，把它当让位对象等于"没有别的窗口时装饰层永久消失"。
+    public const int GaRoot = 2;
+
+    [DllImport("user32.dll")] public static extern IntPtr GetDesktopWindow();
+    [DllImport("user32.dll")] public static extern IntPtr GetShellWindow();
+    [DllImport("user32.dll")] public static extern IntPtr GetAncestor(IntPtr hWnd, uint flags);
+
     // ---------- DWM 玻璃边距（v3.1 唯一调用点：Preview/ThumbnailPreview.cs 的缩略图宿主）----------
     // 【为什么只有这一个窗口例外】v3 把 DwmExtendFrameIntoClientArea 整体退役是对的：真机取证证明
     // "非分层 WPF 窗口 + 玻璃层 + 半透明内容"并不会把客户端 alpha 与系统材质合成（Alt+Tab 面板画成
@@ -451,7 +474,11 @@ internal static partial class NativeMethods
     // ShowWindow nCmdShow：SW_SHOWNOACTIVATE=4（显示但不夺焦；SW_HIDE=0 已在上方"窗口与消息"段定义）。
     public const int SwShowNoActivate = 4;
     // SetWindowPos 的 hwndInsertAfter：HWND_TOPMOST=-1（预览浮于其他窗口之上，配合 SWP_NOACTIVATE 不抢焦点）。
+    // 第二个消费点是 v3.8 的全屏避让（Services/TaskbarGlassOverlay.cs），它还会用到
+    // HWND_NOTOPMOST=-2：取消置顶、把窗口交回普通层。两者都是**状态位**而不是"插到某个句柄后面"，
+    // 避让时我们更常用后者——直接插在全屏窗口之下，比先脱离置顶再排队更稳。
     public static readonly IntPtr HwndTopmost = new(-1);
+    public static readonly IntPtr HwndNotopmost = new(-2);
 
     public const uint WsPopup = 0x8000_0000, WsVisible = 0x1000_0000;
     // WsExToolwindow(0x80) 已在上方"窗口与消息"段以 long 形式声明（供 WindowEligibility 与 long

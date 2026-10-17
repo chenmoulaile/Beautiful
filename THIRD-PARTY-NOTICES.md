@@ -63,7 +63,15 @@ MIT 许可证原文（各项目的版权与许可声明以其仓库内 LICENSE �
 - **Windhawk mod `genie-minimize-animation`**（同仓库，MIT）：仅作为收拢思路的交叉参考，未移植其代码。
 - 口径与本项目一贯做法一致：**借算法与思路，不复制源码**；命名、类型与渲染后端均为自研。
 
-## 6. 华为专有授权字体与图标
+## 6. 算法出处（全屏避让的 Z 序判定）
+
+- **TaskbarLyrics**（作者 **ANYNC**，**MIT** 许可，版本 1.7.4，<https://github.com/ANYNC/TaskbarLyrics>）：本项目 `src/Beautiful.Core/Layout/FullscreenAvoidance.cs` 的判定规则改写自其 `TaskbarLyrics.App/SmartTopmostPolicy.cs` ——同一套"前台窗口把整块显示器四条边都盖住才让位"的几何比较、同一组前台窗口资格条件（可见 / 未最小化 / 非本进程 / 非 shell），以及"该浮着时每轮重施置顶、该让位时只施加一次"的下发节流。
+  - **改写而非复制**：全部改用本项目的 `PhysicalRect` 与命名（`KeepTopmost` / `NeedsReassert`），未复制其源码文本；Win32 取值层 `src/Beautiful.App/Interop/FullscreenProbe.cs` 参考其 `SmartTopmostWindowProbe.cs` 的取值顺序（先 `DWMWA_EXTENDED_FRAME_BOUNDS`、失败才回退 `GetWindowRect`）。
+  - **本项目新增的判据**：`DWMWA_CLOAKED != 0` 一律不作为让位对象。这是本机取证得出的必要修正——`TextInputHost.exe`（输入法/表情面板宿主）的 `Windows.UI.Core.CoreWindow` 常驻、`IsWindowVisible=true`、矩形正好铺满整块 2880×1920，只有 cloak 标志能把它和**同一个类名**的 UWP 全屏游戏区分开；按类名拉黑必然误伤后者。
+  - **未采用的部分**：其 WebView2 歌词渲染、WPF-UI 依赖、EF Core + SQLite 曲库、OpenCC 繁简转换、Lyricify 匹配栈均未引入——本项目保持 src 侧零第三方 NuGet 包。后续任务栏歌词条只复用它的**无依赖纯策略**（布局度量、逐字时间轴外推、频谱采集判定），逐条在此登记。
+  - 其 `LICENSE`（MIT）要求以"复制 substantial 部分"为条件保留版权声明，本节即该声明；本项目仓库不携带其源码副本。
+
+## 7. 华为专有授权字体与图标
 
 **HarmonyOS Sans 字体**与 **HarmonyOS Symbol 图标**版权归华为所有，为华为专有授权资源，不属于任何开源许可证。
 
@@ -71,10 +79,11 @@ MIT 许可证原文（各项目的版权与许可声明以其仓库内 LICENSE �
 - **本项目现状**：当前发布中**未嵌入** HarmonyOS Sans 字体文件或 HarmonyOS Symbol 图标文件，界面通过字体名回退链引用系统已安装字体（未安装时回退默认字体），视觉效果不依赖华为字体资源。
 - **未来若嵌入**：须在发布物中附带华为官方资源页的授权声明，并遵守"随软件分发、不单独分发、不修改字体文件"的条款。
 
-## 7. 商标声明
+## 8. 商标声明
 
 - **Apple 商标**：本项目**未使用** Apple 的商标、名称或徽标。界面中的 "macOS 风格" 仅为设计形态的描述性用语；顶栏 logo 为**自绘原创标记**（主题强调色圆底 + 字母 "B"，见 `TopBarWindow.MakeLogoButton`），不是 Apple 标志。macOS 是本片描述所涉第三方系统的名称，其商标归 Apple Inc. 所有。
-- **HarmonyOS / 鸿蒙**：名称与字体/图标资源版权归华为所有，本项目仅为设计 token 的描述性引用，未嵌入华为资源（见第 5 节）。
+- **HarmonyOS / 鸿蒙**：名称与字体/图标资源版权归华为所有，本项目仅为设计 token 的描述性引用，未嵌入华为资源（见第 7 节）。
+- **Windows / Microsoft**：本项目 v3.8 新增的 "Windows 11" 主题只是**自绘主题参数**（配色、圆角、图标尺寸、指示条形态）对系统观感的描述性模仿——不使用任何微软的商标、徽标、图标文件或系统资源，主题字典由本项目自己绘制。Windows 是本节描述所涉第三方系统的名称，其商标归 Microsoft Corporation 所有。
 
 ---
 

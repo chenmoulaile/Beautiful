@@ -27,6 +27,12 @@ namespace Beautiful.App.Services;
 /// 被拖到别的边、explorer 重启）。这些没有一个能靠单条 WinEvent 覆盖全，而一次
 /// <c>GetWindowRect</c> 的成本可以忽略。轮询只做"变了才动"，不变时零副作用。
 /// </para>
+/// <para>
+/// 【全屏避让（v3.8）】置顶是一次"霸占"：不加约束地浮着，就会盖在全屏游戏与 F11 视频之上——
+/// 那是一条用户关不掉、又不属于任何应用的横线。每轮多读一次前台窗口（<see cref="FullscreenProbe"/>，
+/// 纯查表式 API），由 <see cref="FullscreenAvoidance"/> 裁定"有窗口盖住整块屏就落到它下面"。
+/// 最大化窗口不触发（它只占工作区，够不到任务栏那一条），所以日常用机不受影响。
+/// </para>
 /// </summary>
 public sealed class TaskbarGlassOverlay : IDisposable
 {
@@ -41,6 +47,7 @@ public sealed class TaskbarGlassOverlay : IDisposable
 
     private bool _lastVisible;
     private PhysicalRect _lastBar = new(0, 0, 0, 0);
+    private OverlayZOrder? _lastZOrder;
     private bool _disposed;
 
     public TaskbarGlassOverlay()
@@ -145,6 +152,47 @@ public sealed class TaskbarGlassOverlay : IDisposable
             _window.Show();
             _lastVisible = true;
         }
+
+        ApplyZOrderAgainstFullscreen(monitor);
+    }
+
+    /// <summary>
+    /// 每轮问一次"这块屏被谁盖住了"，据此决定玻璃壳浮着还是落到那个窗口之下。
+    /// <para>
+    /// 【为什么置顶要每轮重施、让位只做一次】见 <see cref="FullscreenAvoidance.NeedsReassert"/>：
+    /// 置顶是会被别人抢走的状态，不重施就是用户口中的"美化层不见了"；而让位状态下反复插位会跟
+    /// 全屏窗口抢 Z 序。所以这里"每轮调用"不等于"每轮 SetWindowPos"。
+    /// </para>
+    /// <para>
+    /// 【先改 WPF 的 <c>Topmost</c> 再自己 <c>SetWindowPos</c>】只调 Win32 而不改属性，WPF 仍记着
+    /// "我置顶"，下一次它自己维护 Z 序时（ShowActivated/InvalidateVisual 路径）会把我们顶回去。
+    /// </para>
+    /// </summary>
+    private void ApplyZOrderAgainstFullscreen(PhysicalRect monitor)
+    {
+        var decision = FullscreenAvoidance.Evaluate(monitor, FullscreenProbe.Read());
+        if (!FullscreenAvoidance.NeedsReassert(_lastZOrder, decision)) return;
+
+        var hwnd = new WindowInteropHelper(_window).Handle;
+        if (hwnd == IntPtr.Zero) return;
+
+        _window.Topmost = decision.KeepTopmost;
+        var insertAfter = decision.KeepTopmost ? HwndTopmost
+                        : decision.PlaceAfter != IntPtr.Zero ? decision.PlaceAfter
+                        : HwndNotopmost;
+
+        // 只有裁定翻转才写日志：浮着状态下每秒都要重施置顶（那是 NeedsReassert 的裁定），
+        // 跟着刷就会把日志冲走——而"让位/恢复"这两行正是真机取证要看的唯一证据。
+        var flipped = _lastZOrder is null || _lastZOrder.Value.KeepTopmost != decision.KeepTopmost;
+        if (SetWindowPos(hwnd, insertAfter, 0, 0, 0, 0,
+                SwpNomove | SwpNosize | SwpNoactivate | SwpAsyncwindowpos))
+        {
+            _lastZOrder = decision;
+            if (flipped)
+                Logger.Info(decision.KeepTopmost
+                    ? $"玻璃壳：无全屏遮挡，施加置顶（任务栏 {monitor.Width}x{monitor.Height}）"
+                    : $"玻璃壳：让位于全屏窗口 0x{decision.PlaceAfter.ToInt64():X}");
+        }
     }
 
     private GlassEdge _edge;
@@ -202,6 +250,9 @@ public sealed class TaskbarGlassOverlay : IDisposable
     {
         if (!_lastVisible) return;
         _lastVisible = false;
+        // 让位状态作废：重新显示时第一件事必须是把置顶施加回去，否则会出现
+        // "上一次让给某个全屏窗口、这一次那窗口早没了、装饰层却一直沉在桌面下"。
+        _lastZOrder = null;
         try { _window.Hide(); }
         catch (InvalidOperationException) { /* 窗口还没建好：本来就没显示 */ }
     }
