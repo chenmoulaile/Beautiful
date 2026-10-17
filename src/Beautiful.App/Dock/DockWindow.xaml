@@ -75,6 +75,14 @@
                 <Rectangle x:Name="IndicatorBar" Width="3" Height="12" RadiusX="1.5" RadiusY="1.5"
                            HorizontalAlignment="Left" VerticalAlignment="Center"
                            Style="{DynamicResource ThemeIndicatorBar}"/>
+                <!-- 第三种指示：Win11 任务栏的"图标下方居中短横线"（Windows 主题的观感就靠它，
+                     既不是 macOS 的圆点也不是 GNOME 的左侧竖条）。几何写在这里而不在样式里，
+                     与上面两兄弟一致；用哪一种是主题字典的事（ThemeIndicatorUnderline 恒
+                     Collapsed 的主题就是不用它）。 -->
+                <Rectangle x:Name="IndicatorUnderline" Width="16" Height="3" RadiusX="1.5" RadiusY="1.5"
+                           HorizontalAlignment="Center" VerticalAlignment="Bottom" Margin="0,0,0,-4"
+                           Panel.ZIndex="1"
+                           Style="{DynamicResource ThemeIndicatorUnderline}"/>
                 <Border x:Name="Hover" CornerRadius="12" Background="#22FFFFFF">
                     <Border.Style>
                         <Style TargetType="Border">

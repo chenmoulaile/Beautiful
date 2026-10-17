@@ -1,7 +1,9 @@
+using System.Linq;
 using System.Runtime.InteropServices;
 using System.Windows.Forms;
 using Beautiful.App.Controls;
 using Beautiful.App.Services;
+using Beautiful.Core.Controls;
 using Beautiful.App.Themes;
 using Point = System.Windows.Point;
 
@@ -71,12 +73,10 @@ public sealed class TrayIconManager : IDisposable
         return new List<MenuItemView>
         {
             new() { Id = "settings", Label = "设置…", Glyph = "\uE713", Invoke = _openSettings },
-            new() { Id = "theme", Label = "主题", Glyph = "\uE790", Children = new List<MenuItemView>
-            {
-                ThemeItem("harmonyos", "鸿蒙", theme),
-                ThemeItem("macos", "macOS", theme),
-                ThemeItem("linux", "Linux", theme),
-            } },
+            // 主题子菜单直接来自 QuickSettings.Themes 这一份白名单（与控制中心分段、顶栏主题菜单同源）：
+            // 加第四条线时这里不用补一行，也不会出现"设置页有、托盘没有"的两样。
+            new() { Id = "theme", Label = "主题", Glyph = "\uE790",
+                    Children = [.. QuickSettings.Themes.Select(o => ThemeItem(o.Id, o.Label, theme))] },
             new() { Id = "reload", Label = "重载 Dock", Glyph = "\uE72C", Invoke = _reloadDock },
             new() { Id = "sep", IsSeparator = true },
             new() { Id = "quit", Label = "退出", Glyph = "\uE7E8", Invoke = _exit },

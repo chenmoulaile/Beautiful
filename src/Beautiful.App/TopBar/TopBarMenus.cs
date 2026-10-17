@@ -5,6 +5,7 @@ using System.Windows;
 using Beautiful.App.Controls;
 using Beautiful.App.Interop;
 using Beautiful.App.Services;
+using Beautiful.Core.Controls;
 using MessageBox = System.Windows.MessageBox;
 
 namespace Beautiful.App.TopBar;
@@ -42,12 +43,12 @@ public static class TopBarMenus
     private static List<MenuItemView> ThemeSubmenu(TopBarContext ctx)
     {
         var current = ctx.CurrentTheme();
-        return new List<MenuItemView>
+        // 选项直接来自 QuickSettings.Themes 这一份白名单（与控制中心分段同源）：
+        // 加第四条主题线时这里不用动，也不会出现"设置页有、顶栏菜单没有"的两样。
+        return QuickSettings.Themes.Select(o => new MenuItemView
         {
-            new() { Id = "harmonyos", Label = "鸿蒙", IsChecked = current == "harmonyos", Invoke = () => ctx.ApplyTheme("harmonyos") },
-            new() { Id = "macos", Label = "macOS", IsChecked = current == "macos", Invoke = () => ctx.ApplyTheme("macos") },
-            new() { Id = "linux", Label = "Linux", IsChecked = current == "linux", Invoke = () => ctx.ApplyTheme("linux") },
-        };
+            Id = o.Id, Label = o.Label, IsChecked = current == o.Id, Invoke = () => ctx.ApplyTheme(o.Id),
+        }).ToList();
     }
 
     /// <summary>文件：新建窗口（无对应能力→置灰）、打开资源管理器…（真实）、分隔、关闭窗口（置灰）。</summary>

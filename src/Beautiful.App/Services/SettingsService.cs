@@ -66,6 +66,7 @@ public static class SettingsService
     {
         "macos" => ThemeDefinition.MacOs(),
         "linux" => ThemeDefinition.Linux(),
+        "windows" => ThemeDefinition.Windows(),
         _ => ThemeDefinition.HarmonyOs()
     };
 

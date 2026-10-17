@@ -18,6 +18,7 @@ using Brush = System.Windows.Media.Brush;
 using Color = System.Windows.Media.Color;
 using ColorConverter = System.Windows.Media.ColorConverter;
 using ComboBox = System.Windows.Controls.ComboBox;                                 // 消歧：WinForms 隐式 using 带入同名控件
+using RadioButton = System.Windows.Controls.RadioButton;                           // 同上（主题/策略/样式三组分段按钮的按 Tag 反查）
 using ComboBoxItem = System.Windows.Controls.ComboBoxItem;                        // 同上（图标处理方式三项）
 using SelectionChangedEventArgs = System.Windows.Controls.SelectionChangedEventArgs; // 同上
 using MessageBox = System.Windows.MessageBox;
@@ -99,12 +100,8 @@ public partial class SettingsWindow : Window
     private void LoadState()
     {
         var s = SettingsService.Current;
-        (s.Theme switch
-        {
-            "macos" => ThemeMacOs,
-            "linux" => ThemeLinux,
-            _ => ThemeHarmonyOs
-        }).IsChecked = true;
+        // 选中项按 Tag 反查（Tag = 主题标识）：加主题只改 XAML 与 Core 白名单，这里不用再扩 switch
+        FindThemeRadio(s.Theme).IsChecked = true;
         (s.TaskbarPolicy switch
         {
             "autohide" => TaskbarAutoHide,
@@ -150,6 +147,7 @@ public partial class SettingsWindow : Window
         foreach (var path in _pinnedStore.Load()) _pinned.Add(path);
 
         // 色块预览与 Dock 实际强调色同源（主题定义 AccentHex），避免 XAML 内散落 hex
+        ThemeWindowsDot.Fill = AccentBrush(ThemeDefinition.Windows());
         ThemeHarmonyOsDot.Fill = AccentBrush(ThemeDefinition.HarmonyOs());
         ThemeMacOsDot.Fill = AccentBrush(ThemeDefinition.MacOs());
         ThemeLinuxDot.Fill = AccentBrush(ThemeDefinition.Linux());
@@ -165,12 +163,25 @@ public partial class SettingsWindow : Window
         return brush;
     }
 
-    /// <summary>放大强度滑杆与倒影开关仅 macOS 主题有意义（其余主题 ShowMagnification=false）。</summary>
+    /// <summary>按标识找主题单选钮；白名单外的脏值（手改配置）回落分段第一项，绝不让一组四个都不选。</summary>
+    private RadioButton FindThemeRadio(string id) => id switch
+    {
+        "windows" => ThemeWindows,
+        "macos" => ThemeMacOs,
+        "linux" => ThemeLinux,
+        _ => ThemeHarmonyOs,
+    };
+
+    /// <summary>
+    /// 放大强度滑杆与倒影开关只对"这个主题真的会放大"有意义——判据取主题参数
+    /// <see cref="ThemeDefinition.ShowMagnification"/>，不再写 <c>theme == "macos"</c>：
+    /// 以后再有第二个会放大的主题，这里不用改。
+    /// </summary>
     private void UpdateThemeDependentControls()
     {
-        var mac = SettingsService.Current.Theme == "macos";
-        MagnifySlider.IsEnabled = mac;
-        ReflectionCheck.IsEnabled = mac;
+        var magnifies = ThemeManager.Current.ShowMagnification;
+        MagnifySlider.IsEnabled = magnifies;
+        ReflectionCheck.IsEnabled = magnifies;
     }
 
     private void UpdateTaskbarHint()
@@ -211,11 +222,20 @@ public partial class SettingsWindow : Window
 
     private void Theme_Checked(object sender, RoutedEventArgs e)
     {
-        if (_loading) return;
-        var theme = sender == ThemeMacOs ? "macos" : sender == ThemeLinux ? "linux" : "harmonyos";
-        SettingsService.UpdateAndSave(SettingsService.Current with { Theme = theme });
-        // Apply → DockWindow 订阅 ThemeChanged 自行重落尺寸/放大/遮罩；设置窗口只刷新依赖主题的控件可用态
-        ThemeManager.Apply(SettingsService.ThemeDefinitionOf(SettingsService.Current), Application.Current);
+        if (_loading || sender is not RadioButton { Tag: string id }) return;
+        // 落地走 App.ApplyTheme（与托盘/顶栏同一条：写设置 + 应用 + Windows 主题下的策略联动），
+        // 这里只负责把界面拉回"设置里的真值"——策略可能被 ApplyTheme 顺手改了（见其注释）。
+        App.ApplyTheme(id);
+        _loading = true;
+        FindThemeRadio(SettingsService.Current.Theme).IsChecked = true;
+        (SettingsService.Current.TaskbarPolicy switch
+        {
+            "autohide" => TaskbarAutoHide,
+            "keep" => TaskbarKeep,
+            _ => TaskbarHide
+        }).IsChecked = true;
+        _loading = false;
+        UpdateTaskbarHint();
         UpdateThemeDependentControls();
     }
 

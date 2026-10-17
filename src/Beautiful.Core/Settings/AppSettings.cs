@@ -8,7 +8,7 @@ namespace Beautiful.Core.Settings;
 /// </summary>
 public sealed record AppSettings
 {
-    /// <summary>主题标识："harmonyos" | "macos" | "linux"。</summary>
+    /// <summary>主题标识："harmonyos" | "macos" | "linux" | "windows"。</summary>
     public string Theme { get; init; } = "harmonyos";
 
     /// <summary>任务栏策略："hide" | "autohide" | "keep"。</summary>
@@ -165,8 +165,8 @@ public sealed record AppSettings
     /// </summary>
     public string IconTreatment { get; init; } = "auto";
 
-    /// <summary>合法主题标识（小写）。</summary>
-    public static IReadOnlyList<string> KnownThemes { get; } = ["harmonyos", "macos", "linux"];
+    /// <summary>合法主题标识（小写）。windows = Win11 原生那条线（不接管，只增强）。</summary>
+    public static IReadOnlyList<string> KnownThemes { get; } = ["harmonyos", "macos", "linux", "windows"];
 
     /// <summary>合法任务栏策略标识（小写）。</summary>
     public static IReadOnlyList<string> KnownTaskbarPolicies { get; } = ["hide", "autohide", "keep"];

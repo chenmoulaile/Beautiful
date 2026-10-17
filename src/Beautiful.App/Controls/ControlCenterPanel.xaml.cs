@@ -164,6 +164,11 @@ public partial class ControlCenterPanel : UserControl, IBackdropAware, IPopupSha
                 _ctx.ApplyTheme(id);
                 ThemeLabel.Text = $"当前主题：{ThemeManager.Current.DisplayName}";
                 RebuildTilesDeferred();
+                // App.ApplyTheme 可能顺手改了任务栏策略（Windows 11 主题需要原生任务栏在场），
+                // 所以分段也要重画一遍——否则屏上留着"隐藏"高亮而配置已经是"自动隐藏"，
+                // 那是"假状态"。与砖块同一理由排在 Background 优先级：不在本次 Checked 事件里
+                // 拆掉正被遍历的控件树。
+                Dispatcher.BeginInvoke(DispatcherPriority.Background, new Action(BuildPolicySegments));
                 break;
             case PolicyGroup:
                 App.SetTaskbarPolicy(id);

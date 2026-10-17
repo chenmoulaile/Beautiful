@@ -48,9 +48,11 @@ public static class QuickSettings
     /// <summary>任务栏玻璃壳砖块（v3.2 #6）：只美化原生任务栏，不接管。</summary>
     public const string TaskbarGlassId = "taskbarGlass";
 
-    /// <summary>主题分段（左→右）。鸿蒙放最后一位，与设置页的先后顺序一致。</summary>
+    /// <summary>主题分段（左→右）。鸿蒙放最后一位，与设置页的先后顺序一致；
+    /// Windows 11 排第一——它是"不接管、只增强原生"的那条线，与其他三个"换一副面孔"不同类。</summary>
     public static IReadOnlyList<QuickOption> Themes { get; } =
     [
+        new("windows", "Windows 11"),
         new("macos", "macOS"),
         new("linux", "Linux"),
         new("harmonyos", "鸿蒙")

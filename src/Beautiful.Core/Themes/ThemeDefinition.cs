@@ -145,6 +145,37 @@ public sealed record ThemeDefinition(
         IconMaskRadiusRatio: 0,
         IconShadow: false);
 
+    /// <summary>
+    /// Windows 11 原生（第四条线）：深色 Mica 底、8px 圆角、**不遮罩图标**、无悬停放大、
+    /// 运行指示是"图标下方居中短横线"。禁模糊是刻意的——Win11 的深色任务栏是一层接近实色的
+    /// Mica，不是 macOS 那种透出桌面轮廓的亚克力；做成半透明模糊反而不像它。
+    /// （"壁纸取色"开着时强调色同样被壁纸主色覆盖，与另三主题同一机制。）
+    /// </summary>
+    public static ThemeDefinition Windows() => new(
+        Id: "Windows", DisplayName: "Windows 11",
+        DockBackground: Argb("#F02B2B2B"),
+        AcrylicTint: Argb("#F02B2B2B"),
+        BlurEnabled: false,
+        PanelCornerRadius: 8,
+        IconCornerRadiusRatio: 0,
+        IconSize: 44,
+        ItemSpacing: 8,
+        MaxScale: 1.0,
+        IndicatorStyle: "underline",
+        AccentHex: "#0078D4",
+        FontFamily: "Segoe UI Variable Display",
+        DockRowInsetDip: 12,
+        DockPanelPaddingXDip: 12,
+        DockPanelPaddingYDip: 8,          // IconSize=44 → 面板 44+12+16 = 72 DIP
+        ReflectionDefault: false,         // Win11 任务栏没有倒影
+        DockSeparatorsEnabled: false,     // 固定区与运行区之间没有竖线
+        DockSeparatorWidthDip: 0,
+        DockSeparatorHeightRatio: 0,
+        DockSeparatorSideInsetDip: 0,
+        IconMask: IconMaskStyle.None,
+        IconMaskRadiusRatio: 0,
+        IconShadow: false);
+
     /// <summary>#RRGGBB / #AARRGGBB → Color（内置解析：System.Drawing.Common 的 ColorTranslator 不在 net8.0 基础包内）。</summary>
     private static Color Argb(string hex)
     {

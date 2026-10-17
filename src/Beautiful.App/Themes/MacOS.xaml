@@ -35,4 +35,11 @@
         <Setter Property="Fill" Value="{DynamicResource ThemeAccent}"/>
         <Setter Property="Visibility" Value="Collapsed"/>
     </Style>
+    <!-- 本主题不用"图标下方居中短横线"（那是 Windows 11 主题的指示语言）。
+         键必须在每个主题字典里都存在：Style={DynamicResource} 解析不到键时元素会带着默认样式
+         直接画出来，那就成了三个主题都多一条黑杠。 -->
+    <Style x:Key="ThemeIndicatorUnderline" TargetType="Rectangle">
+        <Setter Property="Fill" Value="{DynamicResource ThemeAccent}"/>
+        <Setter Property="Visibility" Value="Collapsed"/>
+    </Style>
 </ResourceDictionary>

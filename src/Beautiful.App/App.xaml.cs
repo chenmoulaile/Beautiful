@@ -161,7 +161,7 @@ public partial class App : Application
                 openSettings: OpenSettings,
                 reloadDock: ReloadDock,
                 exit: ExitApp,
-                applyTheme: ApplyThemeFromTray,
+                applyTheme: ApplyTheme,
                 currentTheme: () => SettingsService.Current.Theme);
             Logger.Info("托盘就绪，启动完成");
         }
@@ -245,12 +245,32 @@ public partial class App : Application
         Logger.Info("设置窗口已打开");
     }
 
-    /// <summary>托盘主题子菜单：与设置窗口同一落地路径（UpdateAndSave → ThemeManager.Apply）。</summary>
-    private void ApplyThemeFromTray(string theme)
+    /// <summary>
+    /// 主题落地的<b>唯一</b>入口：设置页、托盘子菜单、顶栏"主题"菜单都走这里
+    /// （以前三处各写一遍 UpdateAndSave + Apply，加一条主题线要同步改三个地方，必然漏）。
+    /// <para>
+    /// 【为什么 Windows 主题要顺手改任务栏策略】这条线的定位是"不接管、只增强原生任务栏"——
+    /// 玻璃壳与任务栏歌词条都锚在原生任务栏上。策略为 hide 时任务栏被移出屏幕，那些增强一个像素
+    /// 都看不见（用户报的"windows 版美化并没有"就是这个：砖块灰着、屏上什么都没有）。所以选中它的
+    /// 那一刻把策略从 hide 抬到 autohide：原生任务栏回来、增强层有对象可装饰，而 Dock 仍贴真底边
+    /// （autohide 下 AppBar 协商给出的可用底边就是屏幕底）。想再隐藏，设置页与控制中心随时能改回去。
+    /// </para>
+    /// </summary>
+    public static void ApplyTheme(string id)
     {
-        Logger.Info($"主题切换（托盘）: {theme}");
-        SettingsService.UpdateAndSave(SettingsService.Current with { Theme = theme });
+        var next = SettingsService.Current with { Theme = id };
+        if (string.Equals(id, "windows", StringComparison.OrdinalIgnoreCase)
+            && string.Equals(next.TaskbarPolicy, "hide", StringComparison.OrdinalIgnoreCase))
+        {
+            next = next with { TaskbarPolicy = "autohide" };
+            Logger.Info("切到 Windows 11 主题：任务栏策略由 hide 抬到 autohide（增强层需要原生任务栏在场）");
+        }
+        Logger.Info($"主题切换: {id}");
+        SettingsService.UpdateAndSave(next);
         ThemeManager.Apply(SettingsService.ThemeDefinitionOf(SettingsService.Current), Application.Current);
+        // 策略真的被上面改动时才需要重放；Apply 内部对"策略没变"是幂等的，不必额外判分支
+        (Current as App)?._taskbar?.Apply(SettingsService.PolicyOf(SettingsService.Current));
+        (Current as App)?.ApplyGlassState(SettingsService.Current);
     }
 
     /// <summary>重载 Dock：旧实例完整释放（ABM_REMOVE + WindowTracker/SmtcService 于 OnClosed Dispose）后
@@ -337,7 +357,7 @@ public partial class App : Application
         OpenLauncher = () => _launcher?.Toggle(),
         ReloadDock = ReloadDock,
         Exit = ExitApp,
-        ApplyTheme = ApplyThemeFromTray,
+        ApplyTheme = ApplyTheme,
         CurrentTheme = () => SettingsService.Current.Theme,
     };
 

@@ -210,23 +210,32 @@
                         <TextBlock Text="外观" Style="{StaticResource SectionTitle}"/>
 
                         <TextBlock Text="主题" FontWeight="Medium"/>
+                        <!-- Tag 就是主题标识（Core 的 KnownThemes 白名单值）：选中项由 Tag 反查，
+                             不再写 sender == X ? "a" : sender == Y ? "b" : "c" 那串三元——加第四个
+                             主题时那种链子必然漏改一处。 -->
                         <StackPanel Orientation="Horizontal" Margin="0,8,0,0">
-                            <RadioButton x:Name="ThemeHarmonyOs" GroupName="Theme" Margin="0,0,24,0" Checked="Theme_Checked">
+                            <RadioButton x:Name="ThemeWindows" GroupName="Theme" Tag="windows" Margin="0,0,24,0" Checked="Theme_Checked">
                                 <StackPanel Orientation="Horizontal">
-                                    <Ellipse x:Name="ThemeHarmonyOsDot" Width="12" Height="12" VerticalAlignment="Center"/>
-                                    <TextBlock Text="鸿蒙" Margin="6,0,0,0"/>
+                                    <Ellipse x:Name="ThemeWindowsDot" Width="12" Height="12" VerticalAlignment="Center"/>
+                                    <TextBlock Text="Windows 11" Margin="6,0,0,0"/>
                                 </StackPanel>
                             </RadioButton>
-                            <RadioButton x:Name="ThemeMacOs" GroupName="Theme" Margin="0,0,24,0" Checked="Theme_Checked">
+                            <RadioButton x:Name="ThemeMacOs" GroupName="Theme" Tag="macos" Margin="0,0,24,0" Checked="Theme_Checked">
                                 <StackPanel Orientation="Horizontal">
                                     <Ellipse x:Name="ThemeMacOsDot" Width="12" Height="12" VerticalAlignment="Center"/>
                                     <TextBlock Text="macOS" Margin="6,0,0,0"/>
                                 </StackPanel>
                             </RadioButton>
-                            <RadioButton x:Name="ThemeLinux" GroupName="Theme" Checked="Theme_Checked">
+                            <RadioButton x:Name="ThemeLinux" GroupName="Theme" Tag="linux" Margin="0,0,24,0" Checked="Theme_Checked">
                                 <StackPanel Orientation="Horizontal">
                                     <Ellipse x:Name="ThemeLinuxDot" Width="12" Height="12" VerticalAlignment="Center"/>
                                     <TextBlock Text="Linux" Margin="6,0,0,0"/>
+                                </StackPanel>
+                            </RadioButton>
+                            <RadioButton x:Name="ThemeHarmonyOs" GroupName="Theme" Tag="harmonyos" Checked="Theme_Checked">
+                                <StackPanel Orientation="Horizontal">
+                                    <Ellipse x:Name="ThemeHarmonyOsDot" Width="12" Height="12" VerticalAlignment="Center"/>
+                                    <TextBlock Text="鸿蒙" Margin="6,0,0,0"/>
                                 </StackPanel>
                             </RadioButton>
                         </StackPanel>
