@@ -77,24 +77,37 @@ internal static class WindowCapture
     /// 抓整个窗口，再按"屏幕坐标下的这一块矩形"抠出来（矩形必须属于那个窗口）。
     /// <para>
     /// 给"窗口在屏幕外但仍在渲染"的场合用：24H2 的任务栏被本程序移出屏幕后，屏幕上没有那一格像素，
-    /// 裁屏这条路必然失败，而 <c>PrintWindow</c> 照样能把那个窗口画出来。几何对不上（越界/尺寸非法）
-    /// 就返回 null——宁可画空框，也不错画别人窗口的像素。
+    /// 裁屏这条路必然失败。注意 **XAML 岛不吃 PrintWindow**（本机实测：对 Shell_TrayWnd 与岛子窗口
+    /// 做 PrintWindow(PW_RENDERFULLCONTENT) 整幅全黑），所以这条只对普通 Win32 表面有效；
+    /// 岛里的图标改走"取该应用主程序的图标"（见 TrayIconSource.OwnerIcon）。
     /// </para>
     /// </summary>
     public static BitmapSource? CaptureRegionOfWindow(IntPtr hwnd, PhysicalRect screenRect)
     {
         var full = Capture(hwnd);
         if (full is null) return null;
-        if (!GetWindowRect(hwnd, out var w)) return null;
+        return TryCrop(full, hwnd, screenRect, out var cell) ? cell : null;
+    }
+
+    /// <summary>
+    /// 在<b>已经抓好</b>的整窗位图上抠一格（同一批格子只抓一次窗口，别每格付一次 PrintWindow）。
+    /// 几何对不上（越界/尺寸非法）返回 false——宁可画空框，也不错画别人窗口的像素。
+    /// </summary>
+    public static bool TryCrop(BitmapSource surface, IntPtr originHwnd, PhysicalRect screenRect,
+        out BitmapSource? cell)
+    {
+        cell = null;
+        if (!GetWindowRect(originHwnd, out var w)) return false;
         var x = (int)screenRect.Left - w.Left;
         var y = (int)screenRect.Top - w.Top;
         var cw = (int)(screenRect.Right - screenRect.Left);
         var ch = (int)(screenRect.Bottom - screenRect.Top);
-        if (cw <= 0 || ch <= 0 || x < 0 || y < 0 || x + cw > full.PixelWidth || y + ch > full.PixelHeight)
-            return null;
-        var cropped = new CroppedBitmap(full, new System.Windows.Int32Rect(x, y, cw, ch));
+        if (cw <= 0 || ch <= 0 || x < 0 || y < 0 || x + cw > surface.PixelWidth || y + ch > surface.PixelHeight)
+            return false;
+        var cropped = new CroppedBitmap(surface, new System.Windows.Int32Rect(x, y, cw, ch));
         cropped.Freeze();
-        return cropped;
+        cell = cropped;
+        return true;
     }
 
     private static BitmapSource? CaptureViaPrintWindow(IntPtr hwnd, int width, int height)

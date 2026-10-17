@@ -92,10 +92,22 @@ Beautiful 接管日常桌面三件套：屏幕底部是悬浮 Dock（应用固�
 | --- | --- | --- |
 | **托盘图标读不到的真因** | 不是"24H2 换了 XAML 岛所以读不到"，而是**UIA 不会跨岛的片段根**：从 `Shell_TrayWnd` 的 HWND 做 `FindAll(Descendants, Button)` 得到 **0 个**，而从它的子窗口 `Windows.UI.Composition.DesktopWindowContentBridge` 的 HWND 进同一棵树得到 **23 个**。现在按 HWND 分别进树（岛宿主作为 `Shell_TrayWnd` 的直接子窗口用 `FindWindowEx` 找，不枚举全部子窗口）。 | 只读探针 `.tools/trayprobe.ps1` / `trayprobe2.ps1`（不建窗口、不发输入），逐条打印 23 个按钮的 Name/AutomationId/ClassName/矩形 |
 | **岛里只收第三方图标** | 岛把"开始 / 任务视图 / 每个任务栏应用按钮 / 音量 / 电源 / 时钟 / 显示桌面 / 第三方托盘图标"混在同一层同一 ControlType 里。实测**只有 `AutomationId == NotifyItemIcon` 是应用自己注册的图标**（本机：华为电脑管家、华为控制中心、更新提示三条），其余是 shell 部件；按名字筛会被"音量 本机扬声器 (Audio Device): 已静音"这类带动态后缀的名字骗过去，所以按 id 收 | 探针输出逐条比对；旧路径（23H2 及以下）不受这条筛选影响 |
-| **岛里的图标像素** | 任务栏被本程序移出屏幕后，屏幕上没有那一格，裁屏必然失败——改走"整窗 `PrintWindow` + 按 UIA 给的屏幕矩形抠出这一格"（`WindowCapture.CaptureRegionOfWindow`）。几何对不上（越界/尺寸非法）就放弃，宁可画空框也不错画别人窗口的像素 | 与 v3.3 抓取退路同一套；本机待验（见下方"验证边界"） |
+| **岛里的图标像素：两条路都试过，都拿不到** | ① "整窗 `PrintWindow` + 按 UIA 矩形抠这一格"——本机实测 **XAML 岛不参与 PrintWindow**（对 `Shell_TrayWnd` 与岛子窗口都得到全黑），而任务栏被移出屏幕后屏幕上也没有那一格可裁。② "取所属进程的主程序图标"——**更错**：24H2 的岛把所有托盘图标都托管在 explorer 进程里，UIA 报的 `ProcessId` 三格全是 explorer(14148)，于是三格一律画成资源管理器的黄色文件夹。最终按项目既有裁定收口：**取不到图就中性占位**（画应用名首字、tooltip 给全名），不画一个错的图标。任务栏策略为"保留/自动隐藏"时第①条仍然有效，所以代码留着 | 装上 v3.7.0 后本机日志：`UIA[读到 3 个按钮元素] 平铺 3 格，跳过系统项 0 个，有图 0 格，可转发 3 格`；顶栏截图是"华 华 安"三格占位，三格都能点回自己的应用 |
 | **控制中心 Wi-Fi 真开关** | 一块真的无线电开关：`WlanSetInterface(opcode=interface_state, TRUE/FALSE)`，读回用 `WlanQueryInterface`。三态判据：**启用 / 禁用 / 问不出来**——最后一种置灰写原因，不画成"关"（那是给了一个看起来正常、点下去没反应的假开关）。写失败回读真值把界面拉回来 | 接口是 wlanapi 公开文档；改动网卡会影响用户联网，**未在本机实机点过** |
 | **控制中心亮度滑杆** | 内置屏只能走 `root\WMI` 的 `WmiMonitorBrightness` + `WmiMonitorBrightnessMethods.WmiSetBrightness`（gdi32 的 DDC/CI 只对外接屏有效，本机是 `DISPLAY\EDO0142` 内置面板）。用 WMI 的**自动化接口**（`WbemScripting.SWbemLocator` + C# `dynamic`）而不是手写 `IWbemServices` vtable——后者要按顺序声明 `ExecQuery` 之前十几个槽位，错一个就是内存踩踏；零新增包、零手写 vtable。读不到（台式机/虚拟显卡/驱动没暴露）→ 整行置灰 + 中文原因 | 本机实测：`InstancesOf('WmiMonitorBrightness')` 读到 **61**，`WmiMonitorBrightnessMethods` 上确有 `WmiSetBrightness` |
 | **蓝牙 / 飞行模式** | 只做**打开系统对应设置页**的入口（`ms-settings:bluetooth` / `ms-settings:network-airplane`），不做假开关：Windows 不给普通进程这两个无线电开关——WinRT `Radios.SetState` 需要打包应用才有的 `radios` 能力，禁用蓝牙设备要管理员权限。诚实的入口比"点了没反应的开关"值钱 | 能力边界来自 API 约束本身 |
+
+## v3.7 变更（装上你自己那台机器验一遍）
+
+v3.6 的 Setup 装到你机器上（`C:\Users\chenk\AppData\Local\Programs\Beautiful`，按用户安装、免管理员，
+配置从旧实例带过来）之后，逐条实测：
+
+| 项 | 结果 |
+| --- | --- |
+| 托盘读取 | `UIA[读到 3 个按钮元素] 平铺 3 格，跳过系统项 0 个，可转发 3 格` —— 从"一个都读不到"变成 3 个第三方图标，且三个都能点回自己的应用 |
+| 托盘图标像素 | **拿不到**（原因见上一张表最后一行）。撤掉 v3.6 里"取主程序图标"的兜底——实测它把三格全画成资源管理器的黄色文件夹，那是错画；改回中性占位（顶栏现在显示"华 华 安"三格 + tooltip 全名） |
+| 放大清晰度 | `图标烘焙参数: 主题=MacOS 尺寸=48DIP dpi=2 放大上限=1.8× 图块=173px` |
+| 点 Dock 图标隐藏窗口 | 你自己在 3.5.0 上的点击日志已经出现 `窗口切换：最小化`×3 / `还原`×3，抓帧 `层=PrintWindow`×10 + `层=屏幕`×5 |
 
 ## 不同分辨率、DPI 与多屏
 

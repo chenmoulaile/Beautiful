@@ -640,18 +640,22 @@ public sealed class TrayIconSource
                 var buttons = root.FindAll(TreeScope.Descendants, ButtonCondition);
                 // 上限来自 Core：XAML 岛里"按钮"很多（每个状态项、每一页都是），没有上界就把一次面板打开
                 // 变成几百次跨进程属性读取
+                var surface = island ? WindowCapture.Capture(hwnd) : null;   // 整窗只抓一次，逐格裁
                 for (var i = 0; i < buttons.Count && i < TrayLayout.MaxButtonsPerToolbar; i++)
                 {
                     var item = FromElement(buttons[i], island);
                     if (item is null) continue;
-                    // 岛里的格子补真实像素：任务栏被本程序移出屏幕后，屏幕上没有那一格，
-                    // 裁屏这条路必然失败——但 PrintWindow 照样能把那个窗口画出来，于是按
-                    // "整窗抓取 + 按 UIA 给的屏幕矩形抠出这一格"取图。几何对不上就放弃（宁可空框不错画）。
-                    if (island && item.Image is null && item.HasRect)
-                    {
-                        var cell = WindowCapture.CaptureRegionOfWindow(hwnd, item.RectPx);
-                        if (cell is not null) item = item with { Image = cell, ImageNote = null };
-                    }
+                    // 岛里的格子取图：任务栏**可见**（保留 / 自动隐藏）时，整窗 PrintWindow + 按 UIA
+                    // 矩形抠这一格能拿到真实像素。任务栏被本程序移出屏幕时这条是空的——本机实测
+                    // **XAML 岛不参与 PrintWindow**（对 Shell_TrayWnd 与岛子窗口都得到全黑），
+                    // 而屏幕上也没有那一格可裁。
+                    // 试过"取该图标所属进程的主程序图标"当兜底，实测**错**：24H2 的岛把所有托盘图标
+                    // 都托管在 explorer 进程里，UIA 报的 ProcessId 三格全是 explorer(14148)，
+                    // 于是三格一律画成资源管理器的黄色文件夹。宁可中性占位 + tooltip 写明应用名，
+                    // 也不画一个错的图标（项目既有裁定）。
+                    if (island && item.Image is null && item.HasRect && surface is not null
+                        && WindowCapture.TryCrop(surface, hwnd, item.RectPx, out var cell) && cell is not null)
+                        item = item with { Image = cell, ImageNote = null };
                     sink.Add(item);
                     found++;
                 }
@@ -756,6 +760,8 @@ public sealed class TrayIconSource
             return "";
         }
     }
+
+
 
     /// <summary>同上，值类型版本：失败回 <see cref="Rect.Empty"/>（下游的可信性判定会把它挡掉）。</summary>
     private static Rect SafeRect(Func<Rect> reader)
