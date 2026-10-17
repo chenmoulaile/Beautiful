@@ -70,6 +70,18 @@ Beautiful 接管日常桌面三件套：屏幕底部是悬浮 Dock（应用固�
 | **HSHELL 事件码的实测更正** | 本机 `RegisterShellHookWindow` 实际只发 2/4/6/0x10，文档里的 `HSHELL_ACTIVATED=3`（及 `0x8003`）**一条都不发**。原代码写的 4/0x8004 恰好是这台机器真正会发的那一对，所以"按文档修正"反而会让最小化状态退回等 2s 兜底对账。现在两组都接，并在注释里写清实测与文档不一致 | 探针日志逐条比对（激活、关闭、切前台各事件的 wParam） |
 | **设置窗口底部：版本号 + 配置目录** | README 里"日志在 exe 旁边"这句话对用户没用，他找不到 exe 在哪。底部一行直接给出 `Beautiful v<版本> · 配置与日志在 <目录>` | 版本号取 `InformationalVersion` 并砍掉 SourceLink 的 `+哈希` 后缀 |
 
+## v3.5 变更（真机实测翻出来的四个"装了但没生效"）
+
+| 项 | 现在 | 证据口径 |
+| --- | --- | --- |
+| **点 Dock 图标隐藏窗口：真实使用下仍失效** | v3.4 的前台判定依赖"WinEvent 记录的最后一次外部前台"，而真实会话里那是**陈旧样本**——日志里连续四次点击，前台永远是同一个不相干窗口（`0x60132`）。v3.5 改用**悬停快照**：光标扫过条带时前台必然还是用户的窗口（点击把前台换给 Dock 是下一瞬间的事），点击时若前台已是自己进程的窗口就用这份快照顶替。另外每条切换分支都留结果日志（最小化/还原/置前 + 当时前台），再失效一眼可见 | 旧日志 `Dock 条目点击：Window '…' 前台=0x60132` ×4（四次点击同一前台，全是激活分支）；新代码 `DockWindow.SnapshotForegroundAtHover` |
+| **genie 在真机上一次都没播过** | 两处时序错位：① `EVENT_SYSTEM_MINIMIZESTART` 走系统队列送达时，我们那次同步的 `ShowWindow(SW_MINIMIZE)` 早已完成、窗口已经 iconic，事件路径开头的 IsIconic 早退**必然命中**——所以由 Dock 在 ShowWindow **之前**预抓画面与矩形，切换完成后用预抓帧放动画。② 抓帧对 DirectComposition 窗口（Chrome/Electron 全家）经常整幅纯色，加了第二条退路：**屏幕 DC 抠窗口矩形**（`genie-minimize-animation` mod 的同一条退路）。抓帧来源写进日志（`层=PrintWindow/屏幕`） | 全天日志里动画相关输出只有"已挂载"，零次播放记录；`.tools/windhawk-ref/genie-minimize-animation.wh.cpp:298` 的 BitBlt(hScreenDC) 退路 |
+| **最大化/关闭动画** | 最大化/还原的缩放动画共享同一条抓帧退路后应可用。**关闭动画明确不做**：Windows 没有"关闭前"信号（要拦只能全局 CBT 注入别的进程，Lume 的 `LumeMinimizeHook32/64.dll` 正是注入宿主），为一个动画引入注入组件不值，且 macOS 本身不给关闭加动画 | `scripts` 无注入组件的既有裁定；`D:\lume\LumeMinimize.SOURCES.md` 佐证其注入架构 |
+| **WiFi 面板误报"不可用"** | `WLAN_INTERFACE_STATE` 只写了两档还都抄错了：2、5 实际是 `ad_hoc_network_joined`/`associating`，**"已连接"是 1**——常态网卡反而过不了可用判定。改为"枚举到网卡即可扫描"，`not_ready` 只作瞬态提示 | `netsh wlan show interfaces`：Intel AX201 已连接 chaomeng-5G；与 ShellHook 的 `HSHELL_ACTIVATED` 同为"抄码没核对文档"家族 |
+| **顶栏常驻托盘条** | v3.2 裁定"点开才读"，用户点名要 macOS 菜单栏的后台图标。现在顶栏时钟左侧常驻一条：最多 8 格、45s 一读 + explorer 重建即时重读（对"每帧抓屏"禁令不是一个量级），左键/右键都转发回应用自己，一格都没有就整体隐藏并把两路读数写日志 | **UNVERIFIED**：任务栏被本程序移出屏幕后屏幕上没有那一格像素，占位字形 + 应用名 tooltip 是当前兜底；本机两路各读到什么，等下次运行看 `顶栏托盘条` 日志 |
+| **控制中心砖块间距 + 设置窗口正文** | 砖块上下贴死（真机截图实锤）→ 行距 4；设置窗口正文按钮从 WPF 默认 3D 方角灰块换成 macOS 四态圆角（常态/悬停/按下/禁用），列表行圆角高亮 | 用户两张截图；`ControlCenterPanel` 的 `CcTileStyle`、`SettingsWindow` 的隐式 Button/ListBox 样式 |
+| **D:\lume 调研结论** | 它的最小化实现与本项目 v3.3 同源（同一个 MIT Windhawk mod v3.1.2，Abdullah Masood / Potassiumuncher），差别只在它是**进程内注入**（`LumeMinimizeHook*.dll` 宿主），所以抓帧天然无障碍；`ui/` 是 WebView2 界面、`taskbar-runtime` 是给 explorer 任务栏打补丁的另一套架构——**无可照搬素材**，本项目的解法是预抓帧 + 屏幕抠图退路 | `D:\lume\LumeMinimize.SOURCES.md`、`LumeMinimize.NOTICE.md` |
+
 ## 不同分辨率、DPI 与多屏
 
 几何的**唯一来源**是"这条带实际落在哪块屏"，不是主屏尺寸：

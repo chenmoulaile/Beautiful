@@ -119,6 +119,14 @@ public partial class TopBarWindow : AcrylicWindow
     /// <summary>托盘图标面板（v3.2）：服务层持有跨进程读 explorer 的句柄，关闭必须 Dispose。</summary>
     private FluentPopupHost? _trayHost;
     private Button? _trayButton;
+
+    // ---------- 顶栏常驻托盘条（v3.4） ----------
+    private TrayIconSource? _trayStripSource;          // 自己一份：与面板互不共享句柄生命周期
+    private System.Windows.Controls.StackPanel? _trayStripHost;
+    private DispatcherTimer? _trayStripTimer;
+    private bool _trayStripReading;
+    private System.Collections.Generic.IReadOnlyList<TrayIconItem> _trayStripItems =
+        System.Array.Empty<TrayIconItem>();
     private DateTime _controlCenterClosedAt = DateTime.MinValue;
 
     /// <summary>
@@ -136,6 +144,7 @@ public partial class TopBarWindow : AcrylicWindow
         InitializeComponent();
         BuildLeftRegion();
         BuildRightRegion();
+        StartTrayStrip();
         // 静态事件订阅必须晚于 Build*：Build 抛异常时构造函数不会返回，调用方（App.EnsureTopBar）
         // 手里的 bar 恒为 null → catch 里的 bar?.Close() 成 no-op → 静态事件永久持有半构造窗口，
         // 之后每次换主题都对一个没有 HWND 的僵尸实例执行 ApplyTheme（与 App.xaml.cs 刚修过的同类泄漏一致）。
@@ -173,6 +182,10 @@ public partial class TopBarWindow : AcrylicWindow
     {
         ThemeManager.ThemeChanged -= OnThemeChanged;
         if (_subscribedMedia is not null) _subscribedMedia.PropertyChanged -= OnMediaChanged;
+        _trayStripTimer?.Stop();
+        _trayStripTimer = null;
+        _trayStripSource?.Dispose();   // 读者不驻留句柄的纪律与 TrayPanel 同一条
+        _trayStripSource = null;
         _controlCenterHost?.Close(); // 控制中心随顶栏一起收起（重载/退出时不得留一个无主的弹层）
         FluentMenu.CloseCurrent(); // 防弹层残留（重载/退出时）
         base.OnClosed(e);
@@ -337,6 +350,7 @@ public partial class TopBarWindow : AcrylicWindow
         {
             handled = true;
             Dispatcher.BeginInvoke(RegisterAndPositionAppBar);
+            Dispatcher.BeginInvoke(RefreshTrayStrip);   // explorer 重建 → 托盘图标全体搬家，立即重读
             return IntPtr.Zero;
         }
         if (msg == NativeMethods.WmDisplayChange)
@@ -521,6 +535,17 @@ public partial class TopBarWindow : AcrylicWindow
         _mediaButton.Click += (_, _) => { _context.OpenMediaPanel(); };
         RightHost.Children.Add(_mediaButton);
 
+        // 顶栏常驻托盘条（v3.4，用户点名要 macOS 菜单栏的后台图标）。v3.2 裁定"点开才读"的理由是
+        // 经典路从屏幕抠像素、常驻就要持续抓屏；现在的口径是：读数 45s 一次 + TaskbarCreated 即时
+        // （与"每帧抓屏"不是一个量级），条带只显示读得到的东西，一格都没有就整体隐藏、
+        // 并把两路读数写进日志——下次这台机器上读不到时，日志自己会说出原因。
+        // 像素抠不到（任务栏被本程序移出屏幕时屏幕上没有那一格）就画占位字形 + 应用名 tooltip：
+        // 看得见、点得动，好过看不见。
+        _trayStripSource = new TrayIconSource();
+        _trayStripHost = new StackPanel { Orientation = Orientation.Horizontal };
+        _trayStripHost.Visibility = Visibility.Collapsed;
+        RightHost.Children.Add(_trayStripHost);
+
         // 时钟（形态与步长见 ApplyClockSettings；点击 → 日历浮层）。
         // 【宽度变化不跳动】RightHost 是 HorizontalAlignment=Right 的横向栈：时钟变宽/变窄只会让它在
         // **左侧**扩张，右邻（音量/网络/电量/启动器/控制中心）始终钉在条带右缘不动。因此"显示秒"这种
@@ -604,7 +629,103 @@ public partial class TopBarWindow : AcrylicWindow
         return (b, tb);
     }
 
-    // ---------- 状态刷新（网络/电量每分钟一条定时器；时钟单独一条，秒显时才逐秒） ----------
+    // ---------- 顶栏常驻托盘条（v3.4） ----------
+
+    /// <summary>后台读两路 → 回投 → 渲染。45s 一拍 + TaskbarCreated 即时；与面板互不干扰（各自一份 source）。</summary>
+    private async void RefreshTrayStrip()
+    {
+        if (_trayStripReading || _trayStripSource is null) return;
+        _trayStripReading = true;
+        try
+        {
+            var result = await System.Threading.Tasks.Task.Run(() => _trayStripSource.Read());
+            if (!IsLoaded) return;
+            _trayStripItems = result.Items;
+            RenderTrayStrip();
+            // 空读必须留痕：这台机器（24H2 + 任务栏被移出屏幕）上两路各自读到了什么，
+            // 是"托盘条为什么是空的"的第一手判据——用户能提供的只有截图，截图里没有日志。
+            if (result.Items.Count == 0)
+                Logger.Info($"顶栏托盘条：空读（经典路[{result.ClassicStatus}] UIA[{result.UiaStatus}]）");
+        }
+        catch (Exception ex)
+        {
+            Logger.Warn($"顶栏托盘条读取异常: {ex.Message}");
+        }
+        finally
+        {
+            _trayStripReading = false;
+        }
+    }
+
+    private void RenderTrayStrip()
+    {
+        if (_trayStripHost is null) return;
+        _trayStripHost.Children.Clear();
+        var visible = _trayStripItems.Take(8).ToList();
+        if (visible.Count == 0)
+        {
+            _trayStripHost.Visibility = Visibility.Collapsed;
+            return;
+        }
+        foreach (var item in visible) _trayStripHost.Children.Add(MakeTrayStripTile(item));
+        _trayStripHost.Visibility = Visibility.Visible;
+    }
+
+    /// <summary>一格常驻图标：有像素贴像素，没有画占位字形（首字），tooltip 永远写应用名与来源。</summary>
+    private Button MakeTrayStripTile(TrayIconItem item)
+    {
+        object content;
+        if (item.Image is { } img)
+        {
+            content = new System.Windows.Controls.Image
+                { Source = img, Width = 20, Height = 20, Stretch = Stretch.Uniform };
+        }
+        else
+        {
+            content = new TextBlock
+            {
+                Text = string.IsNullOrWhiteSpace(item.Label) ? "·" : item.Label.Trim().Substring(0, 1),
+                FontSize = 12,
+                Opacity = 0.85,
+                VerticalAlignment = VerticalAlignment.Center,
+            };
+        }
+
+        var tile = NewBarButton(content);
+        tile.Width = 32;
+        tile.ToolTip = string.IsNullOrWhiteSpace(item.Label)
+            ? $"托盘图标（{item.Origin}，应用未提供名称）"
+            : $"{item.Label}（{item.Origin}）";
+        tile.Opacity = item.CanActivate ? 1.0 : 0.55;
+        AutomationProperties.SetName(tile, string.IsNullOrWhiteSpace(item.Label)
+            ? "托盘图标（应用没给名字）"
+            : $"托盘图标 {item.Label}");
+        tile.Click += async (_, _) =>
+        {
+            var (ok, error) = await System.Threading.Tasks.Task.Run(
+                () => _trayStripSource!.Activate(item, Beautiful.Core.Tray.TrayClickAction.LeftClick));
+            if (!ok) Logger.Warn($"托盘条转发失败: {error ?? "无原因"}");
+        };
+        tile.MouseRightButtonUp += async (_, _) =>
+        {
+            var (ok, error) = await System.Threading.Tasks.Task.Run(
+                () => _trayStripSource!.Activate(item, Beautiful.Core.Tray.TrayClickAction.RightClick));
+            if (!ok) Logger.Warn($"托盘条右键转发失败: {error ?? "无原因"}");
+        };
+        return tile;
+    }
+
+    private void StartTrayStrip()
+    {
+        if (!SettingsService.Current.ShowTrayInTopBar) return;
+        // 起两拍再读：顶栏刚立时 explorer 侧的通知区域可能还没就位，立即读只会拿到一次空样本。
+        _trayStripTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(45) };
+        _trayStripTimer.Tick += (_, _) => RefreshTrayStrip();
+        _trayStripTimer.Start();
+        Dispatcher.BeginInvoke(DispatcherPriority.ApplicationIdle, RefreshTrayStrip);
+    }
+
+    // ---------- 右区：状态刷新（网络/电量每分钟一条定时器；时钟单独一条，秒显时才逐秒） ----------
 
     private void StartStatusTracking()
     {

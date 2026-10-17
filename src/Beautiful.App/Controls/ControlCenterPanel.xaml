@@ -64,7 +64,10 @@
              置灰时同一行位置换成不可用原因，界面不需要第二套说明文案）。 -->
         <Style x:Key="CcTileStyle" TargetType="ToggleButton">
             <Setter Property="Height" Value="66"/>
-            <Setter Property="Margin" Value="3,0,3,0"/>
+            <!-- 垂直间距不能是 0：UniformGrid 两行砖块上下会直接贴死（真机截图实锤），macOS 控制中心
+                 砖块之间有肉眼可见的缝。左右 3 是原本就有的列缝，上下给 4，末行再由 TileHost 的
+                 Margin 收掉。 -->
+            <Setter Property="Margin" Value="3,4,3,0"/>
             <Setter Property="Foreground" Value="{DynamicResource ThemeTextPrimary}"/>
             <Setter Property="Background" Value="#14FFFFFF"/>
             <Setter Property="SnapsToDevicePixels" Value="True"/>

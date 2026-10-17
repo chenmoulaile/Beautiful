@@ -154,19 +154,35 @@ public sealed class WindowTracker : IDisposable
         ObjectDisposedException.ThrowIf(_disposed, this);
         var h = item.Handle;
         if (!NativeMethods.IsWindow(h)) return;
-        if ((foregroundHint ?? NativeMethods.GetForegroundWindow()) == h)
+        var front = foregroundHint ?? NativeMethods.GetForegroundWindow();
+        if (front == h)
         {
             NativeMethods.ShowWindow(h, SwMinimize);
+            Logger.Info($"窗口切换：最小化 hwnd=0x{h.ToInt64():X}（点击时它就在前台）");
         }
         else if (NativeMethods.IsIconic(h))
         {
             NativeMethods.ShowWindow(h, SwRestore);
             NativeMethods.SetForegroundWindow(h);
+            Logger.Info($"窗口切换：还原 hwnd=0x{h.ToInt64():X}");
         }
         else
         {
             NativeMethods.SetForegroundWindow(h);
+            Logger.Info($"窗口切换：置前 hwnd=0x{h.ToInt64():X}（点击时前台=0x{front.ToInt64():X} 不匹配）");
         }
+    }
+
+    /// <summary>
+    /// 供悬停快照直接投喂：光标还在 Dock 上扫的时候，前台一定还是用户的窗口
+    /// （点击把前台换给 Dock 是下一瞬间的事）。这是比 WinEvent 更贴近点击时刻的样本。
+    /// </summary>
+    public void NoteExternalForeground(IntPtr hwnd)
+    {
+        if (hwnd == IntPtr.Zero) return;
+        if (NativeMethods.GetWindowThreadProcessId(hwnd, out var pid) == 0) return;
+        if (pid == _ownPid) return;
+        LastExternalForeground = hwnd;
     }
 
     public void Dispose()

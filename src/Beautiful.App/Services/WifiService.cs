@@ -53,20 +53,28 @@ public sealed class WifiService : IDisposable
             try
             {
                 var count = WlanApi.ListCount(list);
+                WlanApi.WlanInterfaceInfo? first = null;
+                var notReady = 0;
                 for (var i = 0; i < count; i++)
                 {
                     var info = Marshal.PtrToStructure<WlanApi.WlanInterfaceInfo>(WlanApi.ListEntry<WlanApi.WlanInterfaceInfo>(list, i));
-                    // 取第一块"就绪/已连接"的网卡：多网卡（USB 适配器 + 内置）时内置那块优先，
-                    // 但顺序就是系统的顺序，不做额外偏好——猜错比不猜好解释。
-                    if (info.State is WlanApi.InterfaceStateReady or WlanApi.InterfaceStateConnected)
-                    {
-                        _interfaceGuid = info.InterfaceGuid;
-                        AdapterName = info.Description ?? "";
-                        _ready = true;
-                        return;
-                    }
+                    // 有网卡就够扫描用了；not_ready 只是初始化中的瞬态，不代表机器没网卡。
+                    if (info.State == WlanApi.InterfaceStateNotReady) { notReady++; first ??= info; continue; }
+                    first ??= info;
+                    break;
                 }
-                UnavailableReason = count == 0 ? "这台机器没有无线网卡" : "无线网卡当前不可用（可能已禁用或处于飞行模式）";
+                if (first is { } chosen)
+                {
+                    _interfaceGuid = chosen.InterfaceGuid;
+                    AdapterName = chosen.Description ?? "";
+                    _ready = true;
+                    if (notReady > 0 && count == notReady)
+                        Logger.Info($"WiFi 网卡 {notReady} 块都处于 not_ready（初始化中），面板可能短暂为空");
+                }
+                else
+                {
+                    UnavailableReason = count == 0 ? "这台机器没有无线网卡" : "无线网卡当前不可用（可能已禁用或处于飞行模式）";
+                }
             }
             finally
             {

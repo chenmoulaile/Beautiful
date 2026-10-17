@@ -161,15 +161,47 @@ public sealed class MinimizeAnimator : IDisposable
     private void PlayMinimize(IntPtr hwnd)
     {
         if (!IsRunning || Busy) return;
-        if (NativeMethods.IsIconic(hwnd)) return;   // 已经缩下去了，抓不到画面
+        if (NativeMethods.IsIconic(hwnd))
+        {
+            // 事件走队列后到，状态早已翻转——Dock 路径这时应已由预抓接管并占用 Busy。
+            Logger.Info($"genie 事件路径错过：0x{hwnd.ToInt64():X} 到手时已最小化");
+            return;
+        }
 
         var image = WindowCapture.Capture(hwnd);
-        if (image is null) return;                  // 纯色/失败：宁可不动画，也不甩一块黑卡
+        if (image is null) { Logger.Info("genie 事件路径：抓帧不可用，跳过"); return; }
         if (!NativeMethods.GetWindowRect(hwnd, out var rect)) return;
 
         var source = ToRect(rect);
         var icon = IconRectFor(source, _dockTarget(hwnd));
         StartGenie(image, source, icon, MinimizeDurationMs, reverse: false);
+    }
+
+    /// <summary>
+    /// Dock 触发的最小化专用：<b>趁窗口还画着</b>先抓一帧。
+    /// <para>
+    /// 事件路径救不了这条链——<c>EVENT_SYSTEM_MINIMIZESTART</c> 走系统队列送达时，
+    /// 我们那次同步的 <c>ShowWindow(SW_MINIMIZE)</c> 早已完成、状态早已翻转，
+    /// <see cref="PlayMinimize"/> 开头的 IsIconic 早退必然命中：真机上动画一次没播过就是这么来的。
+    /// 所以由 Dock 在 ShowWindow <b>之前</b>把画面与矩形抓走，动画拿预抓的那份放。
+    /// </para>
+    /// </summary>
+    public (BitmapSource? Image, Rect? SourceRect) PreCapture(IntPtr hwnd)
+    {
+        if (!IsRunning || Busy) return (null, null);
+        if (hwnd == IntPtr.Zero || NativeMethods.IsIconic(hwnd)) return (null, null);
+        var image = WindowCapture.Capture(hwnd);
+        if (image is null) return (null, null);
+        if (!NativeMethods.GetWindowRect(hwnd, out var rect)) return (null, null);
+        return (image, ToRect(rect));
+    }
+
+    /// <summary>用预抓的画面放 genie。窗口此刻多半已经缩下去，矩形用预抓的那份，不再现查。</summary>
+    public void PlayMinimizeFromCapture(IntPtr hwnd, BitmapSource image, Rect sourceRect)
+    {
+        if (!IsRunning || Busy) return;
+        var icon = IconRectFor(sourceRect, _dockTarget(hwnd));
+        StartGenie(image, sourceRect, icon, MinimizeDurationMs, reverse: false);
     }
 
     /// <summary>

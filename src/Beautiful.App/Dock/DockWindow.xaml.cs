@@ -65,6 +65,11 @@ public partial class DockWindow : AcrylicWindow
     private readonly SmtcService _smtc;
     private readonly MediaViewModel _mediaVm;
     private readonly TaskbarManager? _taskbar; // App 注入：TaskbarCreated（explorer 重建）后重放策略
+    private readonly Animation.MinimizeAnimator? _animator; // App 注入：Dock 触发的最小化走"预抓帧"路径（见 ActivateItem）
+
+    /// <summary>光标最后一次扫过条带时的前台窗口（那时前台一定还是用户的）。
+    /// 点击条带会把前台换给 Dock 自己，判定"点的是不是前台"必须在悬停时就留样本。</summary>
+    private IntPtr _foregroundAtHover;
     private MediaPanel? _mediaPanel;
     private DateTime? _panelAutoHiddenAtUtc; // 面板最近一次"失焦自动收起"时刻（胶囊点击的 toggle 语义用）
     // 图标尺寸/放大强度滑杆拖动时会连续触发排布刷新；条带重排（AppBar 协商 + SetWindowPos）成本较高，
@@ -104,9 +109,10 @@ public partial class DockWindow : AcrylicWindow
     private bool _closing; // OnClosing 起置位：阻止关闭前挂起的 BeginInvoke 重注册在 ABM_REMOVE 后复活 AppBar
     private HwndSource? _source;
 
-    public DockWindow(TaskbarManager? taskbar = null)
+    public DockWindow(TaskbarManager? taskbar = null, Animation.MinimizeAnimator? animator = null)
     {
         _taskbar = taskbar;
+        _animator = animator;
         _smtc = new SmtcService();
         _mediaVm = new MediaViewModel(_smtc, Dispatcher); // 先于 InitializeComponent：XAML 模板可能经 RelativeSource 绑定 MediaVm
         InitializeComponent();
@@ -175,6 +181,9 @@ public partial class DockWindow : AcrylicWindow
         Surface.CursorProvider = SurfaceCursorXDip;   // 真实物理光标（含 AppBar 矩形守卫），见放大场注释
         Surface.Activated = ActivateItem;
         Surface.ContextRequested = OpenItemContextMenu;
+        // 悬停期前台快照：光标在条带上移动时前台必然还是用户的窗口（点击把前台换给 Dock 是
+        // 下一瞬间的事）。这条样本比 WinEvent 通知更贴近点击时刻，也不受事件送达时机影响。
+        Surface.MouseMove += SnapshotForegroundAtHover;
         // 悬停预览：MouseMove 判定当前条目并起/重置 350ms 驻留；离开条目行即收起。
         Surface.MouseMove += OnSurfaceMouseMove;
         Surface.MouseLeave += (_, _) => CancelPreview();
@@ -855,7 +864,7 @@ public partial class DockWindow : AcrylicWindow
                 var wi = item.WindowHandle is { } h
                     ? _tracker.Windows.FirstOrDefault(w => w.Handle == h)
                     : null;
-                if (wi is not null) _tracker.ActivateOrMinimize(wi, front);
+                if (wi is not null) ToggleWindowItem(wi, front);
                 break;
 
             case DockItemKind.RecycleBin:
@@ -886,17 +895,56 @@ public partial class DockWindow : AcrylicWindow
     }
 
     /// <summary>
-    /// 这次点击发生时"用户面对的是哪个窗口"。现前台还是别人的，就照实返回；
-    /// 一旦现前台已经变成 Dock 自己（点条带会把前台换给 Dock），改用跟踪器记下的最后一次外部激活。
-    /// 不这么做的后果就是用户报的那条："点 Dock 图标关不掉窗口"——判"是不是前台"的那一步
-    /// 永远拿到 Dock，最小化分支于是永远走不到。
+    /// 光标扫过条带期间持续记录"用户面对的窗口"。只认外部窗口：我们自己的任何表面
+    /// （Dock/顶栏/预览弹层/面板）都不改变"用户此刻在用哪个应用"这个事实。
+    /// </summary>
+    private void SnapshotForegroundAtHover(object sender, System.Windows.Input.MouseEventArgs e)
+    {
+        var live = NativeMethods.GetForegroundWindow();
+        if (live == IntPtr.Zero || live == _hwnd) return;
+        if (NativeMethods.GetWindowThreadProcessId(live, out var pid) == 0 || pid == (uint)Environment.ProcessId) return;
+        _foregroundAtHover = live;
+        _tracker.NoteExternalForeground(live);   // 同一样本喂给跟踪器，给"没经过悬停的点击"兜底
+    }
+
+    /// <summary>
+    /// 这次点击发生时"用户面对的是哪个窗口"。
+    /// <para>
+    /// 现前台还是别人的，就照实返回；一旦现前台已经变成我们自己进程的窗口（点条带会把前台换给
+    /// Dock，预览弹层/面板也可能占住它），改用<b>悬停快照</b>——那是光标扫到图标前最后一次
+    /// "前台还是别人的"读数。不这么做的后果就是用户报的那条："点 Dock 图标关不掉窗口"。
+    /// 悬停快照没有时（触屏/程序化点击），退回 WinEvent 记录，最后才认命用现值。
+    /// </para>
     /// </summary>
     private IntPtr ForegroundBeforeDockClick()
     {
         var live = NativeMethods.GetForegroundWindow();
-        if (live != _hwnd) return live;
+        if (!IsOwnWindow(live)) return live;
+        if (_foregroundAtHover != IntPtr.Zero) return _foregroundAtHover;
         var last = _tracker.LastExternalForeground;
         return last != IntPtr.Zero ? last : live;
+    }
+
+    private bool IsOwnWindow(IntPtr hwnd)
+        => hwnd != IntPtr.Zero
+           && NativeMethods.GetWindowThreadProcessId(hwnd, out var pid) != 0
+           && pid == (uint)Environment.ProcessId;
+
+    /// <summary>
+    /// 运行窗口条目的点击：先抓帧再切换（顺序是硬要求）。
+    /// <para>
+    /// genie 的 <c>EVENT_SYSTEM_MINIMIZESTART</c> 走系统队列送达时，我们那次同步的
+    /// <c>ShowWindow(SW_MINIMIZE)</c> 早已完成、窗口已经 iconic，事件路径永远抓不到画面
+    /// （真机上动画一次没播过就是这么来的）。所以<b>趁窗口还画着先抓一帧</b>，
+    /// 切换完成后如果它真的缩下去了，就拿预抓的那份放动画。
+    /// </para>
+    /// </summary>
+    private void ToggleWindowItem(WindowItem wi, IntPtr front)
+    {
+        var (image, sourceRect) = _animator?.PreCapture(wi.Handle) ?? (null, null);
+        _tracker.ActivateOrMinimize(wi, front);
+        if (image is not null && sourceRect is { } rect && NativeMethods.IsIconic(wi.Handle))
+            _animator?.PlayMinimizeFromCapture(wi.Handle, image, rect);
     }
 
     /// <summary>
@@ -925,7 +973,7 @@ public partial class DockWindow : AcrylicWindow
                    ?? mine.FirstOrDefault(w => !w.IsMinimized)
                    ?? mine[0];
         Logger.Info($"固定项点击 → 切换在跑窗口 {target}（{mine.Count} 个候选）hwnd=0x{pick.Handle.ToInt64():X} 当前最小化={pick.IsMinimized}");
-        _tracker.ActivateOrMinimize(pick, front);
+        ToggleWindowItem(pick, front);
         return true;
     }
 

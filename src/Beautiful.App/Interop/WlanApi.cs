@@ -29,9 +29,17 @@ internal static class WlanApi
     public const uint NetworkConnected = 0x00000001;
     public const uint NetworkHasProfile = 0x00000002;
 
-    /// <summary>WLAN_INTERFACE_STATE：只用到 ready/connected 两档判"适配器可用"。</summary>
-    public const int InterfaceStateReady = 2;
-    public const int InterfaceStateConnected = 5;
+    /// <summary>
+    /// WLAN_INTERFACE_STATE 全档（wlanapi.h 的 wlan_interface_state 枚举）：
+    /// 0 not_ready / 1 connected / 2 ad_hoc_joined / 3 disconnecting / 4 disconnected /
+    /// 5 associating / 6 discovering / 7 authenticating。
+    /// 曾经只写两个值还都抄错了档位（2、5 实际是 ad_hoc_joined / associating），于是
+    /// "已连接=1"的常态网卡反而过不了"适配器可用"判定，面板永远显示不可用——抄码不核对
+    /// 文档是这个家族的第二起（前一起是 ShellHook 的 HSHELL_ACTIVATED）。
+    /// </summary>
+    public const int InterfaceStateNotReady = 0, InterfaceStateConnected = 1, InterfaceStateAdHocJoined = 2,
+                      InterfaceStateDisconnecting = 3, InterfaceStateDisconnected = 4, InterfaceStateAssociating = 5,
+                      InterfaceStateDiscovering = 6, InterfaceStateAuthenticating = 7;
 
     /// <summary>DOT11_BSS_TYPE：0=any（本程序只连基础设施网络，profile 里已写 ESS）。</summary>
     public const int BssTypeInfrastructure = 1;

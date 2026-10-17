@@ -106,15 +106,9 @@ public partial class App : Application
             _taskbar.Apply(SettingsService.PolicyOf(SettingsService.Current));
             SettingsService.SetAutostart(SettingsService.Current.Autostart);
 
-            // 6. Dock 即主 UI：--minimized 仅标识自启来源（自启语义），Dock 照常显示，超出仅记录
-            _dock = new DockWindow(_taskbar);
-            _dock.Show();
-
-            // 6.3 任务栏玻璃壳（v3.2 #6）：必须在任务栏策略落地之后建，否则会给一条已被推出的任务栏化妆
-            ApplyGlassState(SettingsService.Current);
-
-            // 6.2 最小化/最大化动画（v3.2）：挂在 Dock 之后，因为落点要问 Dock 图标在哪。
-            // 它是纯装饰的附属能力，装不上只记日志，绝不连坐主 UI（与顶栏同一处置）。
+            // 6.2 最小化/最大化动画（v3.2）：先于 Dock 构造并注入——Dock 触发的最小化要"趁窗口还
+            // 画着先抓一帧"，事件路径到我们手里时窗口已经 iconic。落点回调查询 _dock 字段是惰性的，
+            // 此刻为 null 没关系。它是纯装饰的附属能力，装不上只记日志，绝不连坐主 UI（与顶栏同一处置）。
             if (SettingsService.Current.MinimizeAnimation)
             {
                 try
@@ -126,6 +120,14 @@ public partial class App : Application
                     Logger.Warn($"最小化动画未启用：{ex.GetType().Name} {ex.Message}");
                 }
             }
+
+            // 6. Dock 即主 UI：--minimized 仅标识自启来源（自启语义），Dock 照常显示，超出仅记录
+            _dock = new DockWindow(_taskbar, _animator);
+            _dock.Show();
+
+            // 6.3 任务栏玻璃壳（v3.2 #6）：必须在任务栏策略落地之后建，否则会给一条已被推出的任务栏化妆
+            ApplyGlassState(SettingsService.Current);
+
             if (e.Args.Contains("--minimized", StringComparer.OrdinalIgnoreCase))
                 Logger.Info("--minimized（开机自启）：Dock 即主 UI，照常显示");
             Logger.Info("Dock 已显示");
