@@ -1,4 +1,3 @@
-using System.Dynamic;
 using System.Runtime.InteropServices;
 
 namespace Beautiful.App.Services;
@@ -17,8 +16,16 @@ namespace Beautiful.App.Services;
 /// 零新增包、零手写 vtable，代价是依赖 <c>wbemdisp</c> 注册（桌面 Windows 一定有）。
 /// </para>
 /// <para>
-/// 本机实测（2026-10-17）：<c>InstancesOf('WmiMonitorBrightness')</c> 读到 61，
-/// <c>WmiMonitorBrightnessMethods</c> 上有 <c>WmiSetBrightness</c>。读失败/没有这类（台式机无 WMI 亮度）
+/// 【枚举为什么不能写 <c>(IEnumerable&lt;object&gt;)</c>】这是 v3.8.0 崩溃的真身：<c>SWbemObjectSet</c>
+/// 是纯 IDispatch 集合，只给 <c>_NewEnum</c>（<c>IEnumVARIANT</c>）；强转**泛型**接口会让运行时绑定器
+/// 去 QueryInterface <c>IEnumerable&lt;Object&gt;</c>，直接 <c>E_NOINTERFACE (0x80004002)</c>。
+/// 本机实测三种写法：泛型强转 FAIL、非泛型 <c>(IEnumerable)</c> OK、<c>Count + ItemIndex(i)</c> OK；
+/// 这里选后者——它不依赖 RCW 的 IEnumVARIANT 映射，而且多屏时索引就是屏序。
+/// </para>
+/// <para>
+/// 本机实测（2026-10-17，<c>.tools\wmi-probe</c>）：<c>WmiMonitorBrightness</c> 有 1 个实例、
+/// <c>CurrentBrightness=70</c>；写路径用 <c>SpawnInstance_</c> 构造入参后 <c>ExecMethod_</c>
+/// 把**当前值原样写回**（屏幕不变）也无异常，写前/写后都是 70。读失败或没有这类（台式机无 WMI 亮度）
 /// 一律判不可用并给出原因——不画一根拖了没反应的滑杆。
 /// </para>
 /// </summary>
@@ -38,20 +45,21 @@ public static class BrightnessService
         if (svc is null) return -1;
         try
         {
-            foreach (var item in (IEnumerable<object>)svc.InstancesOf("WmiMonitorBrightness"))
+            foreach (var item in Enumerate(svc.InstancesOf("WmiMonitorBrightness")))
             {
-                dynamic o = item;
                 // 落到 object 上再判：dynamic 实参会让整个调用走运行期绑定器，
                 // 而绑定器不接受 `out var`（推不出类型）。
-                object? raw = o.Properties_.Item("CurrentBrightness").Value;
+                object? raw = item.Properties_.Item("CurrentBrightness").Value;
                 if (raw is not null && TryConvert(raw, out int percent)) return percent;
             }
             _unavailable = "这台机器没有可读的亮度接口（台式机或虚拟显卡常见）";
             return -1;
         }
-        catch (Exception ex) when (IsCom(ex))
+        catch (Exception ex)
         {
+            // 见 Unavailable 注释：探测硬件的整条路任何异常都只降级，绝不让它冒到 UI 异常弹窗。
             _unavailable = $"亮度读取失败：{ex.GetType().Name}";
+            Logger.Warn($"BrightnessService.Get 失败: {ex.GetType().Name}: {ex.Message}");
             return -1;
         }
     }
@@ -65,9 +73,8 @@ public static class BrightnessService
         try
         {
             var applied = false;
-            foreach (var item in (IEnumerable<object>)svc.InstancesOf("WmiMonitorBrightnessMethods"))
+            foreach (var instance in Enumerate(svc.InstancesOf("WmiMonitorBrightnessMethods")))
             {
-                dynamic instance = item;
                 dynamic input = instance.Methods_.Item("WmiSetBrightness").InParameters.SpawnInstance_();
                 input.Properties_.Item("Brightness").Value = (byte)percent;
                 input.Properties_.Item("Timeout").Value = 0u;   // 秒：0 = 立即
@@ -77,12 +84,22 @@ public static class BrightnessService
             if (!applied) _unavailable = "这台机器没有 WmiMonitorBrightnessMethods（驱动未暴露亮度接口）";
             return applied;
         }
-        catch (Exception ex) when (IsCom(ex))
+        catch (Exception ex)
         {
             _unavailable = $"亮度设置失败：{ex.GetType().Name}";
-            Logger.Warn($"BrightnessService.Set 失败: {ex.Message}");
+            Logger.Warn($"BrightnessService.Set 失败: {ex.GetType().Name}: {ex.Message}");
             return false;
         }
+    }
+
+    /// <summary>
+    /// 按 <c>Count</c> + <c>ItemIndex(i)</c> 枚举 WMI 自动化集合。<b>不要"优化"成 LINQ 或泛型强转</b>
+    /// ——那正是 v3.8.0 那个异常框的来源（详见类注释的实测表）。
+    /// </summary>
+    private static IEnumerable<dynamic> Enumerate(dynamic wbemSet)
+    {
+        var count = Convert.ToInt32((object)wbemSet.Count);
+        for (var i = 0; i < count; i++) yield return wbemSet.ItemIndex(i);
     }
 
     private static dynamic? Services()
@@ -97,10 +114,11 @@ public static class BrightnessService
             _services = locator.ConnectServer(".", @"root\wmi");
             _unavailable = null;
         }
-        catch (Exception ex) when (IsCom(ex) || ex is InvalidOperationException)
+        catch (Exception ex)
         {
             _services = null;
             _unavailable = $"WMI 不可用：{ex.GetType().Name}";
+            Logger.Warn($"BrightnessService 连接 root\\wmi 失败: {ex.GetType().Name}: {ex.Message}");
         }
         return _services;
     }
@@ -119,13 +137,4 @@ public static class BrightnessService
             return false;
         }
     }
-
-    /// <summary>
-    /// 只吞"这台机器的 WMI 不配合"这一类：COM 层异常 + 动态绑定失败。
-    /// 后者按类型名判而不写 <c>RuntimeBinderException</c>——那个类型住在 Microsoft.CSharp 里，
-    /// 把它写进 using 会让本文件多一条对绑定器程序集的显式依赖，而这里只想知道"是不是它"。
-    /// </summary>
-    private static bool IsCom(Exception ex) => ex is COMException or InvalidComObjectException
-                                               or NotSupportedException
-                                               || ex.GetType().Name == "RuntimeBinderException";
 }
