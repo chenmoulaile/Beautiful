@@ -50,6 +50,7 @@ public partial class ControlCenterPanel : UserControl, IBackdropAware, IPopupSha
 
     private readonly TopBarContext _ctx;
     private readonly SystemVolumeService _volume = new();
+    private WifiService? _wifi;   // Wi-Fi 砖块：懒建（面板每次打开重建一次，句柄随 Shutdown 释放）
 
     /// <summary>初始化/回读期间的屏蔽位：程序改 IsChecked/Value 不得回写系统（同 SettingsWindow 的惯用法）。</summary>
     private bool _loading = true;
@@ -70,6 +71,8 @@ public partial class ControlCenterPanel : UserControl, IBackdropAware, IPopupSha
         BuildPolicySegments();
         BuildTiles();
         RefreshVolume();
+        RefreshWifi();
+        RefreshBrightness();
         _loading = false;
     }
 
@@ -356,10 +359,126 @@ public partial class ControlCenterPanel : UserControl, IBackdropAware, IPopupSha
     /// 面板拆除（宿主 Closed 时由打开方调用）：释放音频 COM 引用 + 取消未完成的滑杆保活标记。
     /// 幂等，且刻意不订阅任何静态事件——本面板没有需要对称解绑的静态挂点。
     /// </summary>
+    // ---------- Wi-Fi 砖块 / 亮度滑杆 / 系统页入口（v3.5） ----------
+
+    /// <summary>
+    /// 读无线电当前状态。三态：<b>启用 / 禁用 / 问不出来</b>——最后一种必须置灰并写原因，
+    /// 画成"关"会给用户一个看起来正常、点下去没反应的假开关。
+    /// </summary>
+    private void RefreshWifi()
+    {
+        var previous = _loading;
+        _loading = true;
+        try
+        {
+            _wifi ??= new WifiService();
+            if (!_wifi.IsAvailable)
+            {
+                WifiTile.IsEnabled = false;
+                WifiTile.IsChecked = false;
+                WifiReason.Text = _wifi.UnavailableReason ?? "没有可用的无线网卡";
+                WifiReason.Visibility = Visibility.Visible;
+                WifiTile.ToolTip = WifiReason.Text;
+                return;
+            }
+            var enabled = _wifi.IsAdapterEnabled();
+            if (enabled is null)
+            {
+                WifiTile.IsEnabled = false;
+                WifiTile.IsChecked = false;
+                WifiReason.Text = "读不到网卡开关状态";
+                WifiReason.Visibility = Visibility.Visible;
+                WifiTile.ToolTip = WifiReason.Text;
+                return;
+            }
+            WifiReason.Visibility = Visibility.Collapsed;
+            WifiTile.IsEnabled = true;
+            WifiTile.IsChecked = enabled.Value;
+            WifiTile.ToolTip = enabled.Value ? "Wi-Fi：已开启，点击关闭无线电" : "Wi-Fi：已关闭，点击开启无线电";
+        }
+        finally { _loading = previous; }
+    }
+
+    /// <summary>
+    /// 砖块被点 → 真写网卡开关。<b>失败就回读真值把界面拉回来</b>并显示原因：
+    /// 一个"亮着但系统里其实没开"的开关比没有开关更糟。
+    /// </summary>
+    private void WifiTile_Changed(object sender, RoutedEventArgs e)
+    {
+        if (_loading || _wifi is null) return;
+        var want = WifiTile.IsChecked == true;
+        if (_wifi.SetAdapterEnabled(want, out var error)) { RebuildTilesDeferred(); return; }
+        WifiTile.ToolTip = error ?? "没能改动网卡状态";
+        RefreshWifi();
+    }
+
+    /// <summary>读亮度。不可用（台式机/虚拟显卡/驱动没暴露）→ 整行置灰 + 中文原因。</summary>
+    private void RefreshBrightness()
+    {
+        var previous = _loading;
+        _loading = true;
+        try
+        {
+            var percent = BrightnessService.Get();
+            if (percent < 0)
+            {
+                BrightnessSlider.IsEnabled = false;
+                BrightnessSlider.Value = 0;
+                BrightnessText.Text = "不可用";
+                BrightnessReason.Text = BrightnessService.UnavailableReason ?? "这台机器没有可读的亮度接口";
+                BrightnessReason.Visibility = Visibility.Visible;
+                BrightnessSlider.ToolTip = BrightnessReason.Text;
+                return;
+            }
+            BrightnessReason.Visibility = Visibility.Collapsed;
+            BrightnessSlider.IsEnabled = true;
+            BrightnessSlider.Value = percent;
+            BrightnessText.Text = $"{percent}%";
+            BrightnessSlider.ToolTip = $"屏幕亮度 {percent}%";
+        }
+        finally { _loading = previous; }
+    }
+
+    /// <summary>
+    /// 亮度即时写（与音量同一口径：反馈环在眼睛上，防抖只会让人觉得滑杆不跟手）。
+    /// 写失败回读真值重画，界面不停在"看着改了其实没改"的位置。
+    /// </summary>
+    private void Brightness_ValueChanged(object sender, RoutedPropertyChangedEventArgs<double> e)
+    {
+        if (_loading || !BrightnessSlider.IsEnabled) return;
+        var percent = (int)Math.Round(e.NewValue, MidpointRounding.AwayFromZero);
+        if (!BrightnessService.Set(percent)) { RefreshBrightness(); return; }
+        BrightnessText.Text = $"{percent}%";
+        BrightnessSlider.ToolTip = $"屏幕亮度 {percent}%";
+    }
+
+    /// <summary>
+    /// 蓝牙与飞行模式：<b>只打开系统对应设置页</b>。Windows 不给普通进程这两个无线电开关
+    /// （WinRT 的 Radios.SetState 需要打包应用才有的 <c>radios</c> 能力；禁用蓝牙设备要管理员权限），
+    /// 所以这里做诚实的入口，不做点了没反应的假开关。
+    /// </summary>
+    private void Bluetooth_Click(object sender, RoutedEventArgs e) => OpenSystemPage("ms-settings:bluetooth");
+
+    private void Airplane_Click(object sender, RoutedEventArgs e) => OpenSystemPage("ms-settings:network-airplane");
+
+    private static void OpenSystemPage(string uri)
+    {
+        try
+        {
+            System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(uri) { UseShellExecute = true });
+        }
+        catch (Exception ex)
+        {
+            Logger.Warn($"打开系统设置页失败 {uri}: {ex.GetType().Name} {ex.Message}");
+        }
+    }
+
     public void Shutdown()
     {
         SetKeepOpen(false);
         _host = null;
         _volume.Dispose();
+        _wifi?.Dispose();
+        _wifi = null;
     }
 }

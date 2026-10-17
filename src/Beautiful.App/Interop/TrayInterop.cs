@@ -37,9 +37,23 @@ internal static class TrayInterop
     /// <summary>Win11 24H2 把溢出区换成 XAML 岛后的顶层窗口类名（此时 ToolbarWindow32 已不存在，只有 UIA 能读）。</summary>
     public const string XamlIslandOverflowWindow = "TopLevelWindowForOverflowXamlIsland";
 
-    // 24H2 的 XAML 岛内容宿主还有 "Windows.UI.Composition.DesktopWindowContentBridge" 这类类名，
-    // 但 UIA 路不需要它们：我们从 Shell_TrayWnd 的 HWND 进无障碍树，按 ControlType/Name 命中就够了，
-    // 把一个用不上的类名写成常量只会让下一个人以为还有一条按类名找图标的路。
+    /// <summary>
+    /// Win11 24H2 任务栏内容的 XAML 岛宿主（<b>Shell_TrayWnd 的子窗口</b>，不是顶层窗口）。
+    /// <para>
+    /// 这里曾经写过一句"UIA 路不需要它，从 Shell_TrayWnd 进树按 ControlType/Name 命中就够了"——
+    /// 本机（26200）实测是错的：从 Shell_TrayWnd 的 HWND 做 <c>FindAll(Descendants, Button)</c> 得到
+    /// <b>0 个</b>，而从这个子窗口的 HWND 进同一棵树得到 <b>23 个</b>。XAML 岛自带独立的 UIA
+    /// 片段根，Win32 宿主的后代遍历不会跨过去，所以必须按 HWND 分别进树。
+    /// 取证脚本：<c>.tools/trayprobe.ps1</c> / <c>trayprobe2.ps1</c>（只读，不建窗口不发输入）。
+    /// </para>
+    /// </summary>
+    public const string TaskbarXamlIslandBridge = "Windows.UI.Composition.DesktopWindowContentBridge";
+
+    /// <summary>岛里第三方托盘图标的唯一 AutomationId（实测：华为电脑管家/华为控制中心/更新提示都是它）。</summary>
+    public const string IslandNotifyItemId = "NotifyItemIcon";
+
+    /// <summary>岛里 shell 自己的部件（音量/电源/时钟/显示桌面/输入指示/显示隐藏的图标）的类名前缀。</summary>
+    public const string IslandSystemTrayClassPrefix = "SystemTray.";
 
     // ---------- 工具栏消息（commctrl.h 的 WM_USER 偏移） ----------
     // 【为什么按偏移写而不是抄字面量】任务里给的 0x417/0x41B/0x419 与 commctrl.h 对不上

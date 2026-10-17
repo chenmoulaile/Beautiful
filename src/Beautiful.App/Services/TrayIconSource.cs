@@ -634,13 +634,24 @@ public sealed class TrayIconSource
             {
                 var root = AutomationElement.FromHandle(hwnd);
                 if (root is null) continue;
+                // 岛根与旧路径的筛法不同：岛里"按钮"既有托盘图标也有任务栏应用按钮/开始/任务视图，
+                // 按 HWND 进树时只能靠类名前缀 + AutomationId 认，见 FromElement。
+                var island = GetWindowClassName(hwnd) == TrayInterop.TaskbarXamlIslandBridge;
                 var buttons = root.FindAll(TreeScope.Descendants, ButtonCondition);
                 // 上限来自 Core：XAML 岛里"按钮"很多（每个状态项、每一页都是），没有上界就把一次面板打开
                 // 变成几百次跨进程属性读取
                 for (var i = 0; i < buttons.Count && i < TrayLayout.MaxButtonsPerToolbar; i++)
                 {
-                    var item = FromElement(buttons[i]);
+                    var item = FromElement(buttons[i], island);
                     if (item is null) continue;
+                    // 岛里的格子补真实像素：任务栏被本程序移出屏幕后，屏幕上没有那一格，
+                    // 裁屏这条路必然失败——但 PrintWindow 照样能把那个窗口画出来，于是按
+                    // "整窗抓取 + 按 UIA 给的屏幕矩形抠出这一格"取图。几何对不上就放弃（宁可空框不错画）。
+                    if (island && item.Image is null && item.HasRect)
+                    {
+                        var cell = WindowCapture.CaptureRegionOfWindow(hwnd, item.RectPx);
+                        if (cell is not null) item = item with { Image = cell, ImageNote = null };
+                    }
                     sink.Add(item);
                     found++;
                 }
@@ -656,9 +667,10 @@ public sealed class TrayIconSource
     }
 
     /// <summary>
-    /// UIA 读取的根：<c>Shell_TrayWnd</c> 一定试；两个溢出窗口类名<b>在的时候</b>才试
-    /// （那个 flyout 只有展开后才存在——所以"展开隐藏图标"之后刷新一次才会多出隐藏区的条目）。
-    /// 用字典去重：同一个 hwnd 被两条路各加一次会让同一图标读两遍。
+    /// UIA 读取的根。<b>24H2 的 XAML 岛必须按子窗口 HWND 单独进树</b>：从 Shell_TrayWnd 的 HWND
+    /// 做后代遍历拿不到岛里的任何东西（本机实测 0 个按钮，而岛那个子窗口里 23 个）。
+    /// 两个溢出窗口类名<b>在的时候</b>才试（那个 flyout 只有展开后才存在——所以"展开隐藏图标"
+    /// 之后刷新一次才会多出隐藏区的条目）。用字典去重：同一个 hwnd 被两条路各加一次会让同一图标读两遍。
     /// </summary>
     private static Dictionary<IntPtr, string> TrayRoots()
     {
@@ -671,14 +683,30 @@ public sealed class TrayIconSource
         Add(TrayInterop.ShellTrayWnd, "任务栏");
         Add(TrayInterop.NotifyIconOverflowWindow, "隐藏图标区");
         Add(TrayInterop.XamlIslandOverflowWindow, "隐藏图标区(XAML 岛)");
+        var tray = FindWindowClass(TrayInterop.ShellTrayWnd);
+        if (tray != IntPtr.Zero)
+        {
+            // 岛宿主是 Shell_TrayWnd 的直接子窗口（实测），用 FindWindowEx 逐级找，不枚举全部子窗口。
+            var island = TrayInterop.FindChildByClass(tray, TrayInterop.TaskbarXamlIslandBridge);
+            if (island != IntPtr.Zero) map[island] = "任务栏(XAML 岛)";
+        }
         return map;
     }
 
     /// <summary>把一个 UIA Button 元素折成条目。既没名字又没位置的元素丢掉（画出来就是一格无法解释的方块）。</summary>
-    private static TrayIconItem? FromElement(AutomationElement element)
+    private static TrayIconItem? FromElement(AutomationElement element, bool islandRoot = false)
     {
         var name = SafeString(() => element.Current.Name);
         var automationId = SafeString(() => element.Current.AutomationId);
+
+        // 24H2 的 XAML 岛里"按钮"是什么都有：开始、任务视图、每个任务栏应用按钮、音量/电源/时钟/
+        // 显示桌面，再加上真正的第三方托盘图标。本机实测只有 <c>AutomationId == NotifyItemIcon</c>
+        // 这一种是应用自己注册的图标（华为电脑管家/华为控制中心/更新提示三条都是它），
+        // 其余 shell 部件的 aid 是 SystemTrayIcon 或另有其名。所以岛根只收这一种——
+        // 按名字筛会被"音量 本机扬声器 (Audio Device): 已静音"这类带动态后缀的名字骗过去。
+        if (islandRoot && !string.Equals(automationId, TrayInterop.IslandNotifyItemId, StringComparison.OrdinalIgnoreCase))
+            return null;
+
         var label = name.Length > 0 ? name : automationId;
         var rectPx = RectOf(element);
         var hasRect = rectPx is not null;

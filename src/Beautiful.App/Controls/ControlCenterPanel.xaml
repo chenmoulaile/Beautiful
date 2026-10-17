@@ -178,6 +178,50 @@
 
                     <UniformGrid x:Name="TileHost" Columns="2" Margin="0,0,0,2"/>
 
+                    <!-- Wi-Fi 砖块（v3.5）：真正的无线电开关（WlanSetInterface），不是"打开设置"的假开关。
+                         读不到状态时置灰并写原因；点下去失败会把系统原因显示出来（不静默回弹）。 -->
+                    <ToggleButton x:Name="WifiTile" Content="Wi-Fi" Style="{StaticResource CcTileStyle}"
+                                  Margin="3,4,3,0" HorizontalAlignment="Left" MinWidth="150"
+                                  Checked="WifiTile_Changed" Unchecked="WifiTile_Changed"
+                                  AutomationProperties.Name="控制中心 Wi-Fi 开关"/>
+                    <TextBlock x:Name="WifiReason" FontSize="10.5" Opacity="0.62" TextWrapping="Wrap"
+                               Margin="4,3,1,0" Visibility="Collapsed"/>
+
+                    <!-- 亮度行（v3.5）：内置屏走 root\WMI 的 WmiMonitorBrightness（DDC/CI 那条对笔记本面板无效）。
+                         读不到就整行置灰 + 写原因，绝不画一根拖了没反应的滑杆。 -->
+                    <Grid Margin="0,8,0,0">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="Auto"/>
+                            <ColumnDefinition Width="*"/>
+                            <ColumnDefinition Width="Auto"/>
+                        </Grid.ColumnDefinitions>
+                        <TextBlock Grid.Column="0" Text="&#xE706;" FontSize="13" Margin="2,0,9,0"
+                                   VerticalAlignment="Center" Opacity="0.85"
+                                   FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets"
+                                   Foreground="{DynamicResource ThemeTextPrimary}"/>
+                        <Slider x:Name="BrightnessSlider" Grid.Column="1" Minimum="0" Maximum="100"
+                                IsMoveToPointEnabled="True" VerticalAlignment="Center"
+                                TickFrequency="1" SmallChange="1" LargeChange="5"
+                                ValueChanged="Brightness_ValueChanged"
+                                AutomationProperties.Name="屏幕亮度"/>
+                        <TextBlock x:Name="BrightnessText" Grid.Column="2" MinWidth="46" Margin="8,0,0,0"
+                                   FontSize="11.5" Opacity="0.85" TextAlignment="Right" VerticalAlignment="Center"/>
+                    </Grid>
+                    <TextBlock x:Name="BrightnessReason" FontSize="10.5" Opacity="0.62" TextWrapping="Wrap"
+                               Margin="1,3,1,0" Visibility="Collapsed"/>
+
+                    <!-- 蓝牙 / 飞行模式：Windows 不给普通进程这两个无线电开关（WinRT Radios 需要
+                         打包应用才能拿的 radios 能力，禁用设备要管理员），所以这两块**明说是打开系统页**，
+                         不做"看起来能开关、实际没反应"的假砖块。 -->
+                    <UniformGrid Columns="2" Margin="0,7,0,0">
+                        <Button x:Name="BluetoothButton" Content="蓝牙设置…" Style="{StaticResource CcFooterStyle}"
+                                Margin="3,0,4,0" Click="Bluetooth_Click"
+                                AutomationProperties.Name="控制中心 打开蓝牙设置"/>
+                        <Button x:Name="AirplaneButton" Content="飞行模式…" Style="{StaticResource CcFooterStyle}"
+                                Margin="4,0,3,0" Click="Airplane_Click"
+                                AutomationProperties.Name="控制中心 打开飞行模式设置"/>
+                    </UniformGrid>
+
                     <!-- 音量行：图标按钮（静音旗标）+ 滑杆 + 读数。不可用时整行置灰，
                          下面一行 VolumeReason 给出中文原因（绝不显示一个编出来的百分比）。 -->
                     <Grid Margin="0,8,0,0">

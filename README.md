@@ -82,6 +82,21 @@ Beautiful 接管日常桌面三件套：屏幕底部是悬浮 Dock（应用固�
 | **控制中心砖块间距 + 设置窗口正文** | 砖块上下贴死（真机截图实锤）→ 行距 4；设置窗口正文按钮从 WPF 默认 3D 方角灰块换成 macOS 四态圆角（常态/悬停/按下/禁用），列表行圆角高亮 | 用户两张截图；`ControlCenterPanel` 的 `CcTileStyle`、`SettingsWindow` 的隐式 Button/ListBox 样式 |
 | **D:\lume 调研结论** | 它的最小化实现与本项目 v3.3 同源（同一个 MIT Windhawk mod v3.1.2，Abdullah Masood / Potassiumuncher），差别只在它是**进程内注入**（`LumeMinimizeHook*.dll` 宿主），所以抓帧天然无障碍；`ui/` 是 WebView2 界面、`taskbar-runtime` 是给 explorer 任务栏打补丁的另一套架构——**无可照搬素材**，本项目的解法是预抓帧 + 屏幕抠图退路 | `D:\lume\LumeMinimize.SOURCES.md`、`LumeMinimize.NOTICE.md` |
 
+## v3.6 变更（托盘在 24H2 上读得到的真办法 + 控制中心补真开关）
+
+> 先记一条流程教训：用户日常运行的是 `dist\Beautiful\`（本机自测产物），而 v3.4/v3.5 的修复只进了
+> `src\...\bin\Release` 与 GitHub Release。于是他看到的"一个都没生效"其实是**跑的份不是改的份**。
+> 现在每次交付都要同时问一句"他启动的那条路径重建了吗"。
+
+| 项 | 现在 | 证据口径 |
+| --- | --- | --- |
+| **托盘图标读不到的真因** | 不是"24H2 换了 XAML 岛所以读不到"，而是**UIA 不会跨岛的片段根**：从 `Shell_TrayWnd` 的 HWND 做 `FindAll(Descendants, Button)` 得到 **0 个**，而从它的子窗口 `Windows.UI.Composition.DesktopWindowContentBridge` 的 HWND 进同一棵树得到 **23 个**。现在按 HWND 分别进树（岛宿主作为 `Shell_TrayWnd` 的直接子窗口用 `FindWindowEx` 找，不枚举全部子窗口）。 | 只读探针 `.tools/trayprobe.ps1` / `trayprobe2.ps1`（不建窗口、不发输入），逐条打印 23 个按钮的 Name/AutomationId/ClassName/矩形 |
+| **岛里只收第三方图标** | 岛把"开始 / 任务视图 / 每个任务栏应用按钮 / 音量 / 电源 / 时钟 / 显示桌面 / 第三方托盘图标"混在同一层同一 ControlType 里。实测**只有 `AutomationId == NotifyItemIcon` 是应用自己注册的图标**（本机：华为电脑管家、华为控制中心、更新提示三条），其余是 shell 部件；按名字筛会被"音量 本机扬声器 (Audio Device): 已静音"这类带动态后缀的名字骗过去，所以按 id 收 | 探针输出逐条比对；旧路径（23H2 及以下）不受这条筛选影响 |
+| **岛里的图标像素** | 任务栏被本程序移出屏幕后，屏幕上没有那一格，裁屏必然失败——改走"整窗 `PrintWindow` + 按 UIA 给的屏幕矩形抠出这一格"（`WindowCapture.CaptureRegionOfWindow`）。几何对不上（越界/尺寸非法）就放弃，宁可画空框也不错画别人窗口的像素 | 与 v3.3 抓取退路同一套；本机待验（见下方"验证边界"） |
+| **控制中心 Wi-Fi 真开关** | 一块真的无线电开关：`WlanSetInterface(opcode=interface_state, TRUE/FALSE)`，读回用 `WlanQueryInterface`。三态判据：**启用 / 禁用 / 问不出来**——最后一种置灰写原因，不画成"关"（那是给了一个看起来正常、点下去没反应的假开关）。写失败回读真值把界面拉回来 | 接口是 wlanapi 公开文档；改动网卡会影响用户联网，**未在本机实机点过** |
+| **控制中心亮度滑杆** | 内置屏只能走 `root\WMI` 的 `WmiMonitorBrightness` + `WmiMonitorBrightnessMethods.WmiSetBrightness`（gdi32 的 DDC/CI 只对外接屏有效，本机是 `DISPLAY\EDO0142` 内置面板）。用 WMI 的**自动化接口**（`WbemScripting.SWbemLocator` + C# `dynamic`）而不是手写 `IWbemServices` vtable——后者要按顺序声明 `ExecQuery` 之前十几个槽位，错一个就是内存踩踏；零新增包、零手写 vtable。读不到（台式机/虚拟显卡/驱动没暴露）→ 整行置灰 + 中文原因 | 本机实测：`InstancesOf('WmiMonitorBrightness')` 读到 **61**，`WmiMonitorBrightnessMethods` 上确有 `WmiSetBrightness` |
+| **蓝牙 / 飞行模式** | 只做**打开系统对应设置页**的入口（`ms-settings:bluetooth` / `ms-settings:network-airplane`），不做假开关：Windows 不给普通进程这两个无线电开关——WinRT `Radios.SetState` 需要打包应用才有的 `radios` 能力，禁用蓝牙设备要管理员权限。诚实的入口比"点了没反应的开关"值钱 | 能力边界来自 API 约束本身 |
+
 ## 不同分辨率、DPI 与多屏
 
 几何的**唯一来源**是"这条带实际落在哪块屏"，不是主屏尺寸：

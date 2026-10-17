@@ -87,6 +87,47 @@ public sealed class WifiService : IDisposable
         }
     }
 
+    /// <summary>
+    /// 网卡当前是否启用。<b>读不到返回 null</b>（不是 false）——界面要区分"关着"和"问不出来"，
+    /// 把后者画成"关"就等于给了一个看起来正常、实际点不动的开关。
+    /// </summary>
+    public bool? IsAdapterEnabled()
+    {
+        if (!_ready) return null;
+        var code = WlanApi.WlanQueryInterface(_handle, ref _interfaceGuid,
+            WlanApi.OpcodeInterfaceState, IntPtr.Zero, out var data, out _);
+        if (code != WlanApi.Success || data == IntPtr.Zero) return null;
+        try { return Marshal.ReadInt32(data) != 0; }
+        finally { WlanApi.WlanFreeMemory(data); }
+    }
+
+    /// <summary>开 / 关网卡（控制中心的 Wi-Fi 砖块）。失败时 error 给出系统原因，不静默。</summary>
+    public bool SetAdapterEnabled(bool enabled, out string? error)
+    {
+        error = null;
+        if (!_ready)
+        {
+            error = UnavailableReason ?? "没有可用的无线网卡";
+            return false;
+        }
+        var ptr = Marshal.AllocHGlobal(sizeof(int));   // wlan_interface_state_settings 就是一个 BOOL(int)
+        try
+        {
+            Marshal.WriteInt32(ptr, enabled ? 1 : 0);
+            var code = WlanApi.WlanSetInterface(_handle, ref _interfaceGuid,
+                WlanApi.OpcodeInterfaceState, sizeof(int), ptr, IntPtr.Zero);
+            if (code == WlanApi.Success)
+            {
+                Logger.Info($"WiFi 网卡已{(enabled ? "启用" : "禁用")}");
+                return true;
+            }
+            error = WlanApi.DescribeError(code);
+            Logger.Warn($"WiFi 网卡开关失败: {error}");
+            return false;
+        }
+        finally { Marshal.FreeHGlobal(ptr); }
+    }
+
     /// <summary>当前可用网络列表（已按 <see cref="WifiSignal.Order"/> 排好）。不可用或读失败 → 空表。</summary>
     public List<WifiNetwork> QueryNetworks()
     {

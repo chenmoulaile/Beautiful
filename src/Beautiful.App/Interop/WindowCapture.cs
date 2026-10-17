@@ -3,6 +3,7 @@ using System.Windows.Interop;
 using System.Windows.Media.Imaging;
 using Beautiful.App.Services;
 using Beautiful.Core.Imaging;
+using Beautiful.Core.Layout;
 using static Beautiful.App.Interop.NativeMethods;
 
 namespace Beautiful.App.Interop;
@@ -70,6 +71,30 @@ internal static class WindowCapture
         var viaPrintWindow = CaptureViaPrintWindow(hwnd, width, height);
         if (viaPrintWindow is not null) return viaPrintWindow;
         return CaptureViaScreen(rect, width, height);
+    }
+
+    /// <summary>
+    /// 抓整个窗口，再按"屏幕坐标下的这一块矩形"抠出来（矩形必须属于那个窗口）。
+    /// <para>
+    /// 给"窗口在屏幕外但仍在渲染"的场合用：24H2 的任务栏被本程序移出屏幕后，屏幕上没有那一格像素，
+    /// 裁屏这条路必然失败，而 <c>PrintWindow</c> 照样能把那个窗口画出来。几何对不上（越界/尺寸非法）
+    /// 就返回 null——宁可画空框，也不错画别人窗口的像素。
+    /// </para>
+    /// </summary>
+    public static BitmapSource? CaptureRegionOfWindow(IntPtr hwnd, PhysicalRect screenRect)
+    {
+        var full = Capture(hwnd);
+        if (full is null) return null;
+        if (!GetWindowRect(hwnd, out var w)) return null;
+        var x = (int)screenRect.Left - w.Left;
+        var y = (int)screenRect.Top - w.Top;
+        var cw = (int)(screenRect.Right - screenRect.Left);
+        var ch = (int)(screenRect.Bottom - screenRect.Top);
+        if (cw <= 0 || ch <= 0 || x < 0 || y < 0 || x + cw > full.PixelWidth || y + ch > full.PixelHeight)
+            return null;
+        var cropped = new CroppedBitmap(full, new System.Windows.Int32Rect(x, y, cw, ch));
+        cropped.Freeze();
+        return cropped;
     }
 
     private static BitmapSource? CaptureViaPrintWindow(IntPtr hwnd, int width, int height)

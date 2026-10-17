@@ -44,6 +44,9 @@ internal static class WlanApi
     /// <summary>DOT11_BSS_TYPE：0=any（本程序只连基础设施网络，profile 里已写 ESS）。</summary>
     public const int BssTypeInfrastructure = 1;
 
+    /// <summary>WLAN_INTF_OPCODE：0 = wlan_intf_opcode_interface_state（BOOL，读写都走它）。</summary>
+    public const int OpcodeInterfaceState = 0;
+
     [StructLayout(LayoutKind.Sequential)]
     public struct Dot11Ssid
     {
@@ -118,6 +121,20 @@ internal static class WlanApi
 
     [DllImport("wlanapi.dll")]
     public static extern uint WlanEnumInterfaces(IntPtr clientHandle, IntPtr reserved, out IntPtr interfaceList);
+
+    /// <summary>
+    /// 开关网卡（<c>wlan_intf_opcode_interface_state</c> 传 TRUE/FALSE）。控制中心的 Wi-Fi 砖块用它。
+    /// 需要管理员吗？——不需要：这是"当前用户的无线开关"，与飞行模式不同一档。
+    /// </summary>
+    [DllImport("wlanapi.dll")]
+    public static extern uint WlanSetInterface(
+        IntPtr clientHandle, ref Guid interfaceGuid, int opcode, uint dataSize, IntPtr data, IntPtr reserved);
+
+    /// <summary>读一个接口属性（只用 opcode=0 的接口状态）。dataSize 出参给出返回结构体大小。</summary>
+    [DllImport("wlanapi.dll")]
+    public static extern uint WlanQueryInterface(
+        IntPtr clientHandle, ref Guid interfaceGuid, int opcode, IntPtr reserved,
+        out IntPtr data, out int dataSize);
 
     [DllImport("wlanapi.dll", CharSet = CharSet.Unicode)]
     public static extern uint WlanGetAvailableNetworkList(
