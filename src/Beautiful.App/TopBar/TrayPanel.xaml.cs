@@ -60,10 +60,71 @@ public partial class TrayPanel : UserControl, IBackdropAware, IPopupShadow
     /// <summary>投影留白 = 自己根元素的 Margin（唯一来源，不与 XAML 各说各话）。</summary>
     public PopupShadow ShadowInset => new(Shell.Margin.Left, Shell.Margin.Top, Shell.Margin.Right, Shell.Margin.Bottom);
 
+    private System.Windows.Threading.DispatcherTimer? _realPixelTimer;
+
+    /// <summary>
+    /// 真实托盘像素（P4-T8 截屏路线，实验）：2s 截一次系统通知区并贴到面板顶部。
+    /// <para>
+    /// 【为什么要判空白】本程序默认隐藏 Windows 任务栏，此时托盘根本不渲染，截到的是纯色条；
+    /// 直接贴上去就是一块灰条。这里按像素方差判"是不是空白"，空白就整块隐藏——
+    /// 宁可看不见，也不给一块假图。
+    /// </para>
+    /// </summary>
+    private void StartRealPixels()
+    {
+        _realPixelTimer ??= new System.Windows.Threading.DispatcherTimer(
+            TimeSpan.FromSeconds(2), System.Windows.Threading.DispatcherPriority.Background,
+            (_, _) => RefreshRealPixels(), Dispatcher);
+        _realPixelTimer.Start();
+        RefreshRealPixels();
+    }
+
+    private void RefreshRealPixels()
+    {
+        if (!IsLoaded) { _realPixelTimer?.Stop(); return; }
+
+        var source = Services.TrayCapture.Capture();
+        if (source is null || IsBlank(source))
+        {
+            RealPixelsBox.Visibility = Visibility.Collapsed;
+            return;
+        }
+
+        RealPixelsImage.Source = source;
+        RealPixelsBox.Visibility = Visibility.Visible;
+    }
+
+    /// <summary>判空白：抽样像素全部接近同一个颜色即视为"托盘没渲染"。</summary>
+    private static bool IsBlank(System.Windows.Media.Imaging.BitmapSource source)
+    {
+        try
+        {
+            var stride = source.PixelWidth * 4;
+            var buffer = new byte[stride * source.PixelHeight];
+            source.CopyPixels(buffer, stride, 0);
+
+            int minB = 255, maxB = 0;
+            // 每 97 个像素采一个（质数步长避免与图标间距共振），只看单个通道的极差
+            for (var i = 0; i + 3 < buffer.Length; i += 97 * 4)
+            {
+                var b = buffer[i];
+                if (b < minB) minB = b;
+                if (b > maxB) maxB = b;
+                if (maxB - minB > 24) return false;   // 有对比度：不是纯色
+            }
+
+            return true;
+        }
+        catch (Exception)
+        {
+            return true;   // 读不出像素就当空白，不展示
+        }
+    }
+
     public TrayPanel()
     {
         InitializeComponent();
-        Loaded += (_, _) => Refresh();
+        Loaded += (_, _) => { Refresh(); StartRealPixels(); };
     }
 
     /// <summary>宿主注入：需要能收起自己（转发右键、展开系统隐藏区之前都必须先关）。</summary>

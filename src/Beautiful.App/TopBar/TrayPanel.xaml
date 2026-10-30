@@ -97,6 +97,16 @@
                 </Border>
 
                 <StackPanel Margin="13,11,13,9">
+                    <!-- 真实托盘像素（P4-T8 截屏路线，实验）：系统托盘可见时把它的像素原样贴在这里。
+                         托盘不可见（本程序默认隐藏 Windows 任务栏）时截到的是纯色，按"空白"隐藏。 -->
+                    <Border x:Name="RealPixelsBox" Visibility="Collapsed" CornerRadius="6"
+                            Background="#1FFFFFFF" Padding="4" Margin="0,0,0,6">
+                        <StackPanel>
+                            <TextBlock Text="系统托盘（真实像素）" FontSize="10" Opacity="0.6" Margin="2,0,0,2"/>
+                            <Image x:Name="RealPixelsImage" Stretch="Uniform" MaxHeight="40"
+                                   RenderOptions.BitmapScalingMode="HighQuality"/>
+                        </StackPanel>
+                    </Border>
                     <!-- 标题行：左"系统托盘图标"，右"N 个第三方图标 / 读取中…"（取不到就写读不到，不报假数字） -->
                     <Grid Margin="0,0,0,6">
                         <TextBlock Text="系统托盘图标" FontSize="13.5" FontWeight="SemiBold"/>
