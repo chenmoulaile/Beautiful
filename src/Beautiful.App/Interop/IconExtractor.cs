@@ -75,6 +75,14 @@ internal static class IconExtractor
     private static readonly LruCache<string, Result> Cache = new(128);
 
     /// <summary>
+    /// 缓存 / 降级层可用性 / 日志集合都**不是线程安全的**；Finder 的图标批量提取新增了后台线程调用，
+    /// 与 UI 线程（Dock/设置）的调用可能并发。锁覆盖"查缓存 + 提取 + 写缓存 + 落日志"整段，
+    /// 保证 LRU 链表与 <see cref="_privateExtractUsable"/><see cref="Logged"/> 始终只有一个改写者。
+    /// 粒度是单次 GetIconDetailed：后台提取逐个调用，不会长期霸占（UI 侧最多等一个图标的提取时间）。
+    /// </summary>
+    private static readonly object Sync = new();
+
+    /// <summary>
     /// ① 层可用性：本机 shell32 按名解析不到 PrivateExtractIconsW（探针实测 EntryPointNotFoundException），
     /// 一旦解析失败就永久停用并降级到 ②，绝不改成"猜序号"调用（错序号 = 用错签名调陌生函数 = 进程级风险）。
     /// </summary>
@@ -92,15 +100,26 @@ internal static class IconExtractor
     {
         if (string.IsNullOrWhiteSpace(path)) return Result.Empty;
         var key = path.Trim().ToLowerInvariant() + '|' + size;
-        if (Cache.TryGet(key, out var hit)) return hit;
-        var result = Extract(path, size);
-        Cache.Set(key, result);
-        LogOnce(result);
-        return result;
+
+        // 整个缓存/提取路径串行化（原因见 Sync）：并发请求会在锁内复用同一份缓存，结构不会被并发写坏。
+        lock (Sync)
+        {
+            if (Cache.TryGet(key, out var hit)) return hit;
+            var result = Extract(path, size);
+            Cache.Set(key, result);
+            LogOnce(result);
+            return result;
+        }
     }
 
     /// <summary>缓存整体作废（主题/尺寸/DPI 变更时由 IconBake 一侧调用其自有缓存；这里留给测试与"图标源变了"）。</summary>
-    public static void ClearCache() => Cache.Clear();
+    public static void ClearCache()
+    {
+        lock (Sync)
+        {
+            Cache.Clear();
+        }
+    }
 
     // ---------- 降级链 ----------
 

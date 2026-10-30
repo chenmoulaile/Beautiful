@@ -45,6 +45,12 @@ public partial class FinderWindow : Window
     /// <summary>单次目录读取的条目上限（目录过大时保证首屏与滚动仍可用）。</summary>
     private const int MaxEntries = 1500;
 
+    /// <summary>后台图标提取的行数上限：超出部分保留字形回退，避免 1500 项一次性抓 shell 图标。</summary>
+    private const int MaxIconRows = 300;
+
+    /// <summary>图标提取尺寸：16 DIP 在 200% DPI 下是 32 物理像素。</summary>
+    private const int IconPixelSize = 32;
+
     private static FinderWindow? _current;
 
     private readonly NavigationHistory _history = new();
@@ -52,10 +58,14 @@ public partial class FinderWindow : Window
 
     private List<FinderRow> _allRows = [];
     private CancellationTokenSource? _loadCts;
+    private CancellationTokenSource? _iconCts;
     private string _currentPath = string.Empty;
     private string? _loadError;
+    private string? _freeSpaceText;
     private bool _capped;
     private bool _suppressSidebar;
+    private bool _isLoading;
+    private int _loadGeneration;
 
     /// <summary>单例入口（--finder / 将来的 Dock 入口共用）。关闭后自动重置，可再次打开。</summary>
     public static void ShowSingleton(string? initialPath = null)
@@ -114,11 +124,13 @@ public partial class FinderWindow : Window
         SizeChanged += (_, _) => UpdateNameColumnWidth();
         Closed += (_, _) =>
         {
-            _loadCts?.Cancel();
+            // 关闭即作废：既取消在跑的后台枚举/图标任务，也顺手释放 CTS（Dispose 幂等）。
+            _loadGeneration++;
             _statusHintTimer.Stop();
+            CancelPendingWork();
         };
 
-        _ = LoadDirectoryAsync(path);
+        StartLoad(path);
     }
 
     /// <summary>当前目录（日志/外部查询用；页面状态以 <see cref="_currentPath"/> 为准）。</summary>
@@ -240,7 +252,7 @@ public partial class FinderWindow : Window
         }
     }
 
-    /// <summary>侧栏/双击文件夹的唯一导航入口：历史入栈（Core 判重）→ 刷新路径与按钮 → 异步读目录。</summary>
+    /// <summary>侧栏/双击文件夹的唯一导航入口：历史入栈（Core 判重）→ 统一换目录。</summary>
     private void NavigateTo(string path)
     {
         if (string.IsNullOrWhiteSpace(path) || SamePath(path, _currentPath))
@@ -257,11 +269,7 @@ public partial class FinderWindow : Window
             return; // Core 契约：空白路径非法；UI 侧不把异常抛给用户
         }
 
-        _currentPath = path;
-        ApplyPath(path);
-        SyncSidebarSelection();
-        UpdateNavButtons();
-        _ = LoadDirectoryAsync(path);
+        ShowDirectory(path);
     }
 
     private void GoBack()
@@ -272,11 +280,7 @@ public partial class FinderWindow : Window
             return;
         }
 
-        _currentPath = path;
-        ApplyPath(path);
-        SyncSidebarSelection();
-        UpdateNavButtons();
-        _ = LoadDirectoryAsync(path);
+        ShowDirectory(path);
     }
 
     private void GoForward()
@@ -287,11 +291,21 @@ public partial class FinderWindow : Window
             return;
         }
 
+        ShowDirectory(path);
+    }
+
+    /// <summary>
+    /// 换到另一个目录：先切换标题/历史按钮，再进入载入态（清空旧行、关闭行交互、状态栏"正在载入…"），
+    /// 最后清掉搜索词（否则新目录会被旧查询静默过滤）。F5 刷新同一目录不走这里，搜索词保留。
+    /// </summary>
+    private void ShowDirectory(string path)
+    {
         _currentPath = path;
         ApplyPath(path);
         SyncSidebarSelection();
         UpdateNavButtons();
-        _ = LoadDirectoryAsync(path);
+        StartLoad(path);
+        ResetSearch();
     }
 
     private void Back_Click(object sender, RoutedEventArgs e) => GoBack();
@@ -301,12 +315,57 @@ public partial class FinderWindow : Window
     // ---------- 目录读取 ----------
 
     /// <summary>
-    /// 后台读取当前目录并把结果映射到 UI。新导航会取消上一次读取；完成时再校验一次取消状态，
-    /// 防止"旧目录结果覆盖新目录"的竞态。所有异常在方法内收口（窗口不因磁盘/权限问题崩溃）。
+    /// 进入载入态并启动一次目录读取。每次导航（含 F5）都走这里：
+    /// 先取消/释放上一轮载入与图标任务，再用新的代次号清空旧行并写入"正在载入…"。
+    /// 旧载入的完成回调会因代次号不匹配被丢弃，绝不覆盖新目录。
     /// </summary>
-    private async Task LoadDirectoryAsync(string path)
+    private void StartLoad(string path)
     {
-        _loadCts?.Cancel();
+        _loadGeneration++;
+        var generation = _loadGeneration;
+
+        CancelPendingWork();
+
+        _isLoading = true;
+        _loadError = null;
+        _freeSpaceText = null;
+        _capped = false;
+        _allRows = [];
+        FileList.ItemsSource = Array.Empty<FinderRow>();
+        FileList.IsEnabled = false;   // 载入完成前不允许双击/键盘打开旧行
+        _statusHintTimer.Stop();
+        StatusText.Text = "正在载入…";
+
+        _ = LoadDirectoryAsync(path, generation);
+    }
+
+    /// <summary>取消并释放当前载入 / 图标任务的 CTS（窗口关闭或新导航取代旧载入时调用）。</summary>
+    private void CancelPendingWork()
+    {
+        var load = _loadCts;
+        _loadCts = null;
+        if (load is not null)
+        {
+            load.Cancel();
+            load.Dispose();
+        }
+
+        var icons = _iconCts;
+        _iconCts = null;
+        if (icons is not null)
+        {
+            icons.Cancel();
+            icons.Dispose();
+        }
+    }
+
+    /// <summary>
+    /// 后台读取当前目录并把结果映射到 UI。代次号 + token 双重校验，防止"旧目录结果覆盖新目录"；
+    /// 本次载入的 CTS 在成功/失败/取消三条路径的 finally 里释放（被新导航取代时 StartLoad 已提前释放）。
+    /// 所有异常在方法内收口（窗口不因磁盘/权限问题崩溃）。
+    /// </summary>
+    private async Task LoadDirectoryAsync(string path, int generation)
+    {
         var cts = new CancellationTokenSource();
         _loadCts = cts;
         var token = cts.Token;
@@ -314,44 +373,47 @@ public partial class FinderWindow : Window
         try
         {
             var result = await Task.Run(() => ReadDirectory(path, token), token);
-            if (token.IsCancellationRequested || !SamePath(path, _currentPath))
+            if (generation != _loadGeneration || token.IsCancellationRequested || !SamePath(path, _currentPath))
             {
                 return;
             }
 
-            ApplyLoadResult(path, result);
+            ApplyLoadResult(path, result, generation);
         }
         catch (OperationCanceledException)
         {
-            // 新导航已接管：丢弃旧结果即可
+            // 新导航已接管（或窗口已关闭）：丢弃旧结果即可
         }
         catch (Exception ex)
         {
             Logger.Warn($"访达读取目录失败：{path} {ex.GetType().Name} {ex.Message}");
-            if (!token.IsCancellationRequested && SamePath(path, _currentPath))
+            if (generation == _loadGeneration && !token.IsCancellationRequested && SamePath(path, _currentPath))
             {
                 ApplyError(ex.Message);
             }
         }
         finally
         {
-            // 不 Dispose：旧 CTS 可能仍被上一个后台枚举读取 token（IsCancellationRequested 的安全访问
-            // 依赖其存活）；这些都是无 WaitHandle 的轻量对象，交给 GC 即可。
             if (ReferenceEquals(_loadCts, cts))
             {
                 _loadCts = null;
             }
+
+            cts.Dispose();   // 成功/失败/取消都释放；被取代时这里的 Dispose 与 StartLoad 的重复调用是幂等的
         }
     }
 
     private static LoadResult ReadDirectory(string path, CancellationToken token)
     {
+        // 可用空间在后台枚举线程上算一次（IO），状态栏与搜索按键都只复用这个字符串，绝不再碰 DriveInfo。
+        var freeSpace = FreeSpaceGb(path);
+
         try
         {
             var directory = new DirectoryInfo(path);
             if (!directory.Exists)
             {
-                return LoadResult.Failed("文件夹不存在或无法访问");
+                return LoadResult.Failed("文件夹不存在或无法访问", freeSpace);
             }
 
             var entries = new List<FinderEntry>(128);
@@ -385,7 +447,7 @@ public partial class FinderWindow : Window
 
             // 文件夹恒在前 + 名称自然序由 Core 固化（file2 < file10）；UI 不再写第二套排序。
             var sorted = FinderSorting.Sort(entries, FinderSortKey.Name);
-            return LoadResult.Success(sorted, capped);
+            return LoadResult.Success(sorted, capped, freeSpace);
         }
         catch (OperationCanceledException)
         {
@@ -395,11 +457,11 @@ public partial class FinderWindow : Window
                                       or IOException or System.Security.SecurityException
                                       or ArgumentException or NotSupportedException)
         {
-            return LoadResult.Failed(ex.Message);
+            return LoadResult.Failed(ex.Message, freeSpace);
         }
     }
 
-    private void ApplyLoadResult(string path, LoadResult result)
+    private void ApplyLoadResult(string path, LoadResult result, int generation)
     {
         if (result.Error is not null)
         {
@@ -408,11 +470,15 @@ public partial class FinderWindow : Window
             return;
         }
 
+        _isLoading = false;
         _loadError = null;
         _capped = result.Capped;
+        _freeSpaceText = result.FreeSpaceText;
         _allRows = result.Entries.Select(entry => new FinderRow(path, entry)).ToList();
+        FileList.IsEnabled = true;
         ApplyFilter();
         UpdateStatus();
+        StartIconLoad(_allRows, generation);
         Logger.Info($"访达目录已载入：{path}，条目={_allRows.Count}" +
                     (result.Capped ? "（已截断）" : string.Empty));
     }
@@ -420,11 +486,80 @@ public partial class FinderWindow : Window
     /// <summary>错误路径：列表清空 + 状态栏给出原因（日志由调用方写）；保留当前路径，后退依然可用。</summary>
     private void ApplyError(string reason)
     {
+        _isLoading = false;
         _loadError = reason;
         _capped = false;
+        _freeSpaceText = null;
         _allRows.Clear();
         FileList.ItemsSource = Array.Empty<FinderRow>();
+        FileList.IsEnabled = true;
         UpdateStatus();
+    }
+
+    // ---------- 图标 ----------
+
+    /// <summary>
+    /// 载入结果应用后，在后台顺序提取前 <see cref="MaxIconRows"/> 行的图标（32px），每拿到一个就回 UI 线程
+    /// 贴到行上；未拿到的行继续显示字形。图标任务有独立 CTS，新导航/关闭会取消它，代次号再兜一层防串。
+    /// </summary>
+    private void StartIconLoad(IReadOnlyList<FinderRow> rows, int generation)
+    {
+        var previous = _iconCts;
+        _iconCts = null;
+        if (previous is not null)
+        {
+            previous.Cancel();
+            previous.Dispose();
+        }
+
+        var count = Math.Min(rows.Count, MaxIconRows);
+        if (count == 0)
+        {
+            return;
+        }
+
+        var cts = new CancellationTokenSource();
+        _iconCts = cts;
+        _ = LoadIconsAsync(rows, count, generation, cts);
+    }
+
+    private async Task LoadIconsAsync(IReadOnlyList<FinderRow> rows, int count, int generation,
+        CancellationTokenSource cts)
+    {
+        var token = cts.Token;
+        try
+        {
+            for (var i = 0; i < count; i++)
+            {
+                token.ThrowIfCancellationRequested();
+                var row = rows[i];
+                var icon = await Task.Run(() => IconExtractor.GetIcon(row.FullPath, IconPixelSize), token);
+                if (icon is null || token.IsCancellationRequested || generation != _loadGeneration)
+                {
+                    continue;   // 空结果保留字形；过期结果直接丢弃
+                }
+
+                // await 回到 UI 线程：PropertyChanged 由 WPF 绑定消费，行对象只在 UI 线程改。
+                row.SetIcon(icon);
+            }
+        }
+        catch (OperationCanceledException)
+        {
+            // 新导航/关闭：停止提取，未贴的图标不再贴
+        }
+        catch (Exception ex)
+        {
+            Logger.Warn($"访达图标提取失败：{ex.GetType().Name} {ex.Message}");
+        }
+        finally
+        {
+            if (ReferenceEquals(_iconCts, cts))
+            {
+                _iconCts = null;
+            }
+
+            cts.Dispose();
+        }
     }
 
     private void SearchBox_TextChanged(object sender, TextChangedEventArgs e)
@@ -440,9 +575,24 @@ public partial class FinderWindow : Window
         UpdateStatus();
     }
 
+    /// <summary>换目录时清空搜索词；F5 刷新同一目录不调用，保留用户当前筛选。</summary>
+    private void ResetSearch()
+    {
+        if (SearchBox.Text.Length > 0)
+        {
+            SearchBox.Text = string.Empty;   // TextChanged 会顺带恢复占位符并重新过滤
+        }
+    }
+
     /// <summary>名称过滤（当前目录已载入的行；真实行为，不是 Phase 6-b 的索引搜索）。</summary>
     private void ApplyFilter()
     {
+        if (_isLoading)
+        {
+            FileList.ItemsSource = Array.Empty<FinderRow>();
+            return;
+        }
+
         var query = SearchBox.Text.Trim();
         IEnumerable<FinderRow> source = _allRows;
         if (query.Length > 0)
@@ -457,6 +607,12 @@ public partial class FinderWindow : Window
     {
         if (StatusText is null)
         {
+            return;
+        }
+
+        if (_isLoading)
+        {
+            StatusText.Text = "正在载入…";
             return;
         }
 
@@ -476,16 +632,19 @@ public partial class FinderWindow : Window
             text += $"（筛选出 {shown} 个）";
         }
 
-        var free = FreeSpaceGb(_currentPath);
-        if (free is not null)
+        // 可用空间是载入时后台算好的字符串：搜索每次按键都不再访问磁盘。
+        if (_freeSpaceText is not null)
         {
-            text += $"，可用 {free} GB";
+            text += $"，可用 {_freeSpaceText} GB";
         }
 
         StatusText.Text = text;
     }
 
-    /// <summary>路径所在盘的可用空间（GB，一位小数）；UNC/未就绪/无权限一律返回 null（状态栏只显示项目数）。</summary>
+    /// <summary>
+    /// 路径所在盘的可用空间（GB，一位小数）；在后台枚举线程上每次载入调用一次。
+    /// UNC/未就绪/无权限/盘符消失一律返回 null（状态栏只显示项目数），绝不让载入失败。
+    /// </summary>
     private static string? FreeSpaceGb(string path)
     {
         try
@@ -504,7 +663,8 @@ public partial class FinderWindow : Window
 
             return (drive.AvailableFreeSpace / 1073741824.0).ToString("0.0", CultureInfo.InvariantCulture);
         }
-        catch (Exception ex) when (ex is ArgumentException or IOException or UnauthorizedAccessException)
+        catch (Exception ex) when (ex is ArgumentException or IOException or UnauthorizedAccessException
+                                      or System.Security.SecurityException or NotSupportedException)
         {
             return null;
         }
@@ -537,6 +697,11 @@ public partial class FinderWindow : Window
 
     private void OpenRow(FinderRow row)
     {
+        if (_isLoading)
+        {
+            return;   // 载入态下列表行不可交互（旧行也已清空，这里再兜一层）
+        }
+
         if (row.IsDirectory)
         {
             NavigateTo(row.FullPath);
@@ -568,7 +733,7 @@ public partial class FinderWindow : Window
         if (e.Key == Key.F5)
         {
             e.Handled = true;
-            _ = LoadDirectoryAsync(_currentPath);
+            StartLoad(_currentPath);   // 同一目录刷新：保留搜索词
             return;
         }
 
@@ -668,8 +833,9 @@ public partial class FinderWindow : Window
     // ---------- 行视图模型 ----------
 
     /// <summary>
-    /// 列表行：展示字段来自 Core 的 <see cref="FinderEntry"/>，图标按需提取——ListView 虚拟化后
-    /// 只有真正进入视口的行才会触发 shell 提取，避免 1500 项一次性抓图标拖慢首屏（也把内存压到最低）。
+    /// 列表行：展示字段来自 Core 的 <see cref="FinderEntry"/>。图标不再由绑定 getter 同步提取——
+    /// 载入结果应用后由窗口在后台批量提取前 300 行，拿到一个就在 UI 线程调用 <see cref="SetIcon"/>；
+    /// 在此之前行显示字形回退，滚动进入视口也绝不触发磁盘/Shell 调用。
     /// 提取尺寸 32px：16 DIP 在 200% DPI 下正好是 32 物理像素，高分屏不糊。
     /// </summary>
     private sealed class FinderRow : INotifyPropertyChanged
@@ -677,7 +843,6 @@ public partial class FinderWindow : Window
         private readonly FinderEntry _entry;
         private string _glyph;
         private ImageSource? _icon;
-        private bool _iconLoaded;
 
         public FinderRow(string directory, FinderEntry entry)
         {
@@ -712,22 +877,14 @@ public partial class FinderWindow : Window
             }
         }
 
-        public ImageSource? Icon
-        {
-            get
-            {
-                if (!_iconLoaded)
-                {
-                    _iconLoaded = true;
-                    _icon = IconExtractor.GetIcon(FullPath, 32);
-                    if (_icon is not null)
-                    {
-                        Glyph = string.Empty; // 有真图标时撤掉字形回退
-                    }
-                }
+        public ImageSource? Icon => _icon;
 
-                return _icon;
-            }
+        /// <summary>后台提取完成后回 UI 线程贴图：先撤字形再通知 Icon，避免两者闪现叠加。</summary>
+        public void SetIcon(ImageSource icon)
+        {
+            Glyph = string.Empty;
+            _icon = icon;
+            OnPropertyChanged(nameof(Icon));
         }
 
         public event PropertyChangedEventHandler? PropertyChanged;
@@ -758,14 +915,15 @@ public partial class FinderWindow : Window
         }
     }
 
-    /// <summary>后台读取结果：成功（已排序 + 是否截断）或失败原因。</summary>
-    private sealed record LoadResult(IReadOnlyList<FinderEntry> Entries, bool Capped, string? Error)
+    /// <summary>后台读取结果：成功（已排序 + 是否截断 + 可用空间）或失败原因；可用空间与枚举同批算好。</summary>
+    private sealed record LoadResult(
+        IReadOnlyList<FinderEntry> Entries, bool Capped, string? Error, string? FreeSpaceText)
     {
-        public static LoadResult Success(IReadOnlyList<FinderEntry> entries, bool capped)
-            => new(entries, capped, null);
+        public static LoadResult Success(IReadOnlyList<FinderEntry> entries, bool capped, string? freeSpaceText)
+            => new(entries, capped, null, freeSpaceText);
 
-        public static LoadResult Failed(string error)
-            => new(Array.Empty<FinderEntry>(), false, error);
+        public static LoadResult Failed(string error, string? freeSpaceText)
+            => new(Array.Empty<FinderEntry>(), false, error, freeSpaceText);
     }
 
     /// <summary>侧栏一项：显示名 + 导航路径。</summary>
