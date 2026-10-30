@@ -115,7 +115,7 @@ public partial class FinderInfoWindow : Window
 
         if (!exists)
         {
-            Body.Children.Add(BuildRow("状态", "文件已不存在或无法访问", emphasize: true));
+            Body.Children.Add(BuildRow("状态", "文件已不存在或无法访问"));
             return;
         }
 
@@ -211,7 +211,7 @@ public partial class FinderInfoWindow : Window
         };
 
     /// <summary>一行"标签 —— 值"：标签固定 84 宽，值右对齐并允许换行（长路径不会撑破卡片）。</summary>
-    private FrameworkElement BuildRow(string label, string value, bool emphasize = false)
+    private FrameworkElement BuildRow(string label, string value)
     {
         var grid = new Grid { Margin = new Thickness(0, 2, 0, 2) };
         grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(84) });
@@ -231,9 +231,7 @@ public partial class FinderInfoWindow : Window
             FontSize = 11.5,
             TextWrapping = TextWrapping.Wrap,
             TextAlignment = TextAlignment.Right,
-            Foreground = emphasize
-                ? (Brush)FindResource("MacTextPrimary")
-                : (Brush)FindResource("MacTextPrimary")
+            Foreground = (Brush)FindResource("MacTextPrimary")
         };
         Grid.SetColumn(valueText, 1);
         grid.Children.Add(valueText);
