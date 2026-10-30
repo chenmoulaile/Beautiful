@@ -52,6 +52,12 @@ public sealed record AppSettings
     /// </summary>
     public string DockEdge { get; init; } = "bottom";
 
+    /// <summary>
+    /// 新窗口淡入（P5-T3，实验，默认关）。走 <c>AnimateWindow(AW_BLEND)</c>；
+    /// 跨进程不保证生效（由目标窗口的合成路径决定），失败静默，不会影响窗口本身。
+    /// </summary>
+    public bool WindowOpenAnimation { get; init; }
+
     /// <summary>媒体面板失焦是否自动收起。</summary>
     public bool HidePanelOnDeactivate { get; init; } = true;
 

@@ -653,6 +653,10 @@
                                        Opacity="0.6" FontSize="11" Margin="10,0,0,0"
                                        VerticalAlignment="Center"/>
                         </StackPanel>
+                        <CheckBox x:Name="WindowOpenAnimCheck"
+                                  Content="新窗口淡入（实验：跨进程不保证生效）"
+                                  Margin="0,8,0,0"
+                                  Checked="WindowOpenAnim_Changed" Unchecked="WindowOpenAnim_Changed"/>
                         <CheckBox x:Name="DockAutoHideCheck" Content="自动隐藏 Dock（光标离开 0.5 秒后滑下，触底滑回）"
                                   Margin="0,8,0,0" Checked="DockAutoHide_Changed" Unchecked="DockAutoHide_Changed"/>
                         <CheckBox x:Name="DockWidgetCheck" Content="在 Dock 行尾显示时钟 / 天气小组件"

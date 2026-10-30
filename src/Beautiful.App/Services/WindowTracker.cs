@@ -238,6 +238,12 @@ public sealed class WindowTracker : IDisposable
         var item = CreateItem(hwnd);
         if (item is null) return;
         _windows.Add(item);
+
+        // P5-T3（实验）：新窗口淡入。放在加入集合之后——动画失败也不影响跟踪本身。
+        if (SettingsService.Current.WindowOpenAnimation)
+        {
+            WindowOpenAnimator.TryAnimate(hwnd);
+        }
     }
 
     private void RemoveWindow(IntPtr hwnd)

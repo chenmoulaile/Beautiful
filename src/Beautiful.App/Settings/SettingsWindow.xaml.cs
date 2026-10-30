@@ -153,6 +153,7 @@ public partial class SettingsWindow : Window
         CapsuleCheck.IsChecked = s.ShowMediaCapsule;
         DockWidgetCheck.IsChecked = s.DockWidgetEnabled;
         DockAutoHideCheck.IsChecked = s.DockAutoHide;
+        WindowOpenAnimCheck.IsChecked = s.WindowOpenAnimation;
         DockEdgeCombo.SelectedIndex = s.DockEdge switch { "left" => 1, "right" => 2, _ => 0 };
         HidePanelCheck.IsChecked = s.HidePanelOnDeactivate;
         PreviewCheck.IsChecked = s.PreviewEnabled;
@@ -677,6 +678,15 @@ public partial class SettingsWindow : Window
         if (_loading) return;
         var edge = DockEdgeCombo.SelectedIndex switch { 1 => "left", 2 => "right", _ => "bottom" };
         App.ApplyDockEdge(edge);
+    }
+
+    /// <summary>新窗口淡入（P5-T3，实验）：只改设置，下一次新窗口出现时生效。</summary>
+    private void WindowOpenAnim_Changed(object sender, RoutedEventArgs e)
+    {
+        if (_loading) return;
+        var on = WindowOpenAnimCheck.IsChecked == true;
+        SettingsService.UpdateAndSave(SettingsService.Current with { WindowOpenAnimation = on });
+        if (on) Beautiful.App.Services.WindowOpenAnimator.Reset();
     }
 
     /// <summary>Dock 自动隐藏（P3-T5 隐藏模式）：立即生效，不需要重启 Dock。</summary>
