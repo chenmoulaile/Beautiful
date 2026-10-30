@@ -1,0 +1,47 @@
+<Window x:Class="Beautiful.App.TopBar.NotificationBannerWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="通知" Width="340" SizeToContent="Height"
+        WindowStyle="None" AllowsTransparency="True" Background="Transparent"
+        ResizeMode="NoResize" ShowInTaskbar="False" ShowActivated="False"
+        Topmost="True" WindowStartupLocation="Manual"
+        UseLayoutRounding="True" TextOptions.TextFormattingMode="Display"
+        FontFamily="{DynamicResource MacFont}">
+    <!-- Phase 4-T5 续：通知横幅（banner）。
+         分层窗口是这里唯一合理的选择：横幅要盖在任何应用之上、圆角 + 半透明、且不能被 DWM 强行
+         加白边；内容只有几行文字，ClearType 的损失换"圆角+投影"是划算的（与 HUD 同一取舍）。 -->
+    <Border x:Name="Card" CornerRadius="14" Background="#F01E1E1E"
+            BorderBrush="#24FFFFFF" BorderThickness="1" Padding="12,11">
+        <Border.Effect>
+            <DropShadowEffect BlurRadius="18" ShadowDepth="3" Opacity="0.45" Color="#000000"/>
+        </Border.Effect>
+        <Grid>
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="28"/>
+                <ColumnDefinition Width="*"/>
+            </Grid.ColumnDefinitions>
+
+            <Border x:Name="AppBadge" Width="24" Height="24" CornerRadius="6"
+                    VerticalAlignment="Top" Background="#FF007AFF">
+                <TextBlock x:Name="AppInitial" Text="·" FontSize="11" FontWeight="SemiBold"
+                           Foreground="#FFFFFFFF"
+                           HorizontalAlignment="Center" VerticalAlignment="Center"/>
+            </Border>
+
+            <StackPanel Grid.Column="1" Margin="8,0,0,0">
+                <Grid>
+                    <TextBlock x:Name="AppText" Text="" FontSize="10.5" Foreground="#B3FFFFFF"
+                               TextTrimming="CharacterEllipsis" Margin="0,0,52,0"/>
+                    <TextBlock x:Name="TimeText" Text="现在" FontSize="10" Foreground="#80FFFFFF"
+                               HorizontalAlignment="Right"/>
+                </Grid>
+                <TextBlock x:Name="TitleText" Text="" FontSize="12.5" FontWeight="SemiBold"
+                           Foreground="#FFFFFFFF" Margin="0,2,0,0"
+                           TextWrapping="Wrap" TextTrimming="CharacterEllipsis" MaxHeight="34"/>
+                <TextBlock x:Name="BodyText" Text="" FontSize="11" Foreground="#C8FFFFFF"
+                           Margin="0,2,0,0" TextWrapping="Wrap" TextTrimming="CharacterEllipsis"
+                           MaxHeight="30"/>
+            </StackPanel>
+        </Grid>
+    </Border>
+</Window>

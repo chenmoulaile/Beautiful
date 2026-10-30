@@ -481,6 +481,9 @@
                                   Content="点击时钟打开通知中心（关闭则显示月历浮层）"
                                   Margin="0,8,0,0"
                                   Checked="NotificationCenter_Changed" Unchecked="NotificationCenter_Changed"/>
+                        <CheckBox x:Name="NotificationBannerCheck" Content="新通知在右上角弹出横幅"
+                                  Margin="0,8,0,0"
+                                  Checked="NotificationBanner_Changed" Unchecked="NotificationBanner_Changed"/>
 
                         <!-- 顶栏时钟形态（v3.1）：四个勾选各对应 AppSettings 的一个 bool，
                              "组合出什么字符串、以什么节奏刷新"全部由 Core.TopBar.ClockFormat 推导（有单测），

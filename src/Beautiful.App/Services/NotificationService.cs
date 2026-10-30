@@ -93,6 +93,9 @@ public sealed class NotificationService
     /// <summary>数据或状态变化（UI 据此重画）。</summary>
     public event EventHandler? Updated;
 
+    /// <summary>新到达的通知（每条一次）。横幅用它；首次同步建立基线不会触发。</summary>
+    public event EventHandler<NotificationItem>? Arrived;
+
     /// <summary>是否已拿到可用的监听器。</summary>
     public bool Started => _listener is not null;
 
@@ -235,6 +238,12 @@ public sealed class NotificationService
             LastSkipped = skipped;
             Logger.Info($"通知同步：系统 {raw.Count} 条，可用 {mapped.Count}，跳过 {skipped}，" +
                         $"新增 {added.Count}，历史 {_store.Count}");
+
+            foreach (var item in added)
+            {
+                Arrived?.Invoke(this, item);
+            }
+
             RaiseUpdated();
         }
         catch (Exception ex)

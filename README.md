@@ -437,11 +437,12 @@ dotnet publish src/Beautiful.App -c Release -r win-x64 --self-contained true -p:
 
 | 控制中心 Big Sur 瓦片（P4-T4） | 连接组 2×2（Wi-Fi 真开关 / 蓝牙打开系统页 / 隔空投送置灰写明"Windows 无对应能力" / 专注模式打开专注助手）；显示与声音各收进整块瓦片；外观分段限宽；Dock 开关砖块与任务栏策略保留 | 真机截图 `logs/4-t4-control-center2.png`；`--control-center` 截图入口；**正在播放瓦片未做**（需复用 Dock 的 SMTC 实例） |
 | 逐应用混音（P7-T5） | `IAudioSessionManager2` 互操作 + `AudioSessionService`（按进程聚合、读/写会话音量与静音）；控制中心「逐应用音量」分组（图标/名称/静音/滑杆/读数 + 刷新） | 真机截图 `logs/7-t5-mixer.png`：枚举到"系统声音"会话可调；**会话列表是快照**（不订阅会话通知）；其它应用需有音频会话才出现 |
+| 通知横幅（P4-T5 续） | 新通知在右上角弹出 macOS 式横幅：应用字标/名称/相对时间/标题/正文（最多两行），最多同时 3 条向上堆叠、旧条被挤掉；3.8s 后 220ms 淡出，悬停暂停计时，点击按 AUMID 打开发通知的应用。横幅不持久化——历史始终只有通知中心一份（避免"同一条看两遍"）；设置页可关 | `--banner-test` 用固定示例内容截图 `logs/banner-01.png`（不含真实通知）；`Arrived` 事件由 `NotificationStore.Apply` 的"新到达"驱动，首次同步不弹；**真实到达→横幅链路需真机等一条通知**，标 UNVERIFIED(owner) |
 | 音量 HUD（P4-T7） | 按音量键弹出 macOS 式 HUD：16 格音量条 + 四档喇叭图标（含静音斜杠），上方居中、不抢焦点、点击穿透、900ms 后 250ms 淡出。为此接管 `VK_VOLUME_UP/DOWN/MUTE`（吞掉按下与抬起）并直写端点音量——不吞的话系统音量浮层会和自家 HUD 同时出现；步进按 macOS 的 1/16（6.25%）而非 Windows 的 2%，且吸附格点。设置页可关（关掉后媒体键完全回到系统行为） | `VolumeOsdTests`（8：步进吸附/连按 16 次到 100/亮格取整/四档图标/淡出曲线/钳制）；`--osd-volume N` 与 `--osd-mute` 截图 `logs/osd-18|62|100|mute.png`；**亮度 HUD 未做**（台式机外接屏无通用亮度 API，笔记本 WMI 路径未接）；媒体键实按属交互类 UNVERIFIED(owner) |
 | 通知中心（P4-T5） | 右侧贴边全高面板：今天 widget（大时钟 + 日期 + 复用 `CalendarFlyout` 的月历）+ 通知卡片列表（应用字标/名称/相对时间/标题/正文两行）+ 清除 + 空态；顶栏时钟左键开合（右键仍是月历浮层），设置页可关；点卡片按 AUMID `shell:AppsFolder\` 打开发通知的应用。数据走进程内 `UserNotificationListener`（.NET 8 直连，不用 sidecar）；首次同步只做基线、按 id 去重并集、上限 100 条、系统侧已清掉的旧条目仍保留在历史 | `NotificationStoreTests`（14：基线/去重覆盖/保留旧条目/上限丢最旧/相对时间六区间/脏文本清洗）；`--notif-probe` 真机实测 `access=Allowed raw=5 usable=5`；`--notification-center` 截图 `logs/nc-02.png`（5 条真实通知、月历当天高亮）；**`NotificationChanged` 事件在非打包进程订阅即 0x80070490 → 已降级为 10s 轮询**（事件路径保留，机器支持时自动用）；未授权时面板显示"无法读取通知"+打开系统设置，不假装没消息 |
 
 > Phase 4 已完成"24px + logo 菜单真实系统动作 + 关于本机信息卡 + 前台应用真菜单镜像（含自绘菜单降级）+ 控制中心 Big Sur 瓦片 + 通知中心 + 音量 HUD"；
-> **通知横幅（banner，通知中心已先把历史做全）、亮度 HUD、托盘真实像素（注入）、蓝牙/输入法/显示器状态项、正在播放瓦片仍待后续**。
+> **亮度 HUD、托盘真实像素（注入）、蓝牙/输入法/显示器状态项、正在播放瓦片仍待后续**。
 
 ## v4.0-alpha Phase 5 变更（Launchpad/系统级，进行中）
 

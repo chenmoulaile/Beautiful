@@ -167,6 +167,15 @@ public partial class App : Application
 
             // 6.9 音量 HUD（Phase 4-T7）：设置开启时接管媒体键（不吞则系统浮层与自家 HUD 会同时出现）
             _volumeOsd = new VolumeOsdController(SettingsService.Current.VolumeOsdEnabled, Dispatcher);
+
+            // 新通知 → 右上角横幅（历史仍由通知中心保留；关掉横幅不影响历史）
+            _notifications.Arrived += (_, item) =>
+            {
+                if (SettingsService.Current.NotificationBannerEnabled)
+                {
+                    TopBar.NotificationBannerHost.Show(item);
+                }
+            };
             // 7. --settings：设置窗口命令行入口（与托盘"设置"等效；窗口为单例）
             if (e.Args.Contains("--settings", StringComparer.OrdinalIgnoreCase))
                 OpenSettings();
@@ -178,6 +187,17 @@ public partial class App : Application
             {
                 EnsureTopBar();
                 _topBar?.ShowControlCenterForDiagnostics();
+            }
+
+            // 7.10 --banner-test：通知横幅截图入口（用固定示例内容，不读真实通知）
+            if (e.Args.Contains("--banner-test", StringComparer.OrdinalIgnoreCase))
+            {
+                TopBar.NotificationBannerHost.Show(
+                    new Core.Notifications.NotificationItem(
+                        900001, string.Empty, "示例应用", "这是一条演示通知",
+                        "用于截图验证横幅样式与排版，不包含任何真实通知内容。",
+                        DateTimeOffset.Now),
+                    TimeSpan.FromSeconds(40));
             }
 
             // 7.11 --osd-volume <0..100> / --osd-mute：音量 HUD 截图入口（不改系统音量）
@@ -934,6 +954,11 @@ public partial class App : Application
             var handle = _volumeOsd?.DiagnosticsHandle ?? IntPtr.Zero;
             if (handle == IntPtr.Zero)
             {
+                handle = TopBar.NotificationBannerHost.DiagnosticsHandle;
+            }
+
+            if (handle == IntPtr.Zero)
+            {
                 handle = TopBar.NotificationCenterWindow.GetDiagnosticsHandle();
             }
             if (handle == IntPtr.Zero)
@@ -1041,6 +1066,7 @@ public partial class App : Application
             _notifications = null;
             _volumeOsd?.Dispose();    // 音量 HUD：卸媒体键钩子，恢复系统音量键行为
             _volumeOsd = null;
+            TopBar.NotificationBannerHost.CloseAll();
             _dock?.Close();          // DockWindow.OnClosing：AppBar ABM_REMOVE（hwnd 销毁前）
             _taskbar?.Restore();     // Hide/AutoHide 还原系统任务栏
             _tray?.Dispose();        // 移除托盘图标（防幽灵图标）

@@ -38,6 +38,9 @@ public sealed record AppSettings
     /// </summary>
     public bool VolumeOsdEnabled { get; init; } = true;
 
+    /// <summary>新通知是否在右上角弹横幅（Phase 4-T5 续）。历史始终进通知中心，与这一项无关。</summary>
+    public bool NotificationBannerEnabled { get; init; } = true;
+
     /// <summary>
     /// 顶栏时钟左键是否打开通知中心（Phase 4-T5）。默认开——Big Sur 的时钟点击就是通知中心；
     /// 关掉则退回原来的月历浮层（给只想要日历、不要读系统通知的用户一条干净的退出路）。
