@@ -16,6 +16,9 @@ public class AppSettingsTests
         Assert.False(s.NativeTrayBridge);   // Phase 2 注入默认关：真机演练回执后才允许默认开
         Assert.Equal("auto", s.MaterialQuality);
         Assert.True(s.FullscreenAvoidanceEnabled);
+        Assert.Equal("genie", s.MinimizeEffect);
+        Assert.Equal(1.0, s.AnimationSpeed);
+        Assert.Equal("", s.MinimizeExcludes);
         Assert.Equal("hide", s.TaskbarPolicy);
         Assert.False(s.Autostart);
         Assert.True(s.ShowMediaCapsule);
@@ -35,6 +38,10 @@ public class AppSettingsTests
         Assert.Equal("blue", new AppSettings { AccentColor = "chartreuse" }.Normalized().AccentColor);
         Assert.Equal("live", new AppSettings { MaterialQuality = "LIVE" }.Normalized().MaterialQuality);
         Assert.Equal("auto", new AppSettings { MaterialQuality = "turbo" }.Normalized().MaterialQuality);
+        Assert.Equal("zoom", new AppSettings { MinimizeEffect = "ZOOM" }.Normalized().MinimizeEffect);
+        Assert.Equal("genie", new AppSettings { MinimizeEffect = "bounce" }.Normalized().MinimizeEffect);
+        Assert.Equal(2.0, new AppSettings { AnimationSpeed = 9 }.Normalized().AnimationSpeed);
+        Assert.Equal(0.5, new AppSettings { AnimationSpeed = 0.1 }.Normalized().AnimationSpeed);
         Assert.Equal("hide", new AppSettings { TaskbarPolicy = "always" }.Normalized().TaskbarPolicy);
         Assert.Equal("autohide", new AppSettings { TaskbarPolicy = "AutoHide" }.Normalized().TaskbarPolicy);
         Assert.Equal("keep", new AppSettings { TaskbarPolicy = "keep" }.Normalized().TaskbarPolicy);

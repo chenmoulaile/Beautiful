@@ -155,12 +155,49 @@ public sealed class MinimizeAnimator : IDisposable
         return fw > 0 && fh > 0 && tw > fw * 1.2 && th > fh * 1.2;
     }
 
+    /// <summary>速度倍率（0.5-2.0）：时长 = 基准 / 倍率，倍率越大越快。</summary>
+    private static double SpeedFactor => Math.Clamp(SettingsService.Current.AnimationSpeed, 0.5, 2.0);
+
+    private static int ScaledDuration(int baseMs) => (int)Math.Round(baseMs / SpeedFactor);
+
+    /// <summary>
+    /// 按进程名排除最小化动画（设置项 MinimizeExcludes；逗号/分号分隔，忽略 .exe 与大小写）。
+    /// 拿不到进程信息时按"不排除"处理——宁可多播一次动画，也不让动画因一次查询失败整体消失。
+    /// </summary>
+    private static bool IsExcluded(IntPtr hwnd)
+    {
+        var raw = SettingsService.Current.MinimizeExcludes;
+        if (string.IsNullOrWhiteSpace(raw)) return false;
+        try
+        {
+            NativeMethods.GetWindowThreadProcessId(hwnd, out var pid);
+            if (pid == 0) return false;
+            using var process = Process.GetProcessById((int)pid);
+            var name = process.ProcessName;
+            foreach (var part in raw.Split([',', ';'], StringSplitOptions.RemoveEmptyEntries))
+            {
+                var token = part.Trim();
+                if (token.EndsWith(".exe", StringComparison.OrdinalIgnoreCase)) token = token[..^4];
+                if (token.Length > 0 && string.Equals(token, name, StringComparison.OrdinalIgnoreCase))
+                {
+                    Logger.Info($"最小化动画排除：{name}");
+                    return true;
+                }
+            }
+        }
+        catch (Exception ex) when (ex is ArgumentException or InvalidOperationException or System.ComponentModel.Win32Exception)
+        {
+            // 进程已退出/权限不足：不排除
+        }
+        return false;
+    }
+
     // ---------- 动画 ----------
 
     /// <summary>最小化：抓一帧盖在原位，再把替身收进该应用在 Dock 上的图标。</summary>
     private void PlayMinimize(IntPtr hwnd)
     {
-        if (!IsRunning || Busy) return;
+        if (!IsRunning || Busy || IsExcluded(hwnd)) return;
         if (NativeMethods.IsIconic(hwnd))
         {
             // 事件走队列后到，状态早已翻转——Dock 路径这时应已由预抓接管并占用 Busy。
@@ -174,7 +211,7 @@ public sealed class MinimizeAnimator : IDisposable
 
         var source = ToRect(rect);
         var icon = IconRectFor(source, _dockTarget(hwnd));
-        StartGenie(image, source, icon, MinimizeDurationMs, reverse: false);
+        StartGenie(image, source, icon, ScaledDuration(MinimizeDurationMs), reverse: false);
     }
 
     /// <summary>
@@ -188,7 +225,7 @@ public sealed class MinimizeAnimator : IDisposable
     /// </summary>
     public (BitmapSource? Image, Rect? SourceRect) PreCapture(IntPtr hwnd)
     {
-        if (!IsRunning || Busy) return (null, null);
+        if (!IsRunning || Busy || IsExcluded(hwnd)) return (null, null);
         if (hwnd == IntPtr.Zero || NativeMethods.IsIconic(hwnd)) return (null, null);
         var image = WindowCapture.Capture(hwnd);
         if (image is null) return (null, null);
@@ -199,9 +236,9 @@ public sealed class MinimizeAnimator : IDisposable
     /// <summary>用预抓的画面放 genie。窗口此刻多半已经缩下去，矩形用预抓的那份，不再现查。</summary>
     public void PlayMinimizeFromCapture(IntPtr hwnd, BitmapSource image, Rect sourceRect)
     {
-        if (!IsRunning || Busy) return;
+        if (!IsRunning || Busy || IsExcluded(hwnd)) return;
         var icon = IconRectFor(sourceRect, _dockTarget(hwnd));
-        StartGenie(image, sourceRect, icon, MinimizeDurationMs, reverse: false);
+        StartGenie(image, sourceRect, icon, ScaledDuration(MinimizeDurationMs), reverse: false);
     }
 
     /// <summary>
@@ -210,7 +247,7 @@ public sealed class MinimizeAnimator : IDisposable
     /// </summary>
     private void PlayRestore(IntPtr hwnd)
     {
-        if (!IsRunning || Busy) return;
+        if (!IsRunning || Busy || IsExcluded(hwnd)) return;
         // 刚还原的窗口需要一点时间把客户区画完，抓太早会得到上一帧或纯色
         if (!NativeMethods.GetWindowRect(hwnd, out var rect)) return;
         var source = ToRect(rect);
@@ -219,12 +256,23 @@ public sealed class MinimizeAnimator : IDisposable
         var image = WindowCapture.Capture(hwnd);
         if (image is null) return;
         var icon = IconRectFor(source, _dockTarget(hwnd));
-        StartGenie(image, source, icon, MinimizeDurationMs, reverse: true);
+        StartGenie(image, source, icon, ScaledDuration(MinimizeDurationMs), reverse: true);
     }
 
-    /// <summary>按设置选引擎：mesh（灯罩三角网，默认）或 strips（条带缩放，兜底）。</summary>
+    /// <summary>按设置选效果：genie（灯罩网格/条带）、zoom（缩放淡出）、suck（更紧的吸吮）。</summary>
     private void StartGenie(BitmapSource image, Rect windowRect, Rect iconRect, int durationMs, bool reverse)
     {
+        var effect = SettingsService.Current.MinimizeEffect;
+        if (string.Equals(effect, "zoom", StringComparison.OrdinalIgnoreCase))
+        {
+            StartZoomEffect(image, windowRect, iconRect, durationMs, reverse);
+            return;
+        }
+        if (string.Equals(effect, "suck", StringComparison.OrdinalIgnoreCase))
+        {
+            StartStripGenie(image, windowRect, iconRect, durationMs, reverse, lag: 0.15);
+            return;
+        }
         if (string.Equals(Services.SettingsService.Current.GenieEngine, "strips", StringComparison.OrdinalIgnoreCase))
         {
             StartStripGenie(image, windowRect, iconRect, durationMs, reverse);
@@ -234,11 +282,32 @@ public sealed class MinimizeAnimator : IDisposable
     }
 
     /// <summary>
+    /// zoom：整窗向图标方向缩成一个点并淡出。当前用源窗口内的中心缩放（避免被 2D 幽灵窗口的
+    /// 画布裁切）；Dock 图标方向的精确位移等 native 场景渲染器接管后再补。
+    /// </summary>
+    private void StartZoomEffect(BitmapSource image, Rect windowRect, Rect iconRect, int durationMs, bool reverse)
+    {
+        if (windowRect.Width <= 0 || windowRect.Height <= 0) return;
+        var cx = Math.Clamp((iconRect.X + iconRect.Width / 2 - windowRect.Left) / windowRect.Width, 0.15, 0.85);
+        var cy = Math.Clamp((iconRect.Y + iconRect.Height / 2 - windowRect.Top) / windowRect.Height, 0.15, 0.85);
+        var target = new GenieRect(cx - 0.05, cy - 0.05, 0.1, 0.1);
+
+        StartGhost(image, windowRect, durationMs, t =>
+        {
+            var p = reverse ? 1.0 - t : t;
+            var r = GenieMath.ZoomLerp(new GenieRect(0, 0, 1, 1), target, p);
+            var opacity = 1.0 - 0.35 * GenieMath.Clamp01(p);
+            return new List<(GenieRect, double)> { (r, opacity) };
+        });
+    }
+
+    /// <summary>
     /// 兜底引擎：把窗口切成水平条带，整体向图标收拢。
     /// 形状比灯罩网格差一档（没有"脖子"，越靠下的行不会额外多收一些），
     /// 但它只用 2D 绘制，在任何渲染环境下都画得出来。
     /// </summary>
-    private void StartStripGenie(BitmapSource image, Rect source, Rect icon, int durationMs, bool reverse)
+    private void StartStripGenie(BitmapSource image, Rect source, Rect icon, int durationMs, bool reverse,
+        double lag = GenieMath.DefaultLag)
     {
         var scaleX = (icon.X + icon.Width / 2 - (source.Left + source.Width / 2)) / source.Width;
         var scaleY = (icon.Y - source.Top) / source.Height;
@@ -247,7 +316,7 @@ public sealed class MinimizeAnimator : IDisposable
         StartGhost(image, source, durationMs, t =>
         {
             var p = reverse ? 1.0 - t : t;
-            return GenieMath.Sample(p, GenieMath.DefaultSlices, GenieMath.DefaultLag,
+            return GenieMath.Sample(p, GenieMath.DefaultSlices, lag,
                         0.5 + scaleX, 1.0 + scaleY, endWidth)
                     .Select(b => (b.Rect, b.Opacity)).ToList();
         });
@@ -342,7 +411,7 @@ public sealed class MinimizeAnimator : IDisposable
         var to = ToRect(toRect);
         if (from.Width <= 0 || from.Height <= 0) return;
 
-        StartGhost(image, to, ZoomDurationMs, t =>
+        StartGhost(image, to, ScaledDuration(ZoomDurationMs), t =>
         {
             var r = GenieMath.ZoomLerp(
                 new GenieRect(

@@ -164,6 +164,10 @@ public partial class SettingsWindow : Window
         LauncherEnabledCheck.IsChecked = s.LauncherEnabled;
         LauncherHotkeyBox.Text = s.LauncherHotkey;
         MinimizeAnimationCheck.IsChecked = s.MinimizeAnimation;
+        SelectByTag(MinimizeEffectBox, s.MinimizeEffect, "genie");
+        AnimationSpeedSlider.Value = s.AnimationSpeed;
+        AnimationSpeedLabel.Text = $"×{s.AnimationSpeed:0.0}";
+        MinimizeExcludesBox.Text = s.MinimizeExcludes;
         FullscreenAvoidanceCheck.IsChecked = s.FullscreenAvoidanceEnabled;
         NativeModulesCheck.IsChecked = s.NativeModules;
         NativeBlurCheck.IsChecked = s.NativeBlur;
@@ -379,6 +383,28 @@ public partial class SettingsWindow : Window
         if (_loading) return;
         SettingsService.UpdateAndSave(SettingsService.Current with { FullscreenAvoidanceEnabled = FullscreenAvoidanceCheck.IsChecked == true });
         // 服务每 1s 读设置；这里不强行触发，下一拍自然按新值恢复/让位。
+    }
+
+    private void AnimationSpeed_Changed(object sender, RoutedPropertyChangedEventArgs<double> e)
+    {
+        if (AnimationSpeedLabel is null) return;
+        var speed = Math.Round(e.NewValue, 1);
+        AnimationSpeedLabel.Text = $"×{speed:0.0}";
+        if (_loading) return;
+        SettingsService.UpdateAndSave(SettingsService.Current with { AnimationSpeed = speed });
+    }
+
+    private void MinimizeEffect_Changed(object sender, SelectionChangedEventArgs e)
+    {
+        if (_loading) return;
+        var effect = TagOf(MinimizeEffectBox.SelectedItem) ?? "genie";
+        SettingsService.UpdateAndSave(SettingsService.Current with { MinimizeEffect = effect });
+    }
+
+    private void MinimizeExcludes_Changed(object sender, RoutedEventArgs e)
+    {
+        if (_loading) return;
+        SettingsService.UpdateAndSave(SettingsService.Current with { MinimizeExcludes = MinimizeExcludesBox.Text.Trim() });
     }
 
     private void GenieEngine_Changed(object sender, SelectionChangedEventArgs e)

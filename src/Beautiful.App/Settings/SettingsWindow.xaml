@@ -518,6 +518,29 @@
                                   Checked="MinimizeAnimation_Changed" Unchecked="MinimizeAnimation_Changed"/>
                         <TextBlock Style="{StaticResource HintText}"
                                    Text="动画器在启动时装配，本项修改后重启 Beautiful 生效（不做假即时）。"/>
+                        <StackPanel Orientation="Horizontal" Margin="0,12,0,0">
+                            <TextBlock Text="效果" Style="{StaticResource RowLabel}" Width="72"/>
+                            <ComboBox x:Name="MinimizeEffectBox" Width="220" VerticalAlignment="Center"
+                                      SelectionChanged="MinimizeEffect_Changed">
+                                <ComboBoxItem Content="genie（灯罩网格）" Tag="genie"/>
+                                <ComboBoxItem Content="zoom（缩放淡出）" Tag="zoom"/>
+                                <ComboBoxItem Content="suck（吸吮）" Tag="suck"/>
+                            </ComboBox>
+                        </StackPanel>
+                        <StackPanel Orientation="Horizontal" Margin="0,10,0,0">
+                            <TextBlock Text="速度" Style="{StaticResource RowLabel}" Width="72"/>
+                            <Slider x:Name="AnimationSpeedSlider" Width="220" Minimum="0.5" Maximum="2.0"
+                                    SmallChange="0.1" LargeChange="0.3" IsSnapToTickEnabled="True" TickFrequency="0.1"
+                                    VerticalAlignment="Center" ValueChanged="AnimationSpeed_Changed"/>
+                            <TextBlock x:Name="AnimationSpeedLabel" Style="{StaticResource ValueLabel}"/>
+                        </StackPanel>
+                        <StackPanel Orientation="Horizontal" Margin="0,10,0,0">
+                            <TextBlock Text="排除进程" Style="{StaticResource RowLabel}" Width="72"/>
+                            <TextBox x:Name="MinimizeExcludesBox" Width="300" Height="26" VerticalContentAlignment="Center"
+                                     VerticalAlignment="Center" LostFocus="MinimizeExcludes_Changed"/>
+                        </StackPanel>
+                        <TextBlock Style="{StaticResource HintText}"
+                                   Text="排除进程用逗号或分号分隔（如 chrome;obs64），按进程名忽略 .exe 与大小写；留空 = 不排除。速度 0.5-2.0 倍，越慢越接近 macOS Shift 慢放。"/>
                         <CheckBox x:Name="FullscreenAvoidanceCheck" Content="全屏应用时隐藏菜单栏与 Dock"
                                   Margin="0,10,0,0" Checked="FullscreenAvoidance_Changed" Unchecked="FullscreenAvoidance_Changed"/>
                         <TextBlock Style="{StaticResource HintText}"

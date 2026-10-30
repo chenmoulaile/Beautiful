@@ -120,6 +120,17 @@ public sealed record AppSettings
     /// </summary>
     public bool MinimizeAnimation { get; init; } = true;
 
+    /// <summary>最小化效果："genie"（默认）| "zoom"（缩放淡出）| "suck"（更紧的吸吮）。</summary>
+    public string MinimizeEffect { get; init; } = "genie";
+
+    /// <summary>动画速度倍率（0.5..2.0，加载时钳制；越小越慢）。</summary>
+    public double AnimationSpeed { get; init; } = 1.0;
+
+    /// <summary>不做最小化动画的进程名（逗号/分号分隔，忽略 .exe 后缀与大小写）。</summary>
+    public string MinimizeExcludes { get; init; } = "";
+
+    public static IReadOnlyList<string> KnownMinimizeEffects { get; } = ["genie", "zoom", "suck"];
+
     /// <summary>
     /// 真全屏应用（游戏/F11/视频）盖住整块屏时，隐藏菜单栏与 Dock；退出全屏后恢复。
     /// 判定全部走 Core <see cref="Layout.FullscreenAvoidance"/>（物理矩形比较，最大化不触发）。
@@ -266,6 +277,9 @@ public sealed record AppSettings
         TopBarMonitor = MonitorSelectorOrDefault(TopBarMonitor),
         IconTreatment = Canonical(IconTreatment, "auto", KnownIconTreatments),
         GenieEngine = Canonical(GenieEngine, "mesh", KnownGenieEngines),
+        MinimizeEffect = Canonical(MinimizeEffect, "genie", KnownMinimizeEffects),
+        AnimationSpeed = Math.Clamp(AnimationSpeed, 0.5, 2.0),
+        MinimizeExcludes = (MinimizeExcludes ?? string.Empty).Trim(),
         MaterialQuality = Canonical(MaterialQuality, "auto", KnownMaterialQualities)
     };
 

@@ -49,9 +49,10 @@ Beautiful 接管日常桌面三件套：屏幕底部是悬浮 Dock（应用固�
 | 全屏避让（P3-T6） | `FullscreenAvoidanceService`：1s 读前台 DWM 可见矩形，Core `FullscreenAvoidance` 判定；真全屏隐藏菜单栏/Dock，退出恢复；设置「全屏应用时隐藏菜单栏与 Dock」默认开 | 纯函数 28 条既有测试 + 服务构建通过；**真全屏触发 UNVERIFIED(owner)** |
 | 材质（P3-T2） | 已接 Phase 2 `NativeMaterialHost`（探针可用让出静态底） | 同 Phase 2 边界 |
 | 文件夹堆栈（P3-T3 起步） | 文件夹可作为 Dock 固定项；Core `DockPinOps.CanPin` 允许目录；点击弹 FluentMenu 列表（Shell 图标、在访达中打开、最多 10 项）；二级目录暂以资源管理器打开 | `DockPinCanPinTests`；**列表形态，fan/grid 布局、OLE 拖出、嵌套堆栈与下载堆栈仍未完成** |
-| 最近项目/停靠边/自动隐藏/genie 三效果（P3-T4/T5/T7） | **未开始**（下一批） | 不假装完成；按总纲 Core 先行逐项实现 |
+| 最小化效果（P3-T7 部分） | `MinimizeEffect` = genie/zoom/suck；速度 0.5-2.0x；按进程排除清单；设置页动画卡接线。zoom 目前是源窗口内中心缩放淡出，suck 是更紧的条带吸吮 | 设置归一化单测 + 778 测试通过；**native shader 网格渲染与精确 Dock 位移仍未完成**，真机动画目视 UNVERIFIED(owner) |
+| 最近项目/停靠边/自动隐藏（P3-T4/T5） | **未开始**（下一批） | 不假装完成；按总纲 Core 先行逐项实现 |
 
-> Phase 3 已完成"度量默认值 + 全屏避让 + 材质接线 + 文件夹堆栈列表形态"；fan/grid 堆栈、最近项目解析、左右/顶部停靠、四种隐藏模式、genie/zoom/suck 三效果仍待实现。真机对比截图是出口判据。
+> Phase 3 已完成"度量默认值 + 全屏避让 + 材质接线 + 文件夹堆栈列表形态 + 最小化三效果设置（WPF 路径）"；fan/grid 堆栈、最近项目解析、左右/顶部停靠、四种隐藏模式、native shader 动画仍待实现。真机对比截图是出口判据。
 
 ## 本地运行（真正能跑的那份在哪）
 
