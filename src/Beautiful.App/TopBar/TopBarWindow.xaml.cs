@@ -541,8 +541,16 @@ public partial class TopBarWindow : AcrylicWindow
         => new() { Content = content, Style = (Style)FindResource("BarButton") };
 
     /// <summary>在按钮下缘（物理像素锚点）向下弹 FluentMenu。顶栏贴屏幕顶边 → 弹层自然向下展开（不会上翻出屏）。</summary>
-    private void ShowMenuUnder(FrameworkElement anchor, System.Collections.Generic.List<MenuItemView> items)
+    /// <summary>点前台应用名 = 弹出该应用的真实 Win32 菜单（P4-T3）；快照取在菜单显示前。</summary>
+    private void AppMenu_Click(object sender, RoutedEventArgs e)
     {
+        TakeForegroundSnapshot();
+        var fg = ForegroundHandle;
+        if (fg == IntPtr.Zero) return;
+        ShowMenuUnder(AppMenuButton, TopBarMenus.AppMenu(fg, _lastAppName));
+    }
+
+    private void ShowMenuUnder(FrameworkElement anchor, System.Collections.Generic.List<MenuItemView> items)    {
         var p = anchor.PointToScreen(new Point(0, anchor.ActualHeight)); // 设备像素
         FluentMenu.Show(new FluentPopupHost(), new Point(p.X, p.Y), items, item => item.Invoke?.Invoke());
         // 菜单已显示：此后前台变成弹层自身。这里仍刷新应用名（让 UI 与真实前台一致），

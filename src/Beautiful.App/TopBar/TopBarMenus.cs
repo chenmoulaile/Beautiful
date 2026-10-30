@@ -7,6 +7,7 @@ using Beautiful.App.Interop;
 using Beautiful.App.Services;
 using Beautiful.App.Shell;
 using Beautiful.Core.Controls;
+using Beautiful.Core.TopBar;
 using MessageBox = System.Windows.MessageBox;
 
 namespace Beautiful.App.TopBar;
@@ -159,6 +160,54 @@ public static class TopBarMenus
             NativeMethods.ShowWindow(w.Handle, NativeMethods.SwMinimize);
     }
 
+    /// <summary>
+    /// 前台应用的真菜单镜像（P4-T3）：GetMenu 读到的结构一对一映射成自绘菜单；点击按命令 ID
+    /// PostMessage(WM_COMMAND) 回发。自绘菜单应用（Chrome/Office/UWP）GetMenu 为空 → 返回一条置灰说明，
+    /// 不伪造菜单。快捷键文本放 ToolTip（FluentMenu 目前没有右对齐快捷键列）。
+    /// </summary>
+    public static List<MenuItemView> AppMenu(IntPtr foreground, string appName)
+    {
+        var nodes = Win32MenuReader.Read(foreground);
+        if (nodes.Count == 0)
+        {
+            return
+            [
+                new MenuItemView
+                {
+                    Id = "wm:none",
+                    Label = $"{appName} 没有可镜像的 Win32 菜单",
+                    IsEnabled = false,
+                    ToolTip = "该应用使用自绘菜单（Chrome/Office/UWP 等）；Windows 不提供可读取的菜单句柄。"
+                }
+            ];
+        }
+        return nodes.Select(n => ToAppMenuItem(n, foreground)).ToList();
+    }
+
+    private static MenuItemView ToAppMenuItem(MirrorMenuItem node, IntPtr foreground)
+    {
+        if (node.IsSeparator) return new MenuItemView { Id = "wm:sep", IsSeparator = true };
+
+        List<MenuItemView>? children = node.HasChildren
+            ? node.Children.Select(c => ToAppMenuItem(c, foreground)).ToList()
+            : null;
+        var hasCommand = node.CommandId != 0 && node.CommandId != uint.MaxValue;
+        var enabled = node.IsEnabled && (children is not null || hasCommand);
+        return new MenuItemView
+        {
+            Id = hasCommand ? $"wm:{node.CommandId}" : $"wm:item:{node.Label}",
+            Label = node.Label,
+            ToolTip = node.Shortcut,
+            IsChecked = node.IsChecked,
+            IsEnabled = enabled,
+            Children = children,
+            Invoke = children is null && hasCommand
+                ? () => Win32MenuReader.Invoke(foreground, node.CommandId)
+                : null
+        };
+    }
+
+    /// <summary>关于本机信息卡（Big Sur 风格，非分层窗口）。</summary>
     private static void ShowAbout() => AboutWindow.ShowSingleton();
 
     /// <summary>睡眠：powrprof SetSuspendState（不强制、不关唤醒）。失败只记日志，不弹假成功。</summary>

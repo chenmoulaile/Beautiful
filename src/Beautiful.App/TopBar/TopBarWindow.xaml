@@ -79,9 +79,13 @@
              顺序：logo 前插到应用名之前，菜单按钮追加到应用名之后。 ══ -->
         <StackPanel x:Name="LeftHost" Orientation="Horizontal" HorizontalAlignment="Left"
                     VerticalAlignment="Stretch" Margin="10,0,0,0">
-            <!-- 前台应用名：TopBarWindow.RefreshForegroundApp() 驱动（本任务保留、非交互，见代码注释） -->
-            <TextBlock x:Name="ForegroundAppText" Text="Beautiful"
-                       FontWeight="Bold" FontSize="12" VerticalAlignment="Center" Margin="2,0,8,0"/>
+            <!-- 前台应用名：macOS 语义 = 点它弹出该应用的真实 Win32 菜单（P4-T3）。
+                 ForegroundAppText 由 TopBarWindow.RefreshForegroundApp() 驱动。 -->
+            <Button x:Name="AppMenuButton" Style="{StaticResource BarButton}"
+                    Padding="4,0" Margin="0,0,4,0" ToolTip="前台应用菜单" Click="AppMenu_Click">
+                <TextBlock x:Name="ForegroundAppText" Text="Beautiful"
+                           FontWeight="Bold" FontSize="12" VerticalAlignment="Center"/>
+            </Button>
         </StackPanel>
 
         <!-- ══ 右区（Task 9）：状态项（媒体/时钟/音量/网络/电量）由代码注入 RightHost ══ -->
