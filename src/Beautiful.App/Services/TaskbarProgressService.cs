@@ -159,7 +159,10 @@ internal sealed class TaskbarProgressService : IDisposable
                 new PropertyCondition(AutomationElement.ControlTypeProperty, ControlType.ProgressBar));
             if (bars.Count == 0)
             {
-                return (true, -1);
+                // 实测（Win11 24H2）：拷贝对话框是 DirectUI，UIA 树里**一条 ProgressBar 都没有**
+                // （日志实证 "对话框内共 0 条进度条"）。退一步扫所有元素的名字：部分版本的对话框
+                // 会把 "56%" 放在文本元素的 Name 上。
+                return (true, PercentFromNames(root));
             }
 
             // 选"最宽的那条"：拷贝对话框里可能同时有"当前项"和"总体"两条进度条，
@@ -184,6 +187,43 @@ internal sealed class TaskbarProgressService : IDisposable
         {
             Logger.Warn($"Dock 进度条：UIA 读取失败 {ex.GetType().Name} {ex.Message}");
             return (true, -1);
+        }
+    }
+
+    /// <summary>
+    /// 在所有后代元素的名字里找百分数（UIA 无 ProgressBar 时的兜底）。
+    /// 取"名字里带 % 且元素最宽"的那条：拷贝对话框的总体进度文本比逐项文本更宽。
+    /// </summary>
+    private static double PercentFromNames(AutomationElement root)
+    {
+        try
+        {
+            var all = root.FindAll(TreeScope.Descendants, Condition.TrueCondition);
+            var best = -1.0;
+            var bestWidth = double.NegativeInfinity;
+            for (var i = 0; i < all.Count && i < 200; i++)
+            {
+                var element = all[i];
+                var fraction = DockProgressBar.ParsePercentText(element.Current.Name);
+                if (fraction < 0)
+                {
+                    continue;
+                }
+
+                var width = element.Current.BoundingRectangle.Width;
+                if (width >= bestWidth)
+                {
+                    best = fraction;
+                    bestWidth = width;
+                }
+            }
+
+            return best;
+        }
+        catch (Exception ex)
+        {
+            Logger.Warn($"进度：名字扫描失败 {ex.GetType().Name} {ex.Message}");
+            return -1;
         }
     }
 
@@ -227,6 +267,16 @@ internal sealed class TaskbarProgressService : IDisposable
             var bars = root.FindAll(TreeScope.Descendants,
                 new PropertyCondition(AutomationElement.ControlTypeProperty, ControlType.ProgressBar));
             Logger.Info($"进度：对话框内共 {bars.Count} 条进度条");
+
+            if (bars.Count == 0)
+            {
+                var all = root.FindAll(TreeScope.Descendants, Condition.TrueCondition);
+                Logger.Info($"进度：对话框内元素 {all.Count} 个，前 30 个名字：");
+                for (var i = 0; i < all.Count && i < 30; i++)
+                {
+                    Logger.Info($"进度：  [{i}] type={all[i].Current.ControlType.ProgrammaticName} name=[{all[i].Current.Name}]");
+                }
+            }
 
             for (var i = 0; i < bars.Count; i++)
             {
