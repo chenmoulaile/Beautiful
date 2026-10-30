@@ -121,6 +121,55 @@
             </Setter>
         </Style>
 
+        <!-- 分组容器（Big Sur 控制中心里"显示/声音"那种整块瓦片）：圆角 12 + 1px 发丝边 + 半透明底。 -->
+        <Style x:Key="CcGroupStyle" TargetType="Border">
+            <Setter Property="CornerRadius" Value="12"/>
+            <Setter Property="Background" Value="#12FFFFFF"/>
+            <Setter Property="BorderBrush" Value="#1AFFFFFF"/>
+            <Setter Property="BorderThickness" Value="1"/>
+            <Setter Property="Padding" Value="10,9"/>
+            <Setter Property="Margin" Value="0,0,0,8"/>
+        </Style>
+
+        <!-- 动作瓦片（蓝牙 / 隔空投送 / 专注）：与开关瓦片同尺寸同观感，但语义是"打开系统页"或"不可用"。
+             副标题走 Tag，置灰时仍显示原因——不做"看起来能开、其实没反应"的假开关。 -->
+        <Style x:Key="CcActionTileStyle" TargetType="Button">
+            <Setter Property="Height" Value="66"/>
+            <Setter Property="Foreground" Value="{DynamicResource ThemeTextPrimary}"/>
+            <Setter Property="Background" Value="#14FFFFFF"/>
+            <Setter Property="HorizontalContentAlignment" Value="Left"/>
+            <Setter Property="SnapsToDevicePixels" Value="True"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Button">
+                        <Border x:Name="bg" CornerRadius="9" Background="{TemplateBinding Background}"
+                                BorderBrush="#1FFFFFFF" BorderThickness="1" Padding="9,7">
+                            <Grid>
+                                <Grid.RowDefinitions>
+                                    <RowDefinition Height="*"/>
+                                    <RowDefinition Height="Auto"/>
+                                </Grid.RowDefinitions>
+                                <TextBlock Grid.Row="0" Text="{TemplateBinding Content}"
+                                           FontSize="13" FontWeight="SemiBold" VerticalAlignment="Center"
+                                           Foreground="{TemplateBinding Foreground}"/>
+                                <TextBlock Grid.Row="1" Text="{TemplateBinding Tag}" FontSize="10.5" Opacity="0.72"
+                                           TextTrimming="CharacterEllipsis"
+                                           Foreground="{TemplateBinding Foreground}"/>
+                            </Grid>
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="bg" Property="Background" Value="#2EFFFFFF"/>
+                            </Trigger>
+                            <Trigger Property="IsEnabled" Value="False">
+                                <Setter Property="Opacity" Value="0.45"/>
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+
         <!-- 底部动作按钮（打开设置… / 重载 Dock）：与顶栏 BarButton 同一观感（透明底 + 悬停强调） -->
         <Style x:Key="CcFooterStyle" TargetType="Button">
             <Setter Property="Height" Value="30"/>
@@ -145,7 +194,7 @@
     </UserControl.Resources>
 
     <Grid x:Name="Shell" Margin="20,18,20,24">
-        <Border x:Name="Card" Width="312" CornerRadius="12" BorderThickness="1" BorderBrush="#2AFFFFFF"
+        <Border x:Name="Card" Width="330" CornerRadius="12" BorderThickness="1" BorderBrush="#2AFFFFFF"
                 Background="{StaticResource CardFillSolid}" Effect="{StaticResource CardShadow}">
             <Grid>
                 <Border x:Name="Scrim" CornerRadius="11" IsHitTestVisible="False" Background="Transparent"/>
@@ -161,96 +210,107 @@
                     </Border.Background>
                 </Border>
 
-                <StackPanel Margin="13,11,13,9">
+                <StackPanel Margin="14,12,14,10">
                     <!-- 标题行：左"控制中心"，右"当前主题：xxx"（打开时快照，切主题后由 RebuildAll 刷新） -->
-                    <Grid Margin="0,0,0,7">
+                    <Grid Margin="2,0,2,9">
                         <TextBlock Text="控制中心" FontSize="13.5" FontWeight="SemiBold"/>
                         <TextBlock x:Name="ThemeLabel" HorizontalAlignment="Right" FontSize="11.5" Opacity="0.72"/>
                     </Grid>
 
-                    <TextBlock Text="主题" FontSize="11" Opacity="0.62" Margin="1,0,0,3"/>
-                    <UniformGrid x:Name="ThemeHost" Columns="3" Margin="0,0,0,8"/>
-
-                    <TextBlock Text="系统任务栏" FontSize="11" Opacity="0.62" Margin="1,0,0,3"/>
-                    <UniformGrid x:Name="PolicyHost" Columns="3" Margin="0,0,0,4"/>
-                    <TextBlock x:Name="PolicyHintText" FontSize="10.5" Opacity="0.62" TextWrapping="Wrap"
-                               Margin="1,0,1,8"/>
-
-                    <UniformGrid x:Name="TileHost" Columns="2" Margin="0,0,0,2"/>
-
-                    <!-- Wi-Fi 砖块（v3.5）：真正的无线电开关（WlanSetInterface），不是"打开设置"的假开关。
-                         读不到状态时置灰并写原因；点下去失败会把系统原因显示出来（不静默回弹）。 -->
-                    <ToggleButton x:Name="WifiTile" Content="Wi-Fi" Style="{StaticResource CcTileStyle}"
-                                  Margin="3,4,3,0" HorizontalAlignment="Left" MinWidth="150"
-                                  Checked="WifiTile_Changed" Unchecked="WifiTile_Changed"
-                                  AutomationProperties.Name="控制中心 Wi-Fi 开关"/>
-                    <TextBlock x:Name="WifiReason" FontSize="10.5" Opacity="0.62" TextWrapping="Wrap"
-                               Margin="4,3,1,0" Visibility="Collapsed"/>
-
-                    <!-- 亮度行（v3.5）：内置屏走 root\WMI 的 WmiMonitorBrightness（DDC/CI 那条对笔记本面板无效）。
-                         读不到就整行置灰 + 写原因，绝不画一根拖了没反应的滑杆。 -->
-                    <Grid Margin="0,8,0,0">
-                        <Grid.ColumnDefinitions>
-                            <ColumnDefinition Width="Auto"/>
-                            <ColumnDefinition Width="*"/>
-                            <ColumnDefinition Width="Auto"/>
-                        </Grid.ColumnDefinitions>
-                        <TextBlock Grid.Column="0" Text="&#xE706;" FontSize="13" Margin="2,0,9,0"
-                                   VerticalAlignment="Center" Opacity="0.85"
-                                   FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets"
-                                   Foreground="{DynamicResource ThemeTextPrimary}"/>
-                        <Slider x:Name="BrightnessSlider" Grid.Column="1" Minimum="0" Maximum="100"
-                                IsMoveToPointEnabled="True" VerticalAlignment="Center"
-                                TickFrequency="1" SmallChange="1" LargeChange="5"
-                                ValueChanged="Brightness_ValueChanged"
-                                AutomationProperties.Name="屏幕亮度"/>
-                        <TextBlock x:Name="BrightnessText" Grid.Column="2" MinWidth="46" Margin="8,0,0,0"
-                                   FontSize="11.5" Opacity="0.85" TextAlignment="Right" VerticalAlignment="Center"/>
-                    </Grid>
-                    <TextBlock x:Name="BrightnessReason" FontSize="10.5" Opacity="0.62" TextWrapping="Wrap"
-                               Margin="1,3,1,0" Visibility="Collapsed"/>
-
-                    <!-- 蓝牙 / 飞行模式：Windows 不给普通进程这两个无线电开关（WinRT Radios 需要
-                         打包应用才能拿的 radios 能力，禁用设备要管理员），所以这两块**明说是打开系统页**，
-                         不做"看起来能开关、实际没反应"的假砖块。 -->
-                    <UniformGrid Columns="2" Margin="0,7,0,0">
-                        <Button x:Name="BluetoothButton" Content="蓝牙设置…" Style="{StaticResource CcFooterStyle}"
-                                Margin="3,0,4,0" Click="Bluetooth_Click"
+                    <!-- ============ 连接组（Big Sur 的 2×2 瓦片） ============
+                         Wi-Fi 是真开关（WlanSetInterface）；蓝牙要管理员权限、隔空投送在 Windows 上没有对应物，
+                         所以后两者**不做假开关**：蓝牙点开系统蓝牙页，隔空投送置灰并写明原因。 -->
+                    <UniformGrid Columns="2" Margin="0,0,0,8">
+                        <ToggleButton x:Name="WifiTile" Content="Wi-Fi" Style="{StaticResource CcTileStyle}"
+                                      Margin="0,0,4,4" Checked="WifiTile_Changed" Unchecked="WifiTile_Changed"
+                                      AutomationProperties.Name="控制中心 Wi-Fi 开关"/>
+                        <Button x:Name="BluetoothButton" Content="蓝牙" Tag="打开系统蓝牙页"
+                                Style="{StaticResource CcActionTileStyle}" Margin="4,0,0,4"
+                                Click="Bluetooth_Click"
                                 AutomationProperties.Name="控制中心 打开蓝牙设置"/>
-                        <Button x:Name="AirplaneButton" Content="飞行模式…" Style="{StaticResource CcFooterStyle}"
-                                Margin="4,0,3,0" Click="Airplane_Click"
-                                AutomationProperties.Name="控制中心 打开飞行模式设置"/>
+                        <Button x:Name="AirDropButton" Content="隔空投送" Tag="Windows 无对应能力"
+                                Style="{StaticResource CcActionTileStyle}" Margin="0,4,4,0"
+                                IsEnabled="False"
+                                ToolTip="Windows 没有与隔空投送对等的系统能力（就近共享需应用自行实现）"
+                                AutomationProperties.Name="控制中心 隔空投送（不可用）"/>
+                        <Button x:Name="FocusButton" Content="专注模式" Tag="打开系统专注设置"
+                                Style="{StaticResource CcActionTileStyle}" Margin="4,4,0,0"
+                                Click="Focus_Click"
+                                AutomationProperties.Name="控制中心 打开专注模式设置"/>
                     </UniformGrid>
+                    <TextBlock x:Name="WifiReason" FontSize="10.5" Opacity="0.62" TextWrapping="Wrap"
+                               Margin="4,0,4,6" Visibility="Collapsed"/>
 
-                    <!-- 音量行：图标按钮（静音旗标）+ 滑杆 + 读数。不可用时整行置灰，
-                         下面一行 VolumeReason 给出中文原因（绝不显示一个编出来的百分比）。 -->
-                    <Grid Margin="0,8,0,0">
-                        <Grid.ColumnDefinitions>
-                            <ColumnDefinition Width="Auto"/>
-                            <ColumnDefinition Width="*"/>
-                            <ColumnDefinition Width="Auto"/>
-                        </Grid.ColumnDefinitions>
-                        <Button x:Name="MuteButton" Grid.Column="0" Width="30" Height="26" Margin="0,0,7,0"
-                                Content="&#xE767;" FontSize="13" Padding="0"
-                                FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets"
-                                Foreground="{DynamicResource ThemeTextPrimary}"
-                                Style="{StaticResource CcFooterStyle}" Click="Mute_Click"
-                                AutomationProperties.Name="静音开关"/>
-                        <Slider x:Name="VolumeSlider" Grid.Column="1" Minimum="0" Maximum="100"
-                                IsMoveToPointEnabled="True" VerticalAlignment="Center"
-                                TickFrequency="1" SmallChange="1" LargeChange="5"
-                                ValueChanged="Volume_ValueChanged"
-                                PreviewMouseLeftButtonDown="Volume_DragBegin"
-                                PreviewMouseLeftButtonUp="Volume_DragEnd"
-                                LostMouseCapture="Volume_DragEnd"
-                                AutomationProperties.Name="系统音量"/>
-                        <TextBlock x:Name="VolumeText" Grid.Column="2" MinWidth="46" Margin="8,0,0,0"
-                                   FontSize="11.5" Opacity="0.85" TextAlignment="Right" VerticalAlignment="Center"/>
-                    </Grid>
+                    <!-- ============ 显示（Big Sur：图标 + 滑杆 + 读数，整块一个瓦片） ============ -->
+                    <Border Style="{StaticResource CcGroupStyle}">
+                        <Grid>
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="Auto"/>
+                                <ColumnDefinition Width="*"/>
+                                <ColumnDefinition Width="Auto"/>
+                            </Grid.ColumnDefinitions>
+                            <TextBlock Grid.Column="0" Text="&#xE706;" FontSize="15" Margin="2,0,10,0"
+                                       VerticalAlignment="Center" Opacity="0.85"
+                                       FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets"
+                                       Foreground="{DynamicResource ThemeTextPrimary}"/>
+                            <Slider x:Name="BrightnessSlider" Grid.Column="1" Minimum="0" Maximum="100"
+                                    IsMoveToPointEnabled="True" VerticalAlignment="Center"
+                                    TickFrequency="1" SmallChange="1" LargeChange="5"
+                                    ValueChanged="Brightness_ValueChanged"
+                                    AutomationProperties.Name="屏幕亮度"/>
+                            <TextBlock x:Name="BrightnessText" Grid.Column="2" MinWidth="42" Margin="8,0,0,0"
+                                       FontSize="11.5" Opacity="0.85" TextAlignment="Right" VerticalAlignment="Center"/>
+                        </Grid>
+                    </Border>
+                    <TextBlock x:Name="BrightnessReason" FontSize="10.5" Opacity="0.62" TextWrapping="Wrap"
+                               Margin="4,0,4,6" Visibility="Collapsed"/>
+
+                    <!-- ============ 声音（同上；静音按钮 + 滑杆 + 读数） ============ -->
+                    <Border Style="{StaticResource CcGroupStyle}">
+                        <Grid>
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="Auto"/>
+                                <ColumnDefinition Width="*"/>
+                                <ColumnDefinition Width="Auto"/>
+                            </Grid.ColumnDefinitions>
+                            <Button x:Name="MuteButton" Grid.Column="0" Width="26" Height="24" Margin="0,0,8,0"
+                                    Content="&#xE767;" FontSize="13" Padding="0"
+                                    FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets"
+                                    Foreground="{DynamicResource ThemeTextPrimary}"
+                                    Style="{StaticResource CcFooterStyle}" Click="Mute_Click"
+                                    AutomationProperties.Name="静音开关"/>
+                            <Slider x:Name="VolumeSlider" Grid.Column="1" Minimum="0" Maximum="100"
+                                    IsMoveToPointEnabled="True" VerticalAlignment="Center"
+                                    TickFrequency="1" SmallChange="1" LargeChange="5"
+                                    ValueChanged="Volume_ValueChanged"
+                                    PreviewMouseLeftButtonDown="Volume_DragBegin"
+                                    PreviewMouseLeftButtonUp="Volume_DragEnd"
+                                    LostMouseCapture="Volume_DragEnd"
+                                    AutomationProperties.Name="系统音量"/>
+                            <TextBlock x:Name="VolumeText" Grid.Column="2" MinWidth="42" Margin="8,0,0,0"
+                                       FontSize="11.5" Opacity="0.85" TextAlignment="Right" VerticalAlignment="Center"/>
+                        </Grid>
+                    </Border>
                     <TextBlock x:Name="VolumeReason" FontSize="10.5" Opacity="0.62" TextWrapping="Wrap"
-                               Margin="1,3,1,0" Visibility="Collapsed"/>
+                               Margin="4,0,4,6" Visibility="Collapsed"/>
 
-                    <Separator Margin="1,9,1,7" Background="#1AFFFFFF"/>
+                    <!-- ============ 外观（主题三选一） ============ -->
+                    <TextBlock Text="外观" FontSize="11" Opacity="0.62" Margin="4,2,0,4"/>
+                    <!-- 宽度锁 210：主题只剩 macOS 一项时，UniformGrid 的单个子元素会撑满整行，
+                         看起来像"一个巨大的按钮"；限宽后单段仍是 1/3 宽的小胶囊（与三选一时期一致）。 -->
+                    <UniformGrid x:Name="ThemeHost" Columns="3" Width="210" HorizontalAlignment="Left"
+                                 Margin="0,0,0,8"/>
+
+                    <!-- ============ Dock 开关砖块（放大 / 倒影 / 媒体胶囊） ============ -->
+                    <UniformGrid x:Name="TileHost" Columns="2" Margin="0,0,0,6"/>
+
+                    <!-- ============ 系统任务栏 ============ -->
+                    <TextBlock Text="系统任务栏" FontSize="11" Opacity="0.62" Margin="4,2,0,4"/>
+                    <UniformGrid x:Name="PolicyHost" Columns="3" Margin="0,0,0,2"/>
+                    <TextBlock x:Name="PolicyHintText" FontSize="10.5" Opacity="0.62" TextWrapping="Wrap"
+                               Margin="4,2,4,8"/>
+
+                    <Separator Margin="2,2,2,7" Background="#1AFFFFFF"/>
 
                     <UniformGrid Columns="2">
                         <Button x:Name="SettingsButton" Content="打开设置…" Style="{StaticResource CcFooterStyle}"

@@ -455,7 +455,8 @@ public partial class ControlCenterPanel : UserControl, IBackdropAware, IPopupSha
     /// </summary>
     private void Bluetooth_Click(object sender, RoutedEventArgs e) => OpenSystemPage("ms-settings:bluetooth");
 
-    private void Airplane_Click(object sender, RoutedEventArgs e) => OpenSystemPage("ms-settings:network-airplane");
+    /// <summary>专注模式：Windows 的对应物是"专注助手"设置页（无公开开关 API，不假装能一键切换）。</summary>
+    private void Focus_Click(object sender, RoutedEventArgs e) => OpenSystemPage("ms-settings:quiethours");
 
     private static void OpenSystemPage(string uri)
     {

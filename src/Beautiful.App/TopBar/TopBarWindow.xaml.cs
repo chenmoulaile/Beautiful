@@ -1041,6 +1041,9 @@ public partial class TopBarWindow : AcrylicWindow
         Logger.Info("托盘图标面板已打开");
     }
 
+    /// <summary>诊断入口（<c>--control-center</c>）：直接打开控制中心面板，供截图/验收使用。</summary>
+    public void ShowControlCenterForDiagnostics() => OpenControlCenter();
+
     private void OpenControlCenter()
     {
         if (_controlCenterButton is null) return;

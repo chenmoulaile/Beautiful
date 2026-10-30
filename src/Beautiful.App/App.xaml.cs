@@ -159,6 +159,13 @@ public partial class App : Application
             // 7.1 --about：关于本机卡（验证/截图入口；与 logo 菜单同一单例）
             if (e.Args.Contains("--about", StringComparer.OrdinalIgnoreCase))
                 Shell.AboutWindow.ShowSingleton();
+            // 7.1 --control-center：控制中心面板（验证/截图入口；与顶栏按钮同一实例）
+            if (e.Args.Contains("--control-center", StringComparer.OrdinalIgnoreCase))
+            {
+                EnsureTopBar();
+                _topBar?.ShowControlCenterForDiagnostics();
+            }
+
             // 7.15 --spotlight：Spotlight 搜索面板（验证/截图入口；与全局热键同一实例）
             if (e.Args.Contains("--spotlight", StringComparer.OrdinalIgnoreCase))
                 _launcher?.Toggle();
