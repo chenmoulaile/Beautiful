@@ -644,6 +644,9 @@
                                   Margin="0,8,0,0" Checked="HidePanel_Changed" Unchecked="HidePanel_Changed"/>
                         <CheckBox x:Name="PreviewCheck" Content="悬停应用图标时显示窗口缩略图预览"
                                   Margin="0,8,0,0" Checked="Preview_Changed" Unchecked="Preview_Changed"/>
+                        <!-- 音量 HUD（Phase 4-T7）：开着会接管媒体键并取代系统音量浮层 -->
+                        <CheckBox x:Name="VolumeOsdCheck" Content="按音量键时显示 macOS 音量 HUD（接管媒体键）"
+                                  Margin="0,8,0,0" Checked="VolumeOsd_Changed" Unchecked="VolumeOsd_Changed"/>
                         <!-- 诚实标注（Task 16 评审 Important#1 / Task 15 复核）：预览卡片本身实测正常，
                              但实时画面由 DWM 合成——无桌面合成环境（如禁壁纸的 VM）缩略图区呈深色底。 -->
                         <TextBlock Style="{StaticResource HintText}"

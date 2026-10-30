@@ -56,6 +56,9 @@ public partial class App : Application
     /// <summary>通知中心数据服务（Phase 4-T5）：常驻，面板反复开关时历史保持连续。</summary>
     private NotificationService? _notifications;
 
+    /// <summary>音量 HUD 控制器（Phase 4-T7）：持有媒体键钩子与 HUD 窗口，退出必须释放。</summary>
+    private VolumeOsdController? _volumeOsd;
+
     private bool _exiting;
 
     protected override void OnStartup(StartupEventArgs e)
@@ -161,6 +164,9 @@ public partial class App : Application
             // 6.8 通知中心数据服务（Phase 4-T5）：构造不碰 WinRT，首次打开面板才请求授权。
             _notifications = new NotificationService(Dispatcher);
             NotificationService.Current = _notifications;
+
+            // 6.9 音量 HUD（Phase 4-T7）：设置开启时接管媒体键（不吞则系统浮层与自家 HUD 会同时出现）
+            _volumeOsd = new VolumeOsdController(SettingsService.Current.VolumeOsdEnabled, Dispatcher);
             // 7. --settings：设置窗口命令行入口（与托盘"设置"等效；窗口为单例）
             if (e.Args.Contains("--settings", StringComparer.OrdinalIgnoreCase))
                 OpenSettings();
@@ -172,6 +178,18 @@ public partial class App : Application
             {
                 EnsureTopBar();
                 _topBar?.ShowControlCenterForDiagnostics();
+            }
+
+            // 7.11 --osd-volume <0..100> / --osd-mute：音量 HUD 截图入口（不改系统音量）
+            var osdVolume = ParseArgValue(e.Args, "--osd-volume");
+            if (!string.IsNullOrWhiteSpace(osdVolume) && int.TryParse(osdVolume, out var osdPercent))
+            {
+                _volumeOsd?.ShowDiagnostic(osdPercent, muted: false);
+            }
+
+            if (e.Args.Contains("--osd-mute", StringComparer.OrdinalIgnoreCase))
+            {
+                _volumeOsd?.ShowDiagnostic(0, muted: true);
             }
 
             // 7.12 --notification-center：通知中心面板（验证/截图入口；与顶栏时钟点击同一实例）
@@ -835,6 +853,19 @@ public partial class App : Application
     /// <summary>外部请求打开设置窗口。<see cref="OpenSettings"/> 自己是单例的，重复请求只会激活。</summary>
     internal static void OpenSettingsFromExternal() => (Current as App)?.OpenSettings();
 
+    /// <summary>设置页切换音量 HUD：重建控制器（关掉时连钩子都不装，媒体键立刻回到系统行为）。</summary>
+    internal static void ApplyVolumeOsd(bool enabled)
+    {
+        if (Current is not App app)
+        {
+            return;
+        }
+
+        app._volumeOsd?.Dispose();
+        app._volumeOsd = new VolumeOsdController(enabled, app.Dispatcher);
+        Logger.Info($"音量 HUD 已{(enabled ? "启用" : "停用")}");
+    }
+
     /// <summary>托盘"退出"：完整清理链路后显式关停（退出路径幂等，_exiting 防重入）。
     /// 清理全程 try/finally：任何一步抛异常都必须走到 Shutdown（T19 QA）——否则 _exiting 卡死、
     /// 后续退出尝试全部被吞；finally 兜底后 OnExit 仍会幂等重放剩余清理。</summary>
@@ -899,8 +930,12 @@ public partial class App : Application
 
             // 有访达窗口时只拍它（PrintWindow 与前台无关，编辑器抢焦点也不会拍错内容）；没有则整屏。
             // 简介卡优先（它通常盖在访达之上，是本次要拍的证据）。
-            // 通知中心是"盖在最上面的一整列"，优先拍它（打开时就是要验它）。
-            var handle = TopBar.NotificationCenterWindow.GetDiagnosticsHandle();
+            // 音量 HUD 最先（诊断入口打开时它就是要拍的东西），其次通知中心，再访达。
+            var handle = _volumeOsd?.DiagnosticsHandle ?? IntPtr.Zero;
+            if (handle == IntPtr.Zero)
+            {
+                handle = TopBar.NotificationCenterWindow.GetDiagnosticsHandle();
+            }
             if (handle == IntPtr.Zero)
             {
                 handle = Finder.FinderInfoWindow.GetDiagnosticsHandle();
@@ -1004,6 +1039,8 @@ public partial class App : Application
             DestroyTopBar();           // 顶栏 OnClosing：ABE_TOP ABM_REMOVE（hwnd 销毁前）
             _notifications?.Stop();   // 通知中心：退订系统事件并停轮询（不留后台回调）
             _notifications = null;
+            _volumeOsd?.Dispose();    // 音量 HUD：卸媒体键钩子，恢复系统音量键行为
+            _volumeOsd = null;
             _dock?.Close();          // DockWindow.OnClosing：AppBar ABM_REMOVE（hwnd 销毁前）
             _taskbar?.Restore();     // Hide/AutoHide 还原系统任务栏
             _tray?.Dispose();        // 移除托盘图标（防幽灵图标）

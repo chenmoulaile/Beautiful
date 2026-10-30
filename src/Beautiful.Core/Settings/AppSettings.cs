@@ -33,6 +33,12 @@ public sealed record AppSettings
     public bool TopBarEnabled { get; init; } = true;
 
     /// <summary>
+    /// 音量键是否弹 macOS 音量 HUD（Phase 4-T7）。默认开——开启时我们会吞掉媒体键自己写音量，
+    /// 所以系统音量浮层也不会再出现；关掉后媒体键完全回到系统行为（含系统浮层）。
+    /// </summary>
+    public bool VolumeOsdEnabled { get; init; } = true;
+
+    /// <summary>
     /// 顶栏时钟左键是否打开通知中心（Phase 4-T5）。默认开——Big Sur 的时钟点击就是通知中心；
     /// 关掉则退回原来的月历浮层（给只想要日历、不要读系统通知的用户一条干净的退出路）。
     /// </summary>

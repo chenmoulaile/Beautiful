@@ -136,6 +136,7 @@ public partial class SettingsWindow : Window
         AutostartCheck.IsChecked = s.Autostart;
         TopBarCheck.IsChecked = s.TopBarEnabled;
         NotificationCenterCheck.IsChecked = s.NotificationCenterEnabled;
+        VolumeOsdCheck.IsChecked = s.VolumeOsdEnabled;
         // 顶栏时钟四项（v3.1）：直接落 AppSettings 的四个 bool，样张由 Core 的同一套折算给出
         ClockSecondsCheck.IsChecked = s.ClockShowSeconds;
         ClockDateCheck.IsChecked = s.ClockShowDate;
@@ -551,6 +552,15 @@ public partial class SettingsWindow : Window
         App.SetTopBarEnabled(TopBarCheck.IsChecked == true); // 内部 UpdateAndSave + 创建/销毁顶栏
     }
 
+    /// <summary>音量 HUD 开关（Phase 4-T7）：接管/放行媒体键，立即生效（重建控制器）。</summary>
+    private void VolumeOsd_Changed(object sender, RoutedEventArgs e)
+    {
+        if (_loading) return;
+        var on = VolumeOsdCheck.IsChecked == true;
+        SettingsService.UpdateAndSave(SettingsService.Current with { VolumeOsdEnabled = on });
+        App.ApplyVolumeOsd(on);
+    }
+
     /// <summary>通知中心开关（Phase 4-T5）：只改"时钟左键打开什么"，不影响已读到的历史。</summary>
     private void NotificationCenter_Changed(object sender, RoutedEventArgs e)
     {
@@ -703,6 +713,7 @@ public partial class SettingsWindow : Window
         App.SetTopBarEnabled(s.TopBarEnabled);
         // 恢复默认后通知中心回到开启（控件状态在 RestoreDefaults 的统一 Apply 里刷新）
         NotificationCenterCheck.IsChecked = s.NotificationCenterEnabled;
+        VolumeOsdCheck.IsChecked = s.VolumeOsdEnabled;
         App.ApplyTopBarGeometry();   // 恢复默认后 TopBarMonitor 回到 auto：已存在的顶栏须按新屏重算条带
         App.ApplyTopBarClock();      // 恢复默认后时钟回到"日期+星期+24 小时制、不显示秒"（v3.0.0 观感）
         UpdateClockSample();
