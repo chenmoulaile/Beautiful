@@ -1,3 +1,4 @@
+using System.IO;
 using System.Text.Json;
 
 namespace Beautiful.Core.Dock;
@@ -14,6 +15,26 @@ namespace Beautiful.Core.Dock;
 /// </summary>
 public static class DockPinOps
 {
+    /// <summary>
+    /// 拖放源能否固定：文件夹（macOS 堆栈）或已存在的 .exe/.lnk。其它扩展名/不存在 → false 并给出中文原因。
+    /// 纯函数只做文件系统判定（IO 失败按不可固定处理），App 侧不再另写一份规则。
+    /// </summary>
+    public static bool CanPin(string? path, out string reason)
+    {
+        reason = string.Empty;
+        if (string.IsNullOrWhiteSpace(path)) { reason = "空路径"; return false; }
+        try
+        {
+            if (Directory.Exists(path)) return true;
+            if (!File.Exists(path)) { reason = $"文件不存在：{path}"; return false; }
+            var ext = Path.GetExtension(path).ToLowerInvariant();
+            if (ext is ".exe" or ".lnk") return true;
+            reason = $"仅支持固定文件夹 / .exe / .lnk，收到“{(ext.Length == 0 ? "无扩展名" : ext)}”：{path}";
+            return false;
+        }
+        catch (Exception ex) { reason = ex.Message; return false; }
+    }
+
     /// <summary>
     /// 结构自愈解析：把 dock.json 文本读成原始路径串。语法损坏 / 非数组 / "null" 字面量 → false
     /// （调用方回落代码默认，与 <c>AppSettingsStore</c> 的自愈网同一 idiom）。值域问题（空行、重复）

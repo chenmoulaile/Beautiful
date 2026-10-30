@@ -177,24 +177,11 @@ public sealed class DockViewModel
     }
 
     /// <summary>
-    /// 判定一个拖放源能否固定：仅已存在的 .exe / .lnk 可固定。文件夹 / 其它扩展名 / 不存在 → 拒绝并给原因
-    /// （Finder-style 文件夹格本模型不支持，宁可拒绝也不"静默钉一个启动即坏的条目"）。
+    /// 判定一个拖放源能否固定：文件夹（macOS 堆栈）或已存在的 .exe / .lnk。规则在 Core
+    /// <see cref="DockPinOps.CanPin"/>，App 只转发，避免两份判据漂移。
     /// </summary>
     public static bool CanPin(string path, out string reason)
-    {
-        reason = string.Empty;
-        if (string.IsNullOrWhiteSpace(path)) { reason = "空路径"; return false; }
-        try
-        {
-            if (Directory.Exists(path)) { reason = $"文件夹不能固定到 Dock：{path}"; return false; }
-            if (!File.Exists(path)) { reason = $"文件不存在：{path}"; return false; }
-            var ext = Path.GetExtension(path).ToLowerInvariant();
-            if (ext is ".exe" or ".lnk") return true;
-            reason = $"仅支持固定 .exe / .lnk，收到“{(ext.Length == 0 ? "无扩展名" : ext)}”：{path}";
-            return false;
-        }
-        catch (Exception ex) { reason = ex.Message; return false; }
-    }
+        => DockPinOps.CanPin(path, out reason);
 
     /// <summary>
     /// 解析 dock.json 条目 / 拖放文件到"去重用的目标"：.lnk 取其真实目标 exe，其余原样。
@@ -214,6 +201,15 @@ public sealed class DockViewModel
 
     private static DockItem MakePinned(string path)
     {
+        // 文件夹 = macOS 堆栈：图标源就是目录本身（Shell 文件夹图标），点击由 DockWindow 弹堆栈菜单。
+        if (Directory.Exists(path))
+            return new DockItem(Id: path,
+                                Label: new DirectoryInfo(path).Name,
+                                Icon: IconExtractor.GetIcon(path),
+                                Kind: DockItemKind.Pinned,
+                                LaunchPath: path,
+                                IconSource: path);
+
         // 图标源与启动路径分家：.lnk 直接按路径取图在本机取不到（SHDefExtractIconW 返回 hr=1 空句柄），
         // 必须解析到目标 exe / IconLocation 才有 256px 的大帧可用（v3 T6 实测）。
         var iconSource = IconSourceFor(path);

@@ -905,6 +905,12 @@ public partial class DockWindow : AcrylicWindow
 
             case DockItemKind.Pinned:
                 if (item.LaunchPath.Length == 0) break;
+                // 文件夹 = macOS 堆栈：不启动资源管理器，弹自家堆栈菜单。
+                if (Directory.Exists(item.LaunchPath))
+                {
+                    OpenStackMenu(item);
+                    break;
+                }
                 // macOS 语义：点一个**正在跑**的应用图标 = 把它带到前台；它已经在前台 = 隐藏它。
                 // 过去固定项无条件再 Start 一次，于是"点 Dock 图标关不掉窗口"——固定项与运行项
                 // 是两条独立条目，用户点的常常是固定那条，而能隐藏的语义只长在运行项上。
@@ -922,6 +928,66 @@ public partial class DockWindow : AcrylicWindow
             case DockItemKind.Media:
                 ToggleMediaPanel();
                 break;
+        }
+    }
+
+    /// <summary>
+    /// 文件夹堆栈（P3-T3 起步）：弹 FluentMenu 列出目录内容；图标用 Shell 大图标，点击交回 shell。
+    /// 现状是**列表形态**（fan/grid 布局与 OLE 拖出在后续批次），不假装已是完整堆栈。
+    /// 二级目录暂以资源管理器打开并留日志，等 StacksPopup 落地后替换。
+    /// </summary>
+    private void OpenStackMenu(DockItem item)
+    {
+        var views = new List<MenuItemView>
+        {
+            new() { Id = "stack:open", Label = "在访达中打开", Glyph = "\uE8B7", Invoke = () => OpenPath(item.LaunchPath) },
+            new() { Id = "stack:sep", IsSeparator = true },
+        };
+        var count = 0;
+        try
+        {
+            var entries = Directory.EnumerateFileSystemEntries(item.LaunchPath)
+                .OrderByDescending(p => Directory.Exists(p))
+                .ThenBy(p => Path.GetFileName(p), StringComparer.CurrentCultureIgnoreCase)
+                .Take(10)
+                .ToList();
+            count = entries.Count;
+            foreach (var entry in entries)
+            {
+                var path = entry;
+                views.Add(new MenuItemView
+                {
+                    Id = path,
+                    Label = Path.GetFileName(path),
+                    ToolTip = path,
+                    Icon = IconExtractor.GetIcon(path),
+                    Invoke = () => OpenPath(path),
+                });
+            }
+            if (entries.Count == 0)
+                views.Add(new MenuItemView { Id = "stack:empty", Label = "（空文件夹）", IsEnabled = false });
+        }
+        catch (Exception ex)
+        {
+            Logger.Warn($"堆栈读取失败：{item.LaunchPath} {ex.GetType().Name} {ex.Message}");
+            views.Add(new MenuItemView { Id = "stack:error", Label = "无法读取文件夹", ToolTip = ex.Message, IsEnabled = false });
+        }
+
+        Logger.Info($"堆栈打开：'{item.Label}' 条目={count}（列表形态）");
+        var p = Surface.PointToScreen(Mouse.GetPosition(Surface));
+        FluentMenu.Show(new FluentPopupHost(), new Point(p.X, p.Y), views);
+    }
+
+    private static void OpenPath(string path)
+    {
+        try
+        {
+            Process.Start(new ProcessStartInfo(path) { UseShellExecute = true });
+            Logger.Info($"堆栈条目打开：{path}");
+        }
+        catch (Exception ex)
+        {
+            Logger.Warn($"打开失败：{path} {ex.GetType().Name} {ex.Message}");
         }
     }
 
