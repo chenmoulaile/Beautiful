@@ -38,41 +38,59 @@ public partial class QuickLookWindow : Window
     /// <summary>无 BOM 时的严格 UTF-8 解码器：遇到非法字节序列再退回 Encoding.Default。</summary>
     private static readonly UTF8Encoding StrictUtf8 = new(encoderShouldEmitUTF8Identifier: false, throwOnInvalidBytes: true);
 
-    private const string PdfNote = "PDF 预览待接入（Phase 6-b）";
+    private const string PdfNote = "PDF 渲染不可用";
     private const string NoPreviewNote = "暂无内建预览";
 
     private static QuickLookWindow? _current;
+
+    private readonly List<string> _paths = [];
+    private int _index;
+    private int _loadGeneration;
 
     private string _path = string.Empty;
     private string _mediaPath = string.Empty;
     private bool _mediaPending;
 
     /// <summary>
-    /// 单例入口（访达空格 / <c>--quicklook &lt;path&gt;</c>）。空路径只记日志不弹窗；
-    /// 同一路径再调用 = 关闭；不同路径 = 原地换内容并激活。
+    /// 单路径入口（访达空格 / <c>--quicklook &lt;path&gt;</c>）。
     /// </summary>
     public static void ShowFor(string? path)
+        => ShowFor(path is null ? null : new[] { path }, 0);
+
+    /// <summary>
+    /// 多选入口（Phase 6-b）：同一批文件里可 ←/→ 循环翻页。
+    /// <para>
+    /// 开关语义：当前正在预览的文件与本次起点相同、且整批集合相同 → 关闭（macOS 再按一次空格即关）。
+    /// 集合变化或起点不同 → 原地换内容并激活，绝不叠出第二块预览卡。
+    /// </para>
+    /// </summary>
+    public static void ShowFor(IReadOnlyList<string>? paths, int index)
     {
-        if (string.IsNullOrWhiteSpace(path))
+        var clean = paths?.Where(p => !string.IsNullOrWhiteSpace(p)).ToList() ?? [];
+        if (clean.Count == 0)
         {
             Logger.Warn("快速查看：路径为空，已忽略");
             return;
         }
 
+        var target = Math.Clamp(index, 0, clean.Count - 1);
+
         if (_current is { IsLoaded: true } existing)
         {
-            if (SamePath(existing._path, path))
+            if (existing._paths.Count == clean.Count
+                && existing._index == target
+                && existing._paths.SequenceEqual(clean, StringComparer.OrdinalIgnoreCase))
             {
-                existing.Close();   // 空格开关语义：开着同一个文件时再按一次就关
+                existing.Close();   // 空格开关语义：同一批同一项再按一次就关
                 return;
             }
 
-            existing.SetPath(path);
+            existing.SetSelection(clean, target);
             existing.Activate();
             return;
         }
 
-        var window = new QuickLookWindow(path);
+        var window = new QuickLookWindow(clean, target);
         _current = window;
         window.Closed += (_, _) =>
         {
@@ -88,60 +106,94 @@ public partial class QuickLookWindow : Window
     }
 
     public QuickLookWindow(string path)
+        : this(new[] { path }, 0)
+    {
+    }
+
+    public QuickLookWindow(IReadOnlyList<string> paths, int index)
     {
         InitializeComponent();
         Loaded += (_, _) => StartPendingMedia();
-        SetPath(path);
+        SetSelection(paths, index);
     }
 
     // ---------- 内容切换 ----------
 
-    private void SetPath(string path)
+    /// <summary>换一批文件并定位到第 index 项（多选翻页的起点）。</summary>
+    private void SetSelection(IReadOnlyList<string> paths, int index)
     {
-        _path = path;
-        var name = FinderPaths.DisplayName(path);
-        FileNameText.Text = name;
-        FileNameText.ToolTip = path;
-        Title = name.Length == 0 ? "快速查看" : $"快速查看 - {name}";
+        _paths.Clear();
+        _paths.AddRange(paths);
+        _index = Math.Clamp(index, 0, Math.Max(0, _paths.Count - 1));
+        ApplyCurrent();
+    }
 
-        var kind = QuickLookRouter.KindOf(path);
+    /// <summary>在多选集合里翻页（←/→ 循环）。</summary>
+    private void Navigate(int delta)
+    {
+        var next = QuickLookPager.Step(_index, _paths.Count, delta);
+        if (next < 0 || next == _index)
+        {
+            return;
+        }
+
+        _index = next;
+        ApplyCurrent();
+    }
+
+    private void ApplyCurrent()
+    {
+        if (_paths.Count == 0)
+        {
+            return;
+        }
+
+        _path = _paths[_index];
+        var name = FinderPaths.DisplayName(_path);
+        FileNameText.Text = name;
+        FileNameText.ToolTip = _path;
+        var counter = QuickLookPager.CanPage(_paths.Count) ? $"（{_index + 1} / {_paths.Count}）" : string.Empty;
+        Title = name.Length == 0 ? "快速查看" : $"快速查看 - {name}{counter}";
+
+        var kind = QuickLookRouter.KindOf(_path);
+        _loadGeneration++;
         ResetContent();
-        Logger.Info($"快速查看已打开：{path} kind={kind}");
+        Logger.Info($"快速查看已打开：{_path} kind={kind}");
 
         try
         {
             // 文件夹没有内容预览：图标/大小/日期仍可给，走信息卡（Finder 的选中项可能是目录）。
-            if (Directory.Exists(path))
+            if (Directory.Exists(_path))
             {
-                ShowInfoCardCore(path, NoPreviewNote, footer: null);
+                ShowInfoCardCore(_path, NoPreviewNote, footer: null);
                 return;
             }
 
             switch (kind)
             {
                 case QuickLookKind.Text:
-                    ShowText(path);
+                    ShowText(_path);
                     break;
                 case QuickLookKind.Image:
-                    ShowImage(path);
+                    ShowImage(_path);
                     break;
                 case QuickLookKind.Media:
-                    ShowMedia(path);
+                    ShowMedia(_path);
                     break;
                 case QuickLookKind.Pdf:
-                    ShowInfoCardCore(path, PdfNote, footer: null);
+                    ShowPdf(_path, _loadGeneration);
                     break;
                 default:
-                    ShowInfoCardCore(path, NoPreviewNote, footer: null);
+                    ShowInfoCardCore(_path, NoPreviewNote, footer: null);
                     break;
             }
         }
         catch (Exception ex)
         {
             // 兜底：路由/控件之外任何意外都降级为信息卡，键盘路径不外抛。
-            Logger.Warn($"快速查看内容切换失败：{path} {ex.GetType().Name} {ex.Message}");
+            Logger.Warn($"快速查看内容切换失败：{_path} {ex.GetType().Name} {ex.Message}");
             ResetContent();
-            ShowInfoCardCore(path, NoPreviewNote, $"预览失败：{Reason(ex)}");
+            ShowInfoCardCore(_path, NoPreviewNote, $"预览失败：{Reason(ex)}");
         }
     }
 
@@ -293,6 +345,101 @@ public partial class QuickLookWindow : Window
             ResetContent();
             ShowInfoCardCore(path, NoPreviewNote, $"无法解码图片：{Reason(ex)}");
         }
+    }
+
+    // ---------- PDF ----------
+
+    /// <summary>
+    /// PDF 预览（Phase 6-b）：<c>Windows.Data.Pdf</c>（19041 起系统内置 WinRT 投影）把第 1 页
+    /// 渲染成位图，页脚注明总页数。异步结果带代次号：切文件后旧渲染不再覆盖新内容。
+    /// 加密/损坏/未安装 PDF 组件一律回退信息卡并写明原因（不伪造"已渲染"）。
+    /// </summary>
+    private async void ShowPdf(string path, int generation)
+    {
+        try
+        {
+            var document = await LoadPdfAsync(path);
+            Logger.Info($"PDF 已载入：{path} 页数={document.PageCount}");
+            if (generation != _loadGeneration || document.PageCount == 0)
+            {
+                return;
+            }
+
+            using var page = document.GetPage(0);
+            using var stream = new Windows.Storage.Streams.InMemoryRandomAccessStream();
+            await page.RenderToStreamAsync(stream);
+            Logger.Info($"PDF 首页已渲染：{path} 字节={stream.Size}");
+
+            var bytes = new byte[stream.Size];
+            using (var reader = new Windows.Storage.Streams.DataReader(stream.GetInputStreamAt(0)))
+            {
+                await reader.LoadAsync((uint)stream.Size);
+                reader.ReadBytes(bytes);
+            }
+
+            if (generation != _loadGeneration)
+            {
+                return;   // 期间用户已翻到别的文件
+            }
+
+            var bitmap = new BitmapImage();
+            using (var memory = new MemoryStream(bytes))
+            {
+                bitmap.BeginInit();
+                bitmap.CacheOption = BitmapCacheOption.OnLoad;
+                bitmap.StreamSource = memory;
+                bitmap.EndInit();
+            }
+
+            bitmap.Freeze();
+            ImageView.Source = bitmap;
+            ImageHost.Visibility = Visibility.Visible;
+            ShowFooter(document.PageCount > 1
+                ? $"PDF 第 1 页 / 共 {document.PageCount} 页（仅渲染首页）"
+                : "PDF 共 1 页");
+        }
+        catch (Exception ex)
+        {
+            if (generation != _loadGeneration)
+            {
+                return;
+            }
+
+            Logger.Warn($"快速查看渲染 PDF 失败：{path} {ex.GetType().Name} 0x{ex.HResult:X8} {ex.Message}");
+            ResetContent();
+            ShowInfoCardCore(path, PdfNote, $"无法渲染 PDF：{Reason(ex)}");
+        }
+    }
+
+    /// <summary>
+    /// 打开 PDF：先走 <c>StorageFile</c> 路径；失败（本机实测 <c>LoadFromFileAsync</c> 可能返回
+    /// 0x80048014）再退回"整文件读进内存 + <c>LoadFromStreamAsync</c>"。
+    /// 两条路都失败说明这份文件本身不被系统 PDF 引擎接受（加密/损坏/版本过新）——调用方回退信息卡并写明原因。
+    /// </summary>
+    private static async Task<Windows.Data.Pdf.PdfDocument> LoadPdfAsync(string path)
+    {
+        try
+        {
+            var file = await Windows.Storage.StorageFile.GetFileFromPathAsync(path);
+            return await Windows.Data.Pdf.PdfDocument.LoadFromFileAsync(file);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            Logger.Warn($"PDF 以文件方式打开失败（{ex.GetType().Name} 0x{ex.HResult:X8}），改用内存流");
+        }
+
+        var bytes = await File.ReadAllBytesAsync(path);
+        var stream = new Windows.Storage.Streams.InMemoryRandomAccessStream();
+        using (var writer = new Windows.Storage.Streams.DataWriter(stream.GetOutputStreamAt(0)))
+        {
+            writer.WriteBytes(bytes);
+            await writer.StoreAsync();
+            await writer.FlushAsync();
+            writer.DetachStream();
+        }
+
+        stream.Seek(0);
+        return await Windows.Data.Pdf.PdfDocument.LoadFromStreamAsync(stream);
     }
 
     // ---------- 媒体 ----------
@@ -516,7 +663,10 @@ public partial class QuickLookWindow : Window
 
     // ---------- 窗口交互 ----------
 
-    /// <summary>空格 / Esc 关闭（macOS Quick Look 的开关语义；文本仍可用滚动条/滚轮浏览）。</summary>
+    /// <summary>
+    /// 空格 / Esc 关闭（macOS Quick Look 的开关语义；文本仍可用滚动条/滚轮浏览）；
+    /// ←/→ 在多选集合里循环翻页（Phase 6-b）。
+    /// </summary>
     protected override void OnPreviewKeyDown(KeyEventArgs e)
     {
         base.OnPreviewKeyDown(e);
@@ -529,6 +679,13 @@ public partial class QuickLookWindow : Window
         {
             e.Handled = true;
             Close();
+            return;
+        }
+
+        if (e.Key is Key.Left or Key.Right && QuickLookPager.CanPage(_paths.Count))
+        {
+            e.Handled = true;
+            Navigate(e.Key == Key.Right ? 1 : -1);
         }
     }
 
@@ -569,25 +726,6 @@ public partial class QuickLookWindow : Window
         NativeMethods.DwmSetWindowAttribute(
             new WindowInteropHelper(this).Handle,
             NativeMethods.DwmwaWindowCornerPreference, ref corner, sizeof(int));
-    }
-
-    private static bool SamePath(string? left, string? right)
-    {
-        if (string.IsNullOrEmpty(left) || string.IsNullOrEmpty(right))
-        {
-            return false;
-        }
-
-        try
-        {
-            var a = Path.GetFullPath(left).TrimEnd('\\', '/');
-            var b = Path.GetFullPath(right).TrimEnd('\\', '/');
-            return string.Equals(a, b, StringComparison.OrdinalIgnoreCase);
-        }
-        catch (Exception ex) when (ex is ArgumentException or NotSupportedException or PathTooLongException)
-        {
-            return string.Equals(left, right, StringComparison.OrdinalIgnoreCase);
-        }
     }
 
     /// <summary>文本读取结果：正文 + 是否截断 + 实际编码名（页脚展示，便于判断乱码来源）。</summary>

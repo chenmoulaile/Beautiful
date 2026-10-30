@@ -1,0 +1,50 @@
+<Window x:Class="Beautiful.App.Finder.FinderInfoWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:chrome="clr-namespace:System.Windows.Shell;assembly=PresentationFramework"
+        Title="简介" Width="360" Height="520" SizeToContent="Height" MaxHeight="720"
+        WindowStartupLocation="CenterOwner" ShowInTaskbar="False"
+        WindowStyle="None" ResizeMode="NoResize"
+        Background="{DynamicResource MacWindowBackground}"
+        Foreground="{DynamicResource MacTextPrimary}"
+        FontFamily="{DynamicResource MacFont}"
+        UseLayoutRounding="True" TextOptions.TextFormattingMode="Display">
+    <!-- Phase 6-b「显示简介」（⌘I）：macOS 简介卡的非分层实现——与访达/设置同一套窗口纪律
+         （WindowChrome + DWM 圆角 + ClearType），CaptionHeight=0，标题条自绘拖动。
+         内容由代码按"通用/打开方式/位置/权限"分组生成，避免把可变的元数据写死在 XAML 里。 -->
+    <chrome:WindowChrome.WindowChrome>
+        <chrome:WindowChrome CaptionHeight="0" ResizeBorderThickness="4"
+                             GlassFrameThickness="0" CornerRadius="0"
+                             UseAeroCaptionButtons="False"/>
+    </chrome:WindowChrome.WindowChrome>
+
+    <Grid>
+        <Grid.RowDefinitions>
+            <RowDefinition Height="40"/>
+            <RowDefinition Height="*"/>
+        </Grid.RowDefinitions>
+
+        <Border Grid.Row="0" Background="Transparent" MouseLeftButtonDown="Header_MouseLeftButtonDown">
+            <Grid Margin="13,0">
+                <Button x:Name="CloseDot" Width="14" Height="14" HorizontalAlignment="Left"
+                        VerticalAlignment="Center" Background="#FFFF5F57" BorderThickness="0"
+                        ToolTip="关闭" Click="Close_Click">
+                    <Button.Template>
+                        <ControlTemplate TargetType="Button">
+                            <Grid Width="14" Height="14" Background="Transparent">
+                                <Ellipse Fill="{TemplateBinding Background}" Stroke="#26000000" StrokeThickness="0.5"/>
+                            </Grid>
+                        </ControlTemplate>
+                    </Button.Template>
+                </Button>
+                <TextBlock Text="简介" FontSize="13" FontWeight="SemiBold"
+                           HorizontalAlignment="Center" VerticalAlignment="Center"/>
+            </Grid>
+        </Border>
+
+        <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto"
+                      HorizontalScrollBarVisibility="Disabled">
+            <StackPanel x:Name="Body" Margin="18,0,18,18"/>
+        </ScrollViewer>
+    </Grid>
+</Window>

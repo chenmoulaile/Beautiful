@@ -9,6 +9,7 @@ using Beautiful.App.Shell;
 using Beautiful.App.Themes;
 using Beautiful.App.TopBar;
 using Beautiful.Core.Controls;
+using Beautiful.Core.Finder;
 using Application = System.Windows.Application;
 using MessageBox = System.Windows.MessageBox;
 
@@ -162,8 +163,11 @@ public partial class App : Application
             if (e.Args.Contains("--launchpad", StringComparer.OrdinalIgnoreCase))
                 Launcher.LaunchpadWindow.ShowOrToggle(_launcher);
             // 7.3 --finder：访达窗口（Phase 6-a 骨架；单例，关闭后可再次打开）
+            //     --view list|columns|icons：直接以指定视图打开（截图/验收入口，不写回该文件夹的持久化选项）
             if (e.Args.Contains("--finder", StringComparer.OrdinalIgnoreCase))
-                Finder.FinderWindow.ShowSingleton();
+            {
+                Finder.FinderWindow.ShowSingleton(view: ParseViewArg(e.Args), select: ParseArgValue(e.Args, "--select"));
+            }
             // 7.4 --quicklook <path>：Quick Look 预览（Phase 6-b 起步；验证/截图入口，单例）
             var quickLookIndex = Array.FindIndex(e.Args,
                 arg => string.Equals(arg, "--quicklook", StringComparison.OrdinalIgnoreCase));
@@ -175,6 +179,13 @@ public partial class App : Application
                     Logger.Warn("--quicklook 缺少路径参数，已忽略");
             }
 
+            // 7.5 --info <path>：显示简介卡（验证/截图入口；与 ⌘I 同一单例）
+            var infoPath = ParseArgValue(e.Args, "--info");
+            if (!string.IsNullOrWhiteSpace(infoPath))
+            {
+                Finder.FinderInfoWindow.ShowFor(infoPath);
+            }
+
             // 8. 托盘最后就位（SMTC 已随 Dock 构造期异步初始化，失败仅记日志）
             _tray = new TrayIconManager(
                 openSettings: OpenSettings,
@@ -183,6 +194,9 @@ public partial class App : Application
                 applyTheme: ApplyTheme,
                 currentTheme: () => SettingsService.Current.Theme);
             Logger.Info("托盘就绪，启动完成");
+
+            // 9. 诊断证据：--shot <file> [--shot-delay <ms>]（截图后自动退出；不参与产品逻辑）
+            ScheduleDiagnosticShot(e.Args);
         }
         catch (Exception ex)
         {
@@ -768,6 +782,109 @@ public partial class App : Application
     /// <summary>托盘"退出"：完整清理链路后显式关停（退出路径幂等，_exiting 防重入）。
     /// 清理全程 try/finally：任何一步抛异常都必须走到 Shutdown（T19 QA）——否则 _exiting 卡死、
     /// 后续退出尝试全部被吞；finally 兜底后 OnExit 仍会幂等重放剩余清理。</summary>
+    /// <summary>
+    /// <c>--view list|columns|icons</c> → 访达初始视图。缺省或无法识别返回 <c>null</c>，
+    /// 表示沿用该文件夹上次记住的视图（正常启动路径）。
+    /// </summary>
+    private static FinderViewMode? ParseViewArg(string[] args)
+    {
+        var index = Array.FindIndex(args,
+            arg => string.Equals(arg, "--view", StringComparison.OrdinalIgnoreCase));
+        if (index < 0 || index + 1 >= args.Length)
+        {
+            return null;
+        }
+
+        return args[index + 1].Trim().ToLowerInvariant() switch
+        {
+            "list" => FinderViewMode.List,
+            "columns" or "column" => FinderViewMode.Columns,
+            "icons" or "icon" => FinderViewMode.Icons,
+            _ => null
+        };
+    }
+
+    /// <summary>取 <c>--xxx value</c> 形式参数的值；缺参数返回 null。</summary>
+    private static string? ParseArgValue(string[] args, string name)
+    {
+        var index = Array.FindIndex(args, arg => string.Equals(arg, name, StringComparison.OrdinalIgnoreCase));
+        return index >= 0 && index + 1 < args.Length ? args[index + 1] : null;
+    }
+
+    /// <summary>
+    /// <c>--shot &lt;file&gt; [--shot-delay &lt;ms&gt;]</c>：延时截主屏到文件后自动退出。
+    /// 这是证据采集入口（真机目视验收/回归截图），不是产品功能：只在命令行显式要求时生效，
+    /// 截完即走，不改变任何设置、不驻留进程。
+    /// </summary>
+    private void ScheduleDiagnosticShot(string[] args)
+    {
+        var index = Array.FindIndex(args,
+            arg => string.Equals(arg, "--shot", StringComparison.OrdinalIgnoreCase));
+        if (index < 0 || index + 1 >= args.Length)
+        {
+            return;
+        }
+
+        var file = args[index + 1];
+        var delay = 2500;
+        var delayIndex = Array.FindIndex(args,
+            arg => string.Equals(arg, "--shot-delay", StringComparison.OrdinalIgnoreCase));
+        if (delayIndex >= 0 && delayIndex + 1 < args.Length
+            && int.TryParse(args[delayIndex + 1], out var requested))
+        {
+            delay = Math.Clamp(requested, 200, 30000);
+        }
+
+        var timer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(delay) };
+        timer.Tick += (_, _) =>
+        {
+            timer.Stop();
+
+            // 有访达窗口时只拍它（PrintWindow 与前台无关，编辑器抢焦点也不会拍错内容）；没有则整屏。
+            // 简介卡优先（它通常盖在访达之上，是本次要拍的证据）。
+            var handle = Finder.FinderInfoWindow.GetDiagnosticsHandle();
+            if (handle == IntPtr.Zero)
+            {
+                handle = Finder.FinderWindow.GetDiagnosticsHandle();
+            }
+
+            if (handle == IntPtr.Zero)
+            {
+                FinishShot(file, IntPtr.Zero, fullScreen: true);
+                return;
+            }
+
+            // 置前后等 400ms 让窗口完成重绘（DWM 圆角与阴影也在这一拍到位）。
+            var settle = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(400) };
+            settle.Tick += (_, _) =>
+            {
+                settle.Stop();
+                FinishShot(file, handle, fullScreen: false);
+            };
+            settle.Start();
+        };
+        timer.Start();
+        Logger.Info($"诊断截图已排期：{delay}ms 后写入 {file}");
+    }
+
+    /// <summary>执行一次截图并退出（<c>--shot</c> 的最后一步）。</summary>
+    private void FinishShot(string file, IntPtr window, bool fullScreen)
+    {
+        var ok = fullScreen
+            ? ScreenCapture.TryCapturePrimary(file, out var error)
+            : ScreenCapture.TryCaptureWindow(window, file, out error);
+        if (ok)
+        {
+            Logger.Info($"诊断截图已保存：{file}（{(fullScreen ? "整屏" : "访达窗口")}）");
+        }
+        else
+        {
+            Logger.Warn($"诊断截图失败：{error}");
+        }
+
+        ExitApp();
+    }
+
     private void ExitApp()
     {
         if (_exiting) return;

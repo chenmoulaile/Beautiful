@@ -22,22 +22,24 @@ using TextBox = System.Windows.Controls.TextBox;
 namespace Beautiful.App.Finder;
 
 /// <summary>
-/// 访达窗口（Phase 6-a 骨架）：macOS Big Sur 风格的三段式窗口——工具栏 / 侧栏 + 列表 / 状态栏。
+/// 访达窗口：macOS Big Sur 风格的三段式窗口——工具栏 / 侧栏 + 内容区 / 状态栏。
 /// <para>
 /// 窗口形态与 <see cref="Settings.SettingsWindow"/> 一致：非分层窗口 + WindowChrome + DWM 圆角，
 /// 保留 ClearType 与 DWM 阴影（AllowsTransparency 保持 false，见 XAML）。CaptionHeight=0，
 /// 顶部条带由 <see cref="TitleBar_MouseLeftButtonDown"/> 自绘拖动。
 /// </para>
 /// <para>
-/// 导航/键位/排序全部复用 <c>Beautiful.Core.Finder</c> 的纯函数，UI 只负责把状态映射到控件：
-/// <see cref="NavigationHistory"/> 管后退/前进，<see cref="FinderKeyMap"/> 认 Ctrl+[ / ] / W / Escape，
-/// <see cref="FinderSorting"/> 给列表定序，<see cref="FinderPaths"/> 负责路径拼接与根判定。
-/// 目录读取在后台线程完成（<see cref="Task.Run{TResult}(Func{TResult})"/> + <see cref="CancellationTokenSource"/>），
-/// 最多取 <see cref="MaxEntries"/> 项；访问失败只清空列表并写状态栏/日志，绝不让窗口崩溃。
+/// 三种视图（Phase 6-b）：列表（<see cref="FileList"/>）/ 分栏（<see cref="ColumnScroll"/>，
+/// 见 <c>FinderWindow.Columns.cs</c>）/ 图标（<see cref="IconList"/>，见 <c>FinderWindow.Icons.cs</c>）。
+/// 视图模式、排序列、图标尺寸、隐藏项开关按文件夹持久化到 <c>config/finder-view-options.json</c>，
+/// 归一化与容量上限由 Core 的 <see cref="FinderViewOptionRules"/> 负责。
 /// </para>
 /// <para>
-/// 这是骨架：列视图 / 图标视图 / 搜索索引 / 文件操作都留到 Phase 6-b；工具栏的对应按钮可点，
-/// 只在状态栏给出非模态提示，不做假切换。搜索框的过滤是真实行为（只筛当前目录已载入的名称）。
+/// 导航/键位/排序/列栈/网格全部复用 <c>Beautiful.Core.Finder</c> 的纯函数，UI 只负责把状态映射到控件：
+/// <see cref="NavigationHistory"/> 管后退/前进，<see cref="FinderKeyMap"/> 认 Ctrl+[ / ] / W / Escape，
+/// <see cref="FinderSorting"/> 给列表定序，<see cref="FinderColumnState"/> 管分栏列栈，
+/// <see cref="FinderIconGrid"/> 管图标网格与框选命中。目录读取在后台线程完成，
+/// 最多取 <see cref="MaxEntries"/> 项；访问失败只清空列表并写状态栏/日志，绝不让窗口崩溃。
 /// </para>
 /// </summary>
 public partial class FinderWindow : Window
@@ -48,15 +50,21 @@ public partial class FinderWindow : Window
     /// <summary>后台图标提取的行数上限：超出部分保留字形回退，避免 1500 项一次性抓 shell 图标。</summary>
     private const int MaxIconRows = 300;
 
-    /// <summary>图标提取尺寸：16 DIP 在 200% DPI 下是 32 物理像素。</summary>
-    private const int IconPixelSize = 32;
+    /// <summary>图标像素尺寸上限：Shell 图标资源最大帧通常就是 256。</summary>
+    private const int MaxIconPixels = 256;
 
     private static FinderWindow? _current;
 
     private readonly NavigationHistory _history = new();
     private readonly DispatcherTimer _statusHintTimer;
+    private readonly FinderViewOptionsStore _viewStore = new();
+
+    /// <summary>已载入的整表视图选项（路径 → 选项）；改动后立即落盘。</summary>
+    private IReadOnlyDictionary<string, FinderViewOptions> _viewMap =
+        new Dictionary<string, FinderViewOptions>(StringComparer.Ordinal);
 
     private List<FinderRow> _allRows = [];
+    private List<FinderRow> _visibleRows = [];
     private CancellationTokenSource? _loadCts;
     private CancellationTokenSource? _iconCts;
     private string _currentPath = string.Empty;
@@ -67,8 +75,27 @@ public partial class FinderWindow : Window
     private bool _isLoading;
     private int _loadGeneration;
 
-    /// <summary>单例入口（--finder / 将来的 Dock 入口共用）。关闭后自动重置，可再次打开。</summary>
-    public static void ShowSingleton(string? initialPath = null)
+    // 当前文件夹的视图选项（每次导航从 _viewMap 取，改动后写回）
+    private FinderViewMode _viewMode = FinderViewMode.List;
+    private FinderSortKey _sortKey = FinderSortKey.Name;
+    private bool _descending;
+    private bool _showHidden;
+    private double _iconSize = 64;
+    private int _iconPixelSize = 32;
+
+    /// <summary>诊断用（<c>--select &lt;name&gt;</c>）：载入完成后自动选中该条目，截图/验收时省掉鼠标。</summary>
+    private string? _pendingSelection;
+
+    /// <summary>
+    /// 单例入口（--finder / Dock 入口共用）。关闭后自动重置，可再次打开。
+    /// </summary>
+    /// <param name="initialPath">初始目录；null 用用户主目录。</param>
+    /// <param name="view">
+    /// 强制初始视图（<c>--view</c> 截图/验收入口）。null = 沿用该文件夹上次记住的视图；
+    /// 传值时只在内存里覆盖，**不写回**持久化选项。
+    /// </param>
+    public static void ShowSingleton(string? initialPath = null, FinderViewMode? view = null,
+        string? select = null)
     {
         if (_current is { IsLoaded: true })
         {
@@ -78,10 +105,20 @@ public partial class FinderWindow : Window
                 _current.NavigateTo(initialPath!);
             }
 
+            if (view is not null)
+            {
+                _current.SetViewMode(view.Value, persist: false);
+            }
+
+            if (!string.IsNullOrWhiteSpace(select))
+            {
+                _current.SelectByName(select!);
+            }
+
             return;
         }
 
-        var window = new FinderWindow(initialPath);
+        var window = new FinderWindow(initialPath, view, select);
         _current = window;
         window.Closed += (_, _) =>
         {
@@ -96,11 +133,16 @@ public partial class FinderWindow : Window
     }
 
     public FinderWindow()
-        : this(null)
+        : this(null, null)
     {
     }
 
     public FinderWindow(string? initialPath)
+        : this(initialPath, null)
+    {
+    }
+
+    public FinderWindow(string? initialPath, FinderViewMode? view, string? select = null)
     {
         InitializeComponent();
 
@@ -111,17 +153,31 @@ public partial class FinderWindow : Window
             UpdateStatus();
         };
 
+        _viewMap = _viewStore.Load();
+
         var path = string.IsNullOrWhiteSpace(initialPath) ? DefaultDirectory() : initialPath!;
         _currentPath = path;
         _history.Visit(path);
+        ApplyViewOptionsFor(path);
+        if (view is not null)
+        {
+            _viewMode = view.Value;   // 仅内存覆盖：不写回该文件夹的持久化选项
+        }
+
+        _pendingSelection = string.IsNullOrWhiteSpace(select) ? null : select;
 
         PopulateSidebar();
         SyncSidebarSelection();
         ApplyPath(path);
         UpdateNavButtons();
+        SetViewMode(_viewMode, persist: false);
 
         Loaded += (_, _) => UpdateNameColumnWidth();
-        SizeChanged += (_, _) => UpdateNameColumnWidth();
+        SizeChanged += (_, _) =>
+        {
+            UpdateNameColumnWidth();
+            RefreshColumnWidths();
+        };
         Closed += (_, _) =>
         {
             // 关闭即作废：既取消在跑的后台枚举/图标任务，也顺手释放 CTS（Dispose 幂等）。
@@ -135,6 +191,28 @@ public partial class FinderWindow : Window
 
     /// <summary>当前目录（日志/外部查询用；页面状态以 <see cref="_currentPath"/> 为准）。</summary>
     public string CurrentPath => _currentPath;
+
+    /// <summary>
+    /// 诊断入口（<c>--shot</c>）：把访达窗口带到前台并返回其 HWND；没有窗口返回 <see cref="IntPtr.Zero"/>。
+    /// 只为"截图证据只拍目标窗口"服务（配合 PrintWindow 可与前台无关），不参与产品逻辑。
+    /// </summary>
+    public static IntPtr GetDiagnosticsHandle()
+    {
+        if (_current is not { IsLoaded: true } window)
+        {
+            return IntPtr.Zero;
+        }
+
+        try
+        {
+            window.Activate();
+            return new WindowInteropHelper(window).Handle;
+        }
+        catch (InvalidOperationException)
+        {
+            return IntPtr.Zero;
+        }
+    }
 
     // ---------- 初始化 ----------
 
@@ -215,6 +293,49 @@ public partial class FinderWindow : Window
         NameColumn.Width = Math.Max(180, FileList.ActualWidth - 374);
     }
 
+    // ---------- 视图选项 ----------
+
+    /// <summary>从整表里取出本文件夹的选项并应用到当前状态（导航时调用）。</summary>
+    private void ApplyViewOptionsFor(string path)
+    {
+        var options = FinderViewOptionRules.For(_viewMap, path);
+        _viewMode = options.Mode;
+        _sortKey = options.SortKey;
+        _descending = options.Descending;
+        _showHidden = options.ShowHidden;
+        _iconSize = options.IconSize;
+        _iconPixelSize = IconPixelsFor(_iconSize);
+        UpdateSortHeaders();
+    }
+
+    /// <summary>当前状态 → 选项记录，写回整表并落盘（每次用户改动视图都调用）。</summary>
+    private void PersistViewOptions()
+    {
+        var options = new FinderViewOptions(_viewMode, _sortKey, _descending, _showHidden, _iconSize);
+        _viewMap = FinderViewOptionRules.With(_viewMap, _currentPath, options);
+        _viewStore.Save(_viewMap);
+    }
+
+    /// <summary>
+    /// 图标提取的物理像素：按图标 DIP 尺寸 × DPI 缩放，上限 256（Shell 资源里没有更大的帧）。
+    /// 列表视图只要 16 DIP，但同一次提取供两处复用，因此下限 32 已经足够清晰。
+    /// </summary>
+    private int IconPixelsFor(double iconSize)
+    {
+        var scale = 1.0;
+        try
+        {
+            scale = VisualTreeHelper.GetDpi(this).DpiScaleX;
+        }
+        catch (InvalidOperationException)
+        {
+            // 窗口尚未完成初始化（构造期）：按 100% 处理，Loaded 后会随视图切换重算。
+        }
+
+        var pixels = (int)Math.Ceiling(Math.Max(iconSize, 32) * Math.Max(1.0, scale));
+        return Math.Clamp(pixels, 32, MaxIconPixels);
+    }
+
     // ---------- 导航 ----------
 
     private static bool SamePath(string? left, string? right)
@@ -274,6 +395,12 @@ public partial class FinderWindow : Window
 
     private void GoBack()
     {
+        // 分栏视图里"后退"优先退一列（macOS 列视图语义），退无可退才走导航历史。
+        if (_viewMode == FinderViewMode.Columns && StepBackColumn())
+        {
+            return;
+        }
+
         var path = _history.Back();
         if (path is null)
         {
@@ -294,9 +421,23 @@ public partial class FinderWindow : Window
         ShowDirectory(path);
     }
 
+    /// <summary>上一级（⌘↑ / Ctrl+↑）：根目录上再按无操作。</summary>
+    private void GoUp()
+    {
+        var parent = FinderPaths.Parent(_currentPath);
+        if (parent is null)
+        {
+            ShowStatusHint("已经在最上层");
+            return;
+        }
+
+        NavigateTo(parent);
+    }
+
     /// <summary>
-    /// 换到另一个目录：先切换标题/历史按钮，再进入载入态（清空旧行、关闭行交互、状态栏"正在载入…"），
-    /// 最后清掉搜索词（否则新目录会被旧查询静默过滤）。F5 刷新同一目录不走这里，搜索词保留。
+    /// 换到另一个目录：先切换标题/历史按钮/视图选项，再进入载入态（清空旧行、关闭行交互、
+    /// 状态栏"正在载入…"），最后清掉搜索词（否则新目录会被旧查询静默过滤）。
+    /// F5 刷新同一目录不走这里，搜索词与视图选项都保留。
     /// </summary>
     private void ShowDirectory(string path)
     {
@@ -304,6 +445,8 @@ public partial class FinderWindow : Window
         ApplyPath(path);
         SyncSidebarSelection();
         UpdateNavButtons();
+        ApplyViewOptionsFor(path);
+        SyncViewChrome();
         StartLoad(path);
         ResetSearch();
     }
@@ -331,10 +474,13 @@ public partial class FinderWindow : Window
         _freeSpaceText = null;
         _capped = false;
         _allRows = [];
+        _visibleRows = [];
         FileList.ItemsSource = Array.Empty<FinderRow>();
+        IconList.ItemsSource = Array.Empty<FinderRow>();
         FileList.IsEnabled = false;   // 载入完成前不允许双击/键盘打开旧行
         _statusHintTimer.Stop();
         StatusText.Text = "正在载入…";
+        RefreshColumns();
 
         _ = LoadDirectoryAsync(path, generation);
     }
@@ -369,10 +515,12 @@ public partial class FinderWindow : Window
         var cts = new CancellationTokenSource();
         _loadCts = cts;
         var token = cts.Token;
+        var sortKey = _sortKey;
+        var descending = _descending;
 
         try
         {
-            var result = await Task.Run(() => ReadDirectory(path, token), token);
+            var result = await Task.Run(() => ReadDirectory(path, sortKey, descending, token), token);
             if (generation != _loadGeneration || token.IsCancellationRequested || !SamePath(path, _currentPath))
             {
                 return;
@@ -403,7 +551,12 @@ public partial class FinderWindow : Window
         }
     }
 
-    private static LoadResult ReadDirectory(string path, CancellationToken token)
+    /// <summary>
+    /// 后台枚举目录（静态方法：不碰实例状态，便于将来下沉到 Core/单测）。
+    /// 隐藏项按属性标记进 <see cref="FinderEntry.IsHidden"/>，是否显示由视图过滤决定（⇧⌘.）。
+    /// </summary>
+    private static LoadResult ReadDirectory(string path, FinderSortKey sortKey, bool descending,
+        CancellationToken token)
     {
         // 可用空间在后台枚举线程上算一次（IO），状态栏与搜索按键都只复用这个字符串，绝不再碰 DriveInfo。
         var freeSpace = FreeSpaceGb(path);
@@ -436,8 +589,10 @@ public partial class FinderWindow : Window
                         size = file.Length;
                     }
 
+                    var attributes = info.Attributes;
+                    var hidden = (attributes & (FileAttributes.Hidden | FileAttributes.System)) != 0;
                     var kind = isDirectory ? "文件夹" : KindOf(info.Name);
-                    entries.Add(new FinderEntry(info.Name, isDirectory, size, info.LastWriteTimeUtc, kind));
+                    entries.Add(new FinderEntry(info.Name, isDirectory, size, info.LastWriteTimeUtc, kind, hidden));
                 }
                 catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
                 {
@@ -445,8 +600,8 @@ public partial class FinderWindow : Window
                 }
             }
 
-            // 文件夹恒在前 + 名称自然序由 Core 固化（file2 < file10）；UI 不再写第二套排序。
-            var sorted = FinderSorting.Sort(entries, FinderSortKey.Name);
+            // 文件夹恒在前 + 选中列的排序由 Core 固化（file2 < file10）；UI 不再写第二套排序。
+            var sorted = FinderSorting.Sort(entries, sortKey, descending);
             return LoadResult.Success(sorted, capped, freeSpace);
         }
         catch (OperationCanceledException)
@@ -475,10 +630,22 @@ public partial class FinderWindow : Window
         _capped = result.Capped;
         _freeSpaceText = result.FreeSpaceText;
         _allRows = result.Entries.Select(entry => new FinderRow(path, entry)).ToList();
+        foreach (var row in _allRows)
+        {
+            row.SetIconBoxSize(_iconSize);
+        }
+
+        RememberDirectory(path, _allRows);
         FileList.IsEnabled = true;
         ApplyFilter();
         UpdateStatus();
         StartIconLoad(_allRows, generation);
+
+        if (_pendingSelection is { } pending)
+        {
+            _pendingSelection = null;
+            SelectByName(pending);
+        }
         Logger.Info($"访达目录已载入：{path}，条目={_allRows.Count}" +
                     (result.Capped ? "（已截断）" : string.Empty));
     }
@@ -491,15 +658,18 @@ public partial class FinderWindow : Window
         _capped = false;
         _freeSpaceText = null;
         _allRows.Clear();
+        _visibleRows = [];
         FileList.ItemsSource = Array.Empty<FinderRow>();
+        IconList.ItemsSource = Array.Empty<FinderRow>();
         FileList.IsEnabled = true;
+        RefreshColumns();
         UpdateStatus();
     }
 
     // ---------- 图标 ----------
 
     /// <summary>
-    /// 载入结果应用后，在后台顺序提取前 <see cref="MaxIconRows"/> 行的图标（32px），每拿到一个就回 UI 线程
+    /// 载入结果应用后，在后台顺序提取前 <see cref="MaxIconRows"/> 行的图标，每拿到一个就回 UI 线程
     /// 贴到行上；未拿到的行继续显示字形。图标任务有独立 CTS，新导航/关闭会取消它，代次号再兜一层防串。
     /// </summary>
     private void StartIconLoad(IReadOnlyList<FinderRow> rows, int generation)
@@ -520,11 +690,11 @@ public partial class FinderWindow : Window
 
         var cts = new CancellationTokenSource();
         _iconCts = cts;
-        _ = LoadIconsAsync(rows, count, generation, cts);
+        _ = LoadIconsAsync(rows, count, generation, _iconPixelSize, cts);
     }
 
     private async Task LoadIconsAsync(IReadOnlyList<FinderRow> rows, int count, int generation,
-        CancellationTokenSource cts)
+        int pixelSize, CancellationTokenSource cts)
     {
         var token = cts.Token;
         try
@@ -533,7 +703,12 @@ public partial class FinderWindow : Window
             {
                 token.ThrowIfCancellationRequested();
                 var row = rows[i];
-                var icon = await Task.Run(() => IconExtractor.GetIcon(row.FullPath, IconPixelSize), token);
+                if (row.HasIcon)
+                {
+                    continue;   // 列视图缓存里的行已经带图标：不重复抓 shell
+                }
+
+                var icon = await Task.Run(() => IconExtractor.GetIcon(row.FullPath, pixelSize), token);
                 if (icon is null || token.IsCancellationRequested || generation != _loadGeneration)
                 {
                     continue;   // 空结果保留字形；过期结果直接丢弃
@@ -584,23 +759,42 @@ public partial class FinderWindow : Window
         }
     }
 
-    /// <summary>名称过滤（当前目录已载入的行；真实行为，不是 Phase 6-b 的索引搜索）。</summary>
+    /// <summary>
+    /// 名称/隐藏项过滤（当前目录已载入的行）。结果同时喂给列表与图标视图；
+    /// 分栏视图的每一列有各自的过滤（见 <c>FinderWindow.Columns.cs</c>）。
+    /// </summary>
     private void ApplyFilter()
     {
         if (_isLoading)
         {
+            _visibleRows = [];
             FileList.ItemsSource = Array.Empty<FinderRow>();
+            IconList.ItemsSource = Array.Empty<FinderRow>();
             return;
         }
 
         var query = SearchBox.Text.Trim();
         IEnumerable<FinderRow> source = _allRows;
-        if (query.Length > 0)
+        if (!_showHidden)
         {
-            source = _allRows.Where(row => row.Name.Contains(query, StringComparison.OrdinalIgnoreCase));
+            source = source.Where(row => !row.IsHidden);
         }
 
-        FileList.ItemsSource = source.ToList();
+        if (query.Length > 0)
+        {
+            source = source.Where(row => row.Name.Contains(query, StringComparison.OrdinalIgnoreCase));
+        }
+
+        _visibleRows = source.ToList();
+        FileList.ItemsSource = _visibleRows;
+        IconList.ItemsSource = _visibleRows;
+
+        // 分栏视图的每一列也吃同一套过滤条件（搜索词/隐藏项），载入完成后必须重画一次，
+        // 否则列里会一直停在 StartLoad 时清空的空集合。
+        if (_viewMode == FinderViewMode.Columns)
+        {
+            RefreshColumns();
+        }
     }
 
     private void UpdateStatus()
@@ -623,13 +817,24 @@ public partial class FinderWindow : Window
         }
 
         var total = _allRows.Count;
-        var shown = FileList?.Items.Count ?? 0;
+        var visible = _visibleRows.Count;
         var text = _capped
             ? $"仅显示前 {total} 个项目（目录内容过多）"
             : $"{total} 个项目";
-        if (shown != total)
+
+        // 过滤原因分开写：隐藏项是"开关"，搜索是"临时筛选"，混成一个数字用户分不清少了什么。
+        if (!_showHidden)
         {
-            text += $"（筛选出 {shown} 个）";
+            var hidden = _allRows.Count(row => row.IsHidden);
+            if (hidden > 0)
+            {
+                text += $"，已隐藏 {hidden} 个";
+            }
+        }
+
+        if (SearchBox is not null && SearchBox.Text.Trim().Length > 0)
+        {
+            text += $"，筛选出 {visible} 个";
         }
 
         // 可用空间是载入时后台算好的字符串：搜索每次按键都不再访问磁盘。
@@ -689,11 +894,20 @@ public partial class FinderWindow : Window
 
     private void OpenSelected()
     {
-        if (FileList.SelectedItem is FinderRow row)
+        var row = SelectedRow();
+        if (row is not null)
         {
             OpenRow(row);
         }
     }
+
+    /// <summary>当前视图下"选中的第一行"（三种视图各有一套选择，统一从这里取）。</summary>
+    private FinderRow? SelectedRow() => _viewMode switch
+    {
+        FinderViewMode.Icons => IconList.SelectedItem as FinderRow,
+        FinderViewMode.Columns => ColumnSelectedRow(),
+        _ => FileList.SelectedItem as FinderRow
+    };
 
     private void OpenRow(FinderRow row)
     {
@@ -730,34 +944,118 @@ public partial class FinderWindow : Window
             return;
         }
 
-        // 空格 = Quick Look（Phase 6-b 起步）：搜索框里打字时空格必须原样输入；按钮/文本框上的空格
-        // 保留原生语义（按钮激活、输入），只有列表选中了行才打开预览。
-        if (e.Key == Key.Space && !SearchBox.IsKeyboardFocusWithin && !_isLoading
-            && FileList.SelectedItem is FinderRow row
-            && e.OriginalSource is not TextBox && Keyboard.FocusedElement is not Button)
+        var ctrl = (Keyboard.Modifiers & ModifierKeys.Control) != 0;
+        var shift = (Keyboard.Modifiers & ModifierKeys.Shift) != 0;
+
+        // 视图切换：⌘1/2/3（Ctrl 充当 ⌘）
+        if (ctrl && !shift && e.Key is Key.D1 or Key.NumPad1)
         {
             e.Handled = true;
-            QuickLookWindow.ShowFor(row.FullPath);
+            SetViewMode(FinderViewMode.List);
             return;
+        }
+
+        if (ctrl && !shift && e.Key is Key.D2 or Key.NumPad2)
+        {
+            e.Handled = true;
+            SetViewMode(FinderViewMode.Columns);
+            return;
+        }
+
+        if (ctrl && !shift && e.Key is Key.D3 or Key.NumPad3)
+        {
+            e.Handled = true;
+            SetViewMode(FinderViewMode.Icons);
+            return;
+        }
+
+        // ⇧⌘. 显示/隐藏隐藏项（macOS 语义）
+        if (ctrl && shift && (e.Key == Key.OemPeriod || e.Key == Key.Decimal))
+        {
+            e.Handled = true;
+            ToggleHiddenFiles();
+            return;
+        }
+
+        // ⇧⌘[ / ] 图标尺寸（macOS 语义，只在图标视图有意义）
+        if (ctrl && shift && e.Key == Key.OemOpenBrackets)
+        {
+            e.Handled = true;
+            StepIconSize(-1);
+            return;
+        }
+
+        if (ctrl && shift && e.Key == Key.OemCloseBrackets)
+        {
+            e.Handled = true;
+            StepIconSize(1);
+            return;
+        }
+
+        // ⌘I 显示简介：有选中项看选中项，没有就看当前文件夹
+        if (ctrl && !shift && e.Key == Key.I)
+        {
+            e.Handled = true;
+            FinderInfoWindow.ShowFor(SelectedRow()?.FullPath ?? _currentPath);
+            return;
+        }
+
+        // ⌘↑ 上一级
+        if (ctrl && e.Key == Key.Up)
+        {
+            e.Handled = true;
+            GoUp();
+            return;
+        }
+
+        // 空格 = Quick Look：搜索框里打字时空格必须原样输入；按钮/文本框上的空格保留原生语义。
+        if (e.Key == Key.Space && !SearchBox.IsKeyboardFocusWithin && !_isLoading
+            && e.OriginalSource is not TextBox && Keyboard.FocusedElement is not Button)
+        {
+            if (QuickLookFromSelection())
+            {
+                e.Handled = true;
+                return;
+            }
         }
 
         if (e.Key == Key.F5)
         {
             e.Handled = true;
-            StartLoad(_currentPath);   // 同一目录刷新：保留搜索词
+            RefreshCurrentDirectory();   // 同一目录刷新：保留搜索词与视图选项
             return;
         }
 
-        // Enter 只在列表获得焦点时打开选中项：搜索框/按钮里的 Enter 保持原生语义。
-        if (e.Key == Key.Enter && FileList.IsKeyboardFocusWithin
-            && e.OriginalSource is not TextBox && Keyboard.FocusedElement is not Button)
+        // 分栏视图：←/→ 在列间移动焦点（选中文件夹时 → 直接开新列）
+        if (_viewMode == FinderViewMode.Columns && e.Key is Key.Left or Key.Right
+            && e.OriginalSource is not TextBox)
+        {
+            if (HandleColumnArrow(e.Key == Key.Right))
+            {
+                e.Handled = true;
+                return;
+            }
+        }
+
+        // 图标视图：方向键按网格移动（左右不换行），Ctrl+A 全选
+        if (_viewMode == FinderViewMode.Icons && e.OriginalSource is not TextBox)
+        {
+            if (HandleIconArrow(e.Key))
+            {
+                e.Handled = true;
+                return;
+            }
+        }
+
+        // Enter 只在内容区获得焦点时打开选中项：搜索框/按钮里的 Enter 保持原生语义。
+        if (e.Key == Key.Enter && e.OriginalSource is not TextBox && Keyboard.FocusedElement is not Button
+            && (FileList.IsKeyboardFocusWithin || IconList.IsKeyboardFocusWithin || IsColumnFocusWithin()))
         {
             e.Handled = true;
             OpenSelected();
             return;
         }
 
-        var ctrl = (Keyboard.Modifiers & ModifierKeys.Control) != 0;
         string? gesture = ctrl && e.Key == Key.OemOpenBrackets ? "ctrl+["
             : ctrl && e.Key == Key.OemCloseBrackets ? "ctrl+]"
             : ctrl && e.Key == Key.W ? "ctrl+w"
@@ -784,6 +1082,24 @@ public partial class FinderWindow : Window
                 Close();
                 break;
         }
+    }
+
+    /// <summary>F5：同一目录重新枚举（保留搜索词/视图选项），并让图标与列缓存跟着刷新。</summary>
+    private void RefreshCurrentDirectory()
+    {
+        ForgetDirectory(_currentPath);
+        StartLoad(_currentPath);
+    }
+
+    /// <summary>⇧⌘.：切换隐藏项显示并记住到本文件夹。</summary>
+    private void ToggleHiddenFiles()
+    {
+        _showHidden = !_showHidden;
+        PersistViewOptions();
+        ApplyFilter();
+        RefreshColumns();
+        UpdateStatus();
+        ShowStatusHint(_showHidden ? "已显示隐藏项目" : "已隐藏隐藏项目");
     }
 
     // ---------- 工具栏 ----------
@@ -814,12 +1130,11 @@ public partial class FinderWindow : Window
         WindowState = WindowState == WindowState.Maximized ? WindowState.Normal : WindowState.Maximized;
     }
 
-    private void List_Click(object sender, RoutedEventArgs e)
-        => ShowStatusHint("当前为列表视图");
+    private void List_Click(object sender, RoutedEventArgs e) => SetViewMode(FinderViewMode.List);
 
-    /// <summary>列视图 / 图标视图是 Phase 6-b 的实现项：按钮可点，但只给状态栏提示，不做假切换。</summary>
-    private void DeferredView_Click(object sender, RoutedEventArgs e)
-        => ShowStatusHint("列视图 / 图标视图将在 Phase 6-b 实现（当前仍为列表视图）");
+    private void Columns_Click(object sender, RoutedEventArgs e) => SetViewMode(FinderViewMode.Columns);
+
+    private void Grid_Click(object sender, RoutedEventArgs e) => SetViewMode(FinderViewMode.Icons);
 
     /// <summary>非模态提示：占用状态栏 3 秒后恢复项目数/可用空间，不弹窗、不阻塞操作。</summary>
     private void ShowStatusHint(string message)
@@ -844,16 +1159,17 @@ public partial class FinderWindow : Window
     // ---------- 行视图模型 ----------
 
     /// <summary>
-    /// 列表行：展示字段来自 Core 的 <see cref="FinderEntry"/>。图标不再由绑定 getter 同步提取——
-    /// 载入结果应用后由窗口在后台批量提取前 300 行，拿到一个就在 UI 线程调用 <see cref="SetIcon"/>；
+    /// 内容区的一行：展示字段来自 Core 的 <see cref="FinderEntry"/>。图标不再由绑定 getter 同步提取——
+    /// 载入结果应用后由窗口在后台批量提取，拿到一个就在 UI 线程调用 <see cref="SetIcon"/>；
     /// 在此之前行显示字形回退，滚动进入视口也绝不触发磁盘/Shell 调用。
-    /// 提取尺寸 32px：16 DIP 在 200% DPI 下正好是 32 物理像素，高分屏不糊。
+    /// 提取尺寸按图标视图的 DIP 尺寸 × DPI 计算（上限 256），列表视图共用同一张位图。
     /// </summary>
     private sealed class FinderRow : INotifyPropertyChanged
     {
         private readonly FinderEntry _entry;
         private string _glyph;
         private ImageSource? _icon;
+        private double _iconBoxSize = 64;
 
         public FinderRow(string directory, FinderEntry entry)
         {
@@ -871,6 +1187,8 @@ public partial class FinderWindow : Window
         public string FullPath { get; }
 
         public bool IsDirectory => _entry.IsDirectory;
+
+        public bool IsHidden => _entry.IsHidden;
 
         public string ModifiedText { get; }
 
@@ -890,12 +1208,31 @@ public partial class FinderWindow : Window
 
         public ImageSource? Icon => _icon;
 
+        /// <summary>图标视图里图标方框的边长（DIP）；列表视图不绑定它。</summary>
+        public double IconBoxSize => _iconBoxSize;
+
+        /// <summary>是否已经有位图（列视图缓存复用时避免重复抓 shell）。</summary>
+        public bool HasIcon => _icon is not null;
+
         /// <summary>后台提取完成后回 UI 线程贴图：先撤字形再通知 Icon，避免两者闪现叠加。</summary>
         public void SetIcon(ImageSource icon)
         {
             Glyph = string.Empty;
             _icon = icon;
             OnPropertyChanged(nameof(Icon));
+            OnPropertyChanged(nameof(HasIcon));
+        }
+
+        /// <summary>图标尺寸变化（滑杆/⇧⌘[/]）：只改布局框大小，不重新提取位图。</summary>
+        public void SetIconBoxSize(double size)
+        {
+            if (Math.Abs(_iconBoxSize - size) < 0.5)
+            {
+                return;
+            }
+
+            _iconBoxSize = size;
+            OnPropertyChanged(nameof(IconBoxSize));
         }
 
         public event PropertyChangedEventHandler? PropertyChanged;
