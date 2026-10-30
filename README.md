@@ -37,7 +37,7 @@ Beautiful 接管日常桌面三件套：屏幕底部是悬浮 Dock（应用固�
 | 场景渲染骨架 | D3D11 离屏纹理/回读基准图（渐变+网格），为 Phase 3-T7 genie 铺路 | `NativeSmoke scene offscreen render` PASS |
 | 注入框架 | 仅 explorer、OS build 闸门、心跳、卸载闭环、宿主 Mutex 自卸载兜底；设置页「底层增强」总/分开关 + 注入演练二次确认 | **默认关闭 `NativeTrayBridge`**；注入演练 **UNVERIFIED(owner)**，核对清单 `scripts/verify/native-inject-checklist.md` |
 | 纯 C# 形态 | `BEAUTIFUL_NONATIVE=1`/DLL 缺失/坏镜像/探针失败全部只记日志并降级；`BEAUTIFUL_NONATIVE=1` 仍是 CI/无桌面形态 | 所有 native 调用过 `NativeLoader` Guard；失败不抛给 UI |
-| 发布/诊断 | `install-local.cmd` 先编译 native 再 publish；CI 增 native 构建 + NativeSmoke；`diag.ps1` 增 `[Native 模块]` 段 | 本机 `dist\Beautiful\Beautiful.exe` 已重新发布；版本 `4.0.0-alpha.1` |
+| 发布/诊断 | `install-local.cmd` 先编译 native 再 publish；CI 增 native 构建 + NativeSmoke；`diag.ps1` 增 `[Native 模块]` 段 | 本机 `dist\Beautiful\Beautiful.exe` 已重新发布；版本 `4.0.0-alpha.2` |
 
 > Phase 2 未完成/待回执：材质真机目视、WGC 对 Chrome/Electron 窗口的实测、注入演练 explorer 健康回执、看门狗"explorer 异常重启 ≥2 次/10min 自动禁用"（当前只有手动开关与 payload 自卸载兜底）。
 
@@ -58,6 +58,7 @@ Beautiful 接管日常桌面三件套：屏幕底部是悬浮 Dock（应用固�
 ## 本地运行（真正能跑的那份在哪）
 
 - **装起来用（推荐）**：下载 GitHub Release 里的 `Beautiful-Setup-v<版本>.exe`，双击安装。
+  （`v4.0.0-alpha.2` 这次 CI 未触发、本机也没有 Inno Setup，因此**只发布了 zip**；安装包随下一次 CI 发布恢复。）
   它是 **按用户安装**（不弹 UAC、不需要管理员），装到 `%LOCALAPPDATA%\Programs\Beautiful`，
   给开始菜单快捷方式，控制面板里可以卸载。为什么不走 `Program Files`：本应用把
   `config\dock.json`、`logs\`、`cache\` 写在 exe 旁边，装进系统目录后这些写入会被 UAC 虚拟化到
