@@ -476,6 +476,12 @@
                         <CheckBox x:Name="TopBarCheck" Content="显示 macOS 风格顶部菜单栏"
                                   Margin="0,16,0,0" Checked="TopBar_Changed" Unchecked="TopBar_Changed"/>
 
+                        <!-- 通知中心（Phase 4-T5）：默认开，点击时钟即 Big Sur 通知中心；关掉退回月历浮层。 -->
+                        <CheckBox x:Name="NotificationCenterCheck"
+                                  Content="点击时钟打开通知中心（关闭则显示月历浮层）"
+                                  Margin="0,8,0,0"
+                                  Checked="NotificationCenter_Changed" Unchecked="NotificationCenter_Changed"/>
+
                         <!-- 顶栏时钟形态（v3.1）：四个勾选各对应 AppSettings 的一个 bool，
                              "组合出什么字符串、以什么节奏刷新"全部由 Core.TopBar.ClockFormat 推导（有单测），
                              UI 里没有任何格式化分支。即时生效，无需重启：勾"显示秒数"会把时钟定时器改成

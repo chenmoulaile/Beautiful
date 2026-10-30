@@ -52,6 +52,10 @@ public partial class App : Application
     private Launcher.LaunchpadHotkeyService? _launchpadHotkey;
     private Settings.SettingsWindow? _settingsWindow;
     private TrayIconManager? _tray;
+
+    /// <summary>通知中心数据服务（Phase 4-T5）：常驻，面板反复开关时历史保持连续。</summary>
+    private NotificationService? _notifications;
+
     private bool _exiting;
 
     protected override void OnStartup(StartupEventArgs e)
@@ -153,6 +157,10 @@ public partial class App : Application
 
             // 6.7 启动器（v3 T7）：Spotlight 式搜索面板。索引在后台线程扫开始菜单，UI 不等待它。
             EnsureLauncher();
+
+            // 6.8 通知中心数据服务（Phase 4-T5）：构造不碰 WinRT，首次打开面板才请求授权。
+            _notifications = new NotificationService(Dispatcher);
+            NotificationService.Current = _notifications;
             // 7. --settings：设置窗口命令行入口（与托盘"设置"等效；窗口为单例）
             if (e.Args.Contains("--settings", StringComparer.OrdinalIgnoreCase))
                 OpenSettings();
@@ -164,6 +172,12 @@ public partial class App : Application
             {
                 EnsureTopBar();
                 _topBar?.ShowControlCenterForDiagnostics();
+            }
+
+            // 7.12 --notification-center：通知中心面板（验证/截图入口；与顶栏时钟点击同一实例）
+            if (e.Args.Contains("--notification-center", StringComparer.OrdinalIgnoreCase))
+            {
+                TopBar.NotificationCenterWindow.ShowOrToggle(_notifications);
             }
 
             // 7.15 --spotlight：Spotlight 搜索面板（验证/截图入口；与全局热键同一实例）
@@ -232,6 +246,12 @@ public partial class App : Application
             if (!string.IsNullOrWhiteSpace(smokeDir))
             {
                 _ = RunFileOperationSmokeAsync(smokeDir!);
+            }
+
+            // 9.2 通知读取探针：--notif-probe（只写授权/条数等元信息，绝不写正文；跑完退出）
+            if (e.Args.Contains("--notif-probe", StringComparer.OrdinalIgnoreCase))
+            {
+                _ = RunNotificationProbeAsync();
             }
         }
         catch (Exception ex)
@@ -879,7 +899,13 @@ public partial class App : Application
 
             // 有访达窗口时只拍它（PrintWindow 与前台无关，编辑器抢焦点也不会拍错内容）；没有则整屏。
             // 简介卡优先（它通常盖在访达之上，是本次要拍的证据）。
-            var handle = Finder.FinderInfoWindow.GetDiagnosticsHandle();
+            // 通知中心是"盖在最上面的一整列"，优先拍它（打开时就是要验它）。
+            var handle = TopBar.NotificationCenterWindow.GetDiagnosticsHandle();
+            if (handle == IntPtr.Zero)
+            {
+                handle = Finder.FinderInfoWindow.GetDiagnosticsHandle();
+            }
+
             if (handle == IntPtr.Zero)
             {
                 handle = Finder.FinderWindow.GetDiagnosticsHandle();
@@ -902,6 +928,27 @@ public partial class App : Application
         };
         timer.Start();
         Logger.Info($"诊断截图已排期：{delay}ms 后写入 {file}");
+    }
+
+    /// <summary>
+    /// <c>--notif-probe</c>：请求授权并枚举一次系统通知，把**不含正文**的汇总写日志后退出。
+    /// 这是通知中心的可行性证据入口（授权是否可用、枚举多少条），不是产品功能。
+    /// </summary>
+    private async Task RunNotificationProbeAsync()
+    {
+        try
+        {
+            var line = await _notifications!.ProbeAsync();
+            Logger.Info($"通知探针结果：{line}");
+        }
+        catch (Exception ex)
+        {
+            Logger.Error("通知探针未完成", ex);
+        }
+        finally
+        {
+            ExitApp();
+        }
     }
 
     /// <summary>
@@ -955,6 +1002,8 @@ public partial class App : Application
             DestroySwitcher();         // 先收面板 + 卸键盘钩子：退出过程中任何一次 Alt+Tab 都不该被吞，
                                        // 也绝不能在屏幕上留下一块永不消失的切换面板（Task 12）
             DestroyTopBar();           // 顶栏 OnClosing：ABE_TOP ABM_REMOVE（hwnd 销毁前）
+            _notifications?.Stop();   // 通知中心：退订系统事件并停轮询（不留后台回调）
+            _notifications = null;
             _dock?.Close();          // DockWindow.OnClosing：AppBar ABM_REMOVE（hwnd 销毁前）
             _taskbar?.Restore();     // Hide/AutoHide 还原系统任务栏
             _tray?.Dispose();        // 移除托盘图标（防幽灵图标）

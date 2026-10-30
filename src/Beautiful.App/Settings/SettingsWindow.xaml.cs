@@ -135,6 +135,7 @@ public partial class SettingsWindow : Window
 
         AutostartCheck.IsChecked = s.Autostart;
         TopBarCheck.IsChecked = s.TopBarEnabled;
+        NotificationCenterCheck.IsChecked = s.NotificationCenterEnabled;
         // 顶栏时钟四项（v3.1）：直接落 AppSettings 的四个 bool，样张由 Core 的同一套折算给出
         ClockSecondsCheck.IsChecked = s.ClockShowSeconds;
         ClockDateCheck.IsChecked = s.ClockShowDate;
@@ -550,6 +551,16 @@ public partial class SettingsWindow : Window
         App.SetTopBarEnabled(TopBarCheck.IsChecked == true); // 内部 UpdateAndSave + 创建/销毁顶栏
     }
 
+    /// <summary>通知中心开关（Phase 4-T5）：只改"时钟左键打开什么"，不影响已读到的历史。</summary>
+    private void NotificationCenter_Changed(object sender, RoutedEventArgs e)
+    {
+        if (_loading) return;
+        SettingsService.UpdateAndSave(SettingsService.Current with
+        {
+            NotificationCenterEnabled = NotificationCenterCheck.IsChecked == true
+        });
+    }
+
     /// <summary>
     /// 顶栏时钟四项变更（v3.1）：四个勾选框共用这一个处理器，一次把四个 bool 整体写进
     /// <see cref="AppSettings"/>（避免"改一项丢三项"），落盘后立即重放顶栏——<b>无需重启</b>：
@@ -690,6 +701,8 @@ public partial class SettingsWindow : Window
         _taskbar.Apply(SettingsService.PolicyOf(s));
         SettingsService.SetAutostart(s.Autostart);
         App.SetTopBarEnabled(s.TopBarEnabled);
+        // 恢复默认后通知中心回到开启（控件状态在 RestoreDefaults 的统一 Apply 里刷新）
+        NotificationCenterCheck.IsChecked = s.NotificationCenterEnabled;
         App.ApplyTopBarGeometry();   // 恢复默认后 TopBarMonitor 回到 auto：已存在的顶栏须按新屏重算条带
         App.ApplyTopBarClock();      // 恢复默认后时钟回到"日期+星期+24 小时制、不显示秒"（v3.0.0 观感）
         UpdateClockSample();

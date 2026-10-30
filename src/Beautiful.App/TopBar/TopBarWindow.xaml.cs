@@ -585,7 +585,13 @@ public partial class TopBarWindow : AcrylicWindow
         // **左侧**扩张，右邻（音量/网络/电量/启动器/控制中心）始终钉在条带右缘不动。因此"显示秒"这种
         // 增减 3 个字符的改动不会让整个状态区左右抖动，唯一会位移的是最左的媒体迷你，而它有 MaxWidth 钳制。
         (_clockButton, _clockText) = MakeStatusItem("时钟", iconFont: false);
-        _clockButton.Click += (_, _) => OpenCalendar();
+        // 左键 = 通知中心（Big Sur 语义）；右键保留原来的月历浮层（不想读系统通知时的轻量入口）
+        _clockButton.Click += (_, _) => OpenClockFlyout();
+        _clockButton.MouseRightButtonUp += (_, e) =>
+        {
+            e.Handled = true;
+            OpenCalendar();
+        };
         RightHost.Children.Add(_clockButton);
 
         // 音量（点击 → 自家音量面板；原来是 sndvol.exe，整块 UI 都是 Windows 的）
@@ -907,7 +913,23 @@ public partial class TopBarWindow : AcrylicWindow
         _mediaButton.Visibility = Visibility.Visible;
     }
 
-    // ---------- 时钟点击：日历浮层（经 FluentPopupHost） ----------
+    // ---------- 时钟点击：通知中心 / 日历浮层 ----------
+
+    /// <summary>
+    /// 时钟左键：默认打开通知中心（Phase 4-T5）；设置里关掉后回退月历浮层。
+    /// 面板自己处理"再点一次收起"（见 NotificationCenterWindow 的关闭时间戳）。
+    /// </summary>
+    private void OpenClockFlyout()
+    {
+        if (!SettingsService.Current.NotificationCenterEnabled || _clockButton is null)
+        {
+            OpenCalendar();
+            return;
+        }
+
+        var p = _clockButton.PointToScreen(new Point(0, _clockButton.ActualHeight));
+        NotificationCenterWindow.ShowOrToggle(Services.NotificationService.Current, p);
+    }
 
     private void OpenCalendar()
     {

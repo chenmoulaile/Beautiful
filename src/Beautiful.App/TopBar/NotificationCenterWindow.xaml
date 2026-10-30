@@ -1,0 +1,124 @@
+<Window x:Class="Beautiful.App.TopBar.NotificationCenterWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:chrome="clr-namespace:System.Windows.Shell;assembly=PresentationFramework"
+        Title="通知中心" Width="360" Height="640"
+        WindowStyle="None" ResizeMode="NoResize" ShowInTaskbar="False" Topmost="True"
+        WindowStartupLocation="Manual" UseLayoutRounding="True"
+        TextOptions.TextFormattingMode="Display"
+        FontFamily="{DynamicResource MacFont}"
+        Background="{DynamicResource MacWindowBackground}">
+    <!-- Phase 4-T5：Big Sur 通知中心（右侧贴边全高面板）。
+         非分层窗口 + WindowChrome + DWM 圆角：面板是纯文字界面，分层窗口会关掉 ClearType，
+         和设置页/关于卡同一处置（见 README 里"为什么不用 AllowsTransparency"）。
+         CaptionHeight=0：面板不拖动，整块区域都是内容（macOS 的通知中心也不可拖）。 -->
+    <chrome:WindowChrome.WindowChrome>
+        <chrome:WindowChrome CaptionHeight="0" ResizeBorderThickness="0"
+                             GlassFrameThickness="0" CornerRadius="0"
+                             UseAeroCaptionButtons="False"/>
+    </chrome:WindowChrome.WindowChrome>
+
+    <Window.Resources>
+        <!-- 清空按钮：文字型轻按钮，悬停才出现底色（与 macOS 通知中心"清除"同观感） -->
+        <Style x:Key="QuietButton" TargetType="Button">
+            <Setter Property="Background" Value="Transparent"/>
+            <Setter Property="BorderThickness" Value="0"/>
+            <Setter Property="Foreground" Value="{DynamicResource MacTextSecondary}"/>
+            <Setter Property="FontSize" Value="11"/>
+            <Setter Property="Padding" Value="7,3"/>
+            <Setter Property="Cursor" Value="Hand"/>
+            <Setter Property="FocusVisualStyle" Value="{x:Null}"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Button">
+                        <Border x:Name="Bd" Background="{TemplateBinding Background}" CornerRadius="5"
+                                Padding="{TemplateBinding Padding}">
+                            <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="Bd" Property="Background" Value="#18000000"/>
+                            </Trigger>
+                            <Trigger Property="IsPressed" Value="True">
+                                <Setter TargetName="Bd" Property="Background" Value="#28000000"/>
+                            </Trigger>
+                            <Trigger Property="IsEnabled" Value="False">
+                                <Setter Property="Opacity" Value="0.4"/>
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+    </Window.Resources>
+
+    <Border CornerRadius="12" Background="{DynamicResource MacWindowBackground}"
+            BorderBrush="{DynamicResource MacWindowBorder}" BorderThickness="1">
+        <Grid>
+            <Grid.RowDefinitions>
+                <RowDefinition Height="Auto"/>
+                <RowDefinition Height="*"/>
+            </Grid.RowDefinitions>
+
+            <!-- 标题栏：通知中心 + 清除（没有通知时置灰） -->
+            <Grid Grid.Row="0" Margin="16,12,12,6">
+                <TextBlock Text="通知中心" FontSize="13" FontWeight="SemiBold"
+                           Foreground="{DynamicResource MacTextPrimary}" VerticalAlignment="Center"/>
+                <Button x:Name="ClearButton" Style="{StaticResource QuietButton}" Content="清除"
+                        HorizontalAlignment="Right" VerticalAlignment="Center"
+                        ToolTip="清除全部通知（系统通知中心一并清空）" Click="Clear_Click"/>
+            </Grid>
+
+            <ScrollViewer x:Name="PanelScroll" Grid.Row="1" VerticalScrollBarVisibility="Auto"
+                          HorizontalScrollBarVisibility="Disabled" Padding="0,0,0,12">
+                <StackPanel Margin="12,0,12,0">
+
+                    <!-- 今天 widget：大时钟 + 日期 + 月历（Big Sur 通知中心顶部那块） -->
+                    <Border CornerRadius="10" Background="{DynamicResource MacControlFill}"
+                            Padding="14,12,14,12" Margin="0,0,0,10">
+                        <StackPanel>
+                            <Grid>
+                                <StackPanel>
+                                    <TextBlock Text="今天" FontSize="11"
+                                               Foreground="{DynamicResource MacTextTertiary}"/>
+                                    <TextBlock x:Name="ClockText" Text="--:--" FontSize="34" FontWeight="Light"
+                                               Foreground="{DynamicResource MacTextPrimary}" Margin="0,-2,0,0"/>
+                                    <TextBlock x:Name="DateText" Text="" FontSize="12"
+                                               Foreground="{DynamicResource MacTextSecondary}"/>
+                                </StackPanel>
+                            </Grid>
+                            <Border x:Name="CalendarHost" Margin="0,10,0,0" HorizontalAlignment="Left"/>
+                        </StackPanel>
+                    </Border>
+
+                    <!-- 通知区标题 + 未授权说明（后者只在读不到时出现） -->
+                    <Grid Margin="2,2,2,6">
+                        <TextBlock Text="通知" FontSize="11" FontWeight="SemiBold"
+                                   Foreground="{DynamicResource MacTextSecondary}"/>
+                        <TextBlock x:Name="CountText" FontSize="11" HorizontalAlignment="Right"
+                                   Foreground="{DynamicResource MacTextTertiary}"/>
+                    </Grid>
+
+                    <StackPanel x:Name="CardsHost"/>
+
+                    <!-- 空态 / 未授权态（同一块，文案不同；不把"读不到"画成"没有通知"） -->
+                    <Border x:Name="EmptyCard" CornerRadius="10" Background="{DynamicResource MacControlFill}"
+                            Padding="16,18,16,18" Visibility="Collapsed">
+                        <StackPanel>
+                            <TextBlock x:Name="EmptyTitle" Text="没有新通知" FontSize="12.5"
+                                       HorizontalAlignment="Center"
+                                       Foreground="{DynamicResource MacTextSecondary}"/>
+                            <TextBlock x:Name="EmptyDetail" Text="" FontSize="11" Margin="0,6,0,0"
+                                       TextWrapping="Wrap" TextAlignment="Center"
+                                       Foreground="{DynamicResource MacTextTertiary}"/>
+                            <Button x:Name="OpenSettingsButton" Content="打开通知设置…"
+                                    Style="{StaticResource QuietButton}" Margin="0,10,0,0"
+                                    HorizontalAlignment="Center" Visibility="Collapsed"
+                                    Click="OpenNotificationSettings_Click"/>
+                        </StackPanel>
+                    </Border>
+                </StackPanel>
+            </ScrollViewer>
+        </Grid>
+    </Border>
+</Window>

@@ -32,6 +32,12 @@ public sealed record AppSettings
     /// <summary>是否显示 macOS 风格顶栏（Finder 栏）。</summary>
     public bool TopBarEnabled { get; init; } = true;
 
+    /// <summary>
+    /// 顶栏时钟左键是否打开通知中心（Phase 4-T5）。默认开——Big Sur 的时钟点击就是通知中心；
+    /// 关掉则退回原来的月历浮层（给只想要日历、不要读系统通知的用户一条干净的退出路）。
+    /// </summary>
+    public bool NotificationCenterEnabled { get; init; } = true;
+
     // ---------- 顶栏时钟形态（v3.1 缺陷 3：此前顶栏只有一种写法，用户无法配置） ----------
     // 四个开关的**语义与组合规则全在 Core.TopBar.ClockFormat**（模板拼装 + 刷新步长），这里只是持久化载体；
     // 默认值 (false, true, true, true) 与 v3.0.0 顶栏逐字符一致，所以升级后观感不变。
