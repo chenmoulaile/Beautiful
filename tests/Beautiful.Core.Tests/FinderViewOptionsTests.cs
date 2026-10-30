@@ -135,7 +135,10 @@ public class FinderViewOptionsTests
     [Fact]
     public void 视图模式与排序列的字符串往返稳定()
     {
-        foreach (var mode in new[] { FinderViewMode.List, FinderViewMode.Columns, FinderViewMode.Icons })
+        foreach (var mode in new[]
+                 {
+                     FinderViewMode.List, FinderViewMode.Columns, FinderViewMode.Icons, FinderViewMode.Gallery
+                 })
         {
             Assert.Equal(mode, FinderViewOptionRules.ParseMode(FinderViewOptionRules.ModeName(mode)));
         }
@@ -150,7 +153,8 @@ public class FinderViewOptionsTests
     public void 无法识别的模式字符串回落列表视图()
     {
         Assert.Equal(FinderViewMode.List, FinderViewOptionRules.ParseMode(null));
-        Assert.Equal(FinderViewMode.List, FinderViewOptionRules.ParseMode("gallery"));
+        Assert.Equal(FinderViewMode.List, FinderViewOptionRules.ParseMode("carousel"));
+        Assert.Equal(FinderViewMode.Gallery, FinderViewOptionRules.ParseMode(" Gallery "));
         Assert.Equal(FinderViewMode.Icons, FinderViewOptionRules.ParseMode(" ICONS "));
     }
 }

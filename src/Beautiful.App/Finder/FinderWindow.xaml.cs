@@ -29,8 +29,9 @@ namespace Beautiful.App.Finder;
 /// 顶部条带由 <see cref="TitleBar_MouseLeftButtonDown"/> 自绘拖动。
 /// </para>
 /// <para>
-/// 三种视图（Phase 6-b）：列表（<see cref="FileList"/>）/ 分栏（<see cref="ColumnScroll"/>，
-/// 见 <c>FinderWindow.Columns.cs</c>）/ 图标（<see cref="IconList"/>，见 <c>FinderWindow.Icons.cs</c>）。
+/// 四种视图（Phase 6-b / 6-c）：列表（<see cref="FileList"/>）/ 分栏（<see cref="ColumnScroll"/>，
+/// 见 <c>FinderWindow.Columns.cs</c>）/ 图标（<see cref="IconList"/>，见 <c>FinderWindow.Icons.cs</c>）/
+/// 画廊（<see cref="GalleryHost"/>，见 <c>FinderWindow.Gallery.cs</c>）。
 /// 视图模式、排序列、图标尺寸、隐藏项开关按文件夹持久化到 <c>config/finder-view-options.json</c>，
 /// 归一化与容量上限由 Core 的 <see cref="FinderViewOptionRules"/> 负责。
 /// </para>
@@ -179,6 +180,7 @@ public partial class FinderWindow : Window
         {
             UpdateNameColumnWidth();
             RefreshColumnWidths();
+            ApplyGalleryImageFit();
         };
         Closed += (_, _) =>
         {
@@ -509,6 +511,10 @@ public partial class FinderWindow : Window
         _statusHintTimer.Stop();
         StatusText.Text = "正在载入…";
         RefreshColumns();
+        if (_viewMode == FinderViewMode.Gallery)
+        {
+            ResetGallery("正在载入…");
+        }
 
         _ = LoadDirectoryAsync(path, generation);
     }
@@ -531,6 +537,8 @@ public partial class FinderWindow : Window
             icons.Cancel();
             icons.Dispose();
         }
+
+        CancelGalleryThumbs();
     }
 
     /// <summary>
@@ -691,6 +699,11 @@ public partial class FinderWindow : Window
         IconList.ItemsSource = Array.Empty<FinderRow>();
         FileList.IsEnabled = true;
         RefreshColumns();
+        if (_viewMode == FinderViewMode.Gallery)
+        {
+            ResetGallery($"无法读取：{reason}");
+        }
+
         UpdateStatus();
     }
 
@@ -842,6 +855,10 @@ public partial class FinderWindow : Window
         {
             RefreshColumns();
         }
+        else if (_viewMode == FinderViewMode.Gallery)
+        {
+            RefreshGallery();
+        }
     }
 
     private void UpdateStatus()
@@ -954,11 +971,12 @@ public partial class FinderWindow : Window
         }
     }
 
-    /// <summary>当前视图下"选中的第一行"（三种视图各有一套选择，统一从这里取）。</summary>
+    /// <summary>当前视图下"选中的第一行"（四种视图各有一套选择，统一从这里取）。</summary>
     private FinderRow? SelectedRow() => _viewMode switch
     {
         FinderViewMode.Icons => IconList.SelectedItem as FinderRow,
         FinderViewMode.Columns => ColumnSelectedRow(),
+        FinderViewMode.Gallery => _gallerySelection,
         _ => FileList.SelectedItem as FinderRow
     };
 
@@ -1000,25 +1018,35 @@ public partial class FinderWindow : Window
         var ctrl = (Keyboard.Modifiers & ModifierKeys.Control) != 0;
         var shift = (Keyboard.Modifiers & ModifierKeys.Shift) != 0;
 
-        // 视图切换：⌘1/2/3（Ctrl 充当 ⌘）
+        // 视图切换：⌘1 图标 / ⌘2 列表 / ⌘3 分栏 / ⌘4 画廊（Ctrl 充当 ⌘）。
+        // 顺序与 macOS 访达一致，也与 Core FinderKeyMap 的映射一致——此前实现把 1 当列表，
+        // 与 Core 的纯函数表相反，两处只有一处是对的；这里以 macOS 与 Core 为准统一。
         if (ctrl && !shift && e.Key is Key.D1 or Key.NumPad1)
         {
             e.Handled = true;
-            SetViewMode(FinderViewMode.List);
+            SetViewMode(FinderViewMode.Icons);
             return;
         }
 
         if (ctrl && !shift && e.Key is Key.D2 or Key.NumPad2)
         {
             e.Handled = true;
-            SetViewMode(FinderViewMode.Columns);
+            SetViewMode(FinderViewMode.List);
             return;
         }
 
         if (ctrl && !shift && e.Key is Key.D3 or Key.NumPad3)
         {
             e.Handled = true;
-            SetViewMode(FinderViewMode.Icons);
+            SetViewMode(FinderViewMode.Columns);
+            return;
+        }
+
+        // 画廊视图：⌘4
+        if (ctrl && !shift && e.Key is Key.D4 or Key.NumPad4)
+        {
+            e.Handled = true;
+            SetViewMode(FinderViewMode.Gallery);
             return;
         }
 
@@ -1195,6 +1223,17 @@ public partial class FinderWindow : Window
             }
         }
 
+        // 画廊视图：←/→/↑/↓ 在胶片条上移动（两端夹住），预览跟着换
+        if (_viewMode == FinderViewMode.Gallery && e.OriginalSource is not TextBox
+            && e.Key is Key.Left or Key.Right or Key.Up or Key.Down)
+        {
+            if (HandleGalleryArrow(e.Key))
+            {
+                e.Handled = true;
+                return;
+            }
+        }
+
         // 搜索框里的 Enter = 升级为"这台 Mac"递归搜索
         if (e.Key == Key.Enter && SearchBox.IsKeyboardFocusWithin)
         {
@@ -1205,7 +1244,8 @@ public partial class FinderWindow : Window
 
         // Enter = 重命名（macOS 语义；打开用双击 / ⌘↓ / ⌘O），F2 同义。
         if (e.Key == Key.Enter && e.OriginalSource is not TextBox && Keyboard.FocusedElement is not Button
-            && (FileList.IsKeyboardFocusWithin || IconList.IsKeyboardFocusWithin || IsColumnFocusWithin()))
+            && (FileList.IsKeyboardFocusWithin || IconList.IsKeyboardFocusWithin || IsColumnFocusWithin()
+                || (GalleryHost is not null && GalleryHost.IsKeyboardFocusWithin)))
         {
             e.Handled = true;
             BeginRename();
@@ -1314,6 +1354,8 @@ public partial class FinderWindow : Window
     private void Columns_Click(object sender, RoutedEventArgs e) => SetViewMode(FinderViewMode.Columns);
 
     private void Grid_Click(object sender, RoutedEventArgs e) => SetViewMode(FinderViewMode.Icons);
+
+    private void Gallery_Click(object sender, RoutedEventArgs e) => SetViewMode(FinderViewMode.Gallery);
 
     /// <summary>非模态提示：占用状态栏 3 秒后恢复项目数/可用空间，不弹窗、不阻塞操作。</summary>
     private void ShowStatusHint(string message)

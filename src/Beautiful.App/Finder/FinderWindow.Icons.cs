@@ -147,7 +147,7 @@ public partial class FinderWindow
     {
         if (_viewMode != FinderViewMode.Icons)
         {
-            ShowStatusHint("图标尺寸只在图标视图可调（Ctrl+3 切换）");
+            ShowStatusHint("图标尺寸只在图标视图可调（Ctrl+1 切换）");
             return;
         }
 

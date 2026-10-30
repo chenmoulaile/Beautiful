@@ -344,11 +344,13 @@
                             ToolTip="图标大小"
                             ValueChanged="IconSizeSlider_ValueChanged"/>
                     <Button x:Name="ListViewButton" Style="{StaticResource ToolButton}" Content="≣"
-                            FontSize="14" ToolTip="列表视图 (Ctrl+1)" Click="List_Click"/>
+                            FontSize="14" ToolTip="列表视图 (Ctrl+2)" Click="List_Click"/>
                     <Button x:Name="ColumnsButton" Style="{StaticResource ToolButton}" Content="▥"
-                            FontSize="14" ToolTip="分栏视图 (Ctrl+2)" Click="Columns_Click"/>
+                            FontSize="14" ToolTip="分栏视图 (Ctrl+3)" Click="Columns_Click"/>
                     <Button x:Name="GridButton" Style="{StaticResource ToolButton}" Content="▦"
-                            FontSize="14" ToolTip="图标视图 (Ctrl+3)" Click="Grid_Click"/>
+                            FontSize="14" ToolTip="图标视图 (Ctrl+1)" Click="Grid_Click"/>
+                    <Button x:Name="GalleryButton" Style="{StaticResource ToolButton}" Content="⬓"
+                            FontSize="14" ToolTip="画廊视图 (Ctrl+4)" Click="Gallery_Click"/>
                 </StackPanel>
             </Grid>
         </Border>
@@ -361,7 +363,7 @@
             </ScrollViewer>
         </Border>
 
-        <!-- ============ 侧栏 + 内容区（列表 / 分栏 / 图标 三视图） ============ -->
+        <!-- ============ 侧栏 + 内容区（列表 / 分栏 / 图标 / 画廊 四视图） ============ -->
         <Grid Grid.Row="2">
             <Grid.ColumnDefinitions>
                 <ColumnDefinition Width="190"/>
@@ -477,6 +479,39 @@
                         </DataTemplate>
                     </ListBox.ItemTemplate>
                 </ListBox>
+
+                <!-- 画廊视图（Phase 6-c）：上方大预览 + 下方横向胶片条。
+                     胶片条容器由代码按 Core FinderGallery 度量排布；这里只给结构与样式。 -->
+                <Grid x:Name="GalleryHost" Visibility="Collapsed" Focusable="True" Background="Transparent">
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="*"/>
+                        <RowDefinition Height="96"/>
+                    </Grid.RowDefinitions>
+
+                    <!-- 预览底：极淡的底色把图片与窗口背景分开，双击 = 打开（macOS 画廊语义） -->
+                    <Border x:Name="GalleryPreviewFrame" Grid.Row="0" Margin="26,20,26,14"
+                            Background="#08000000" CornerRadius="6"
+                            MouseLeftButtonDown="GalleryPreview_MouseLeftButtonDown">
+                        <Grid>
+                            <ContentControl x:Name="GalleryPreviewContent"
+                                            HorizontalAlignment="Center" VerticalAlignment="Center"
+                                            IsTabStop="False" Focusable="False"/>
+                            <TextBlock x:Name="GalleryEmptyHint" Text="选择项目以预览" FontSize="13"
+                                       HorizontalAlignment="Center" VerticalAlignment="Center"
+                                       Foreground="{DynamicResource MacTextTertiary}" Visibility="Collapsed"/>
+                        </Grid>
+                    </Border>
+
+                    <Border Grid.Row="1" Background="#0A808080"
+                            BorderBrush="#22808080" BorderThickness="0,1,0,0">
+                        <ScrollViewer x:Name="GalleryScroll" HorizontalScrollBarVisibility="Hidden"
+                                      VerticalScrollBarVisibility="Disabled" Padding="0"
+                                      PreviewMouseWheel="GalleryScroll_PreviewMouseWheel">
+                            <StackPanel x:Name="GalleryStrip" Orientation="Horizontal"
+                                        Margin="10,0,10,0" VerticalAlignment="Center"/>
+                        </ScrollViewer>
+                    </Border>
+                </Grid>
 
                 <!-- 框选层：不吃鼠标事件，只负责画那个半透明矩形 -->
                 <Canvas x:Name="RubberBandLayer" IsHitTestVisible="False" Visibility="Collapsed">

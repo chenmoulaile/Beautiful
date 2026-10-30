@@ -47,7 +47,7 @@ public partial class FinderWindow
 
     // ---------- 选中集合 ----------
 
-    /// <summary>当前视图的选中行（顺序即控件顺序；分栏视图只有当前列的一项）。</summary>
+    /// <summary>当前视图的选中行（顺序即控件顺序；分栏视图只有当前列的一项，画廊视图单选）。</summary>
     private List<FinderRow> SelectedRows()
     {
         switch (_viewMode)
@@ -56,6 +56,8 @@ public partial class FinderWindow
                 return IconList.SelectedItems.OfType<FinderRow>().ToList();
             case FinderViewMode.Columns:
                 return ColumnSelectedRow() is { } columnRow ? [columnRow] : [];
+            case FinderViewMode.Gallery:
+                return _gallerySelection is { } galleryRow ? [galleryRow] : [];
             default:
                 return FileList.SelectedItems.OfType<FinderRow>().ToList();
         }
@@ -293,7 +295,7 @@ public partial class FinderWindow
     // ---------- 重命名（就地编辑） ----------
 
     /// <summary>
-    /// Enter / F2：在当前选中项上浮出编辑框（Popup 定位到条目容器上，三种视图通用）。
+    /// Enter / F2：在当前选中项上浮出编辑框（Popup 定位到条目容器上，四种视图通用）。
     /// 提交走 Shell 的 <c>RenameItem</c>（保留扩展名提示、处理只读/占用等系统错误）。
     /// </summary>
     private void BeginRename()
@@ -401,7 +403,7 @@ public partial class FinderWindow
         _renameRow = null;
     }
 
-    /// <summary>找到某行对应的可视容器（三种视图各自的列表控件）。</summary>
+    /// <summary>找到某行对应的可视容器（四种视图各自的可视容器）。</summary>
     private FrameworkElement? ContainerOf(FinderRow row)
     {
         switch (_viewMode)
@@ -418,6 +420,8 @@ public partial class FinderWindow
                 }
 
                 return null;
+            case FinderViewMode.Gallery:
+                return _galleryThumbs.TryGetValue(row, out var thumb) ? thumb : null;
             default:
                 return FileList.ItemContainerGenerator.ContainerFromItem(row) as ListViewItem;
         }
@@ -500,6 +504,10 @@ public partial class FinderWindow
                 }
 
                 break;
+            case FinderViewMode.Gallery:
+                // 画廊是单选视图：不谎报"全选了"，直接说明边界
+                ShowStatusHint("画廊视图为单选（Ctrl+1/2/3 切到其它视图可多选）");
+                break;
             default:
                 FileList.SelectAll();
                 FileList.Focus();
@@ -510,7 +518,7 @@ public partial class FinderWindow
     // ---------- 右键菜单 ----------
 
     /// <summary>
-    /// 三视图共用的 macOS 右键菜单。每次打开时按当前选中状态重建（项目数、剪贴板状态都会变），
+    /// 四视图共用的 macOS 右键菜单。每次打开时按当前选中状态重建（项目数、剪贴板状态都会变），
     /// 不用命令绑定那套——菜单项只有十来个，重建比维护 CanExecute 便宜。
     /// </summary>
     private ContextMenu BuildContextMenu(FinderRow? row)

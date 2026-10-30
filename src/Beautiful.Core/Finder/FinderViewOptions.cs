@@ -3,7 +3,7 @@ using System.Collections.Generic;
 
 namespace Beautiful.Core.Finder;
 
-/// <summary>访达的三种视图（Phase 6-b）：列表 / 分栏 / 图标。工具栏四态里的第四态画廊留到 6-c。</summary>
+/// <summary>访达的四种视图（Phase 6-b / 6-c）：列表 / 分栏 / 图标 / 画廊。</summary>
 public enum FinderViewMode
 {
     /// <summary>列表视图（可排序的列，Phase 6-a）。</summary>
@@ -13,7 +13,10 @@ public enum FinderViewMode
     Columns,
 
     /// <summary>图标视图（网格 + 框选，Phase 6-b）。</summary>
-    Icons
+    Icons,
+
+    /// <summary>画廊视图（大预览 + 底部胶片条，Phase 6-c）。</summary>
+    Gallery
 }
 
 /// <summary>
@@ -89,6 +92,7 @@ public static class FinderViewOptionRules
     {
         FinderViewMode.Columns => "columns",
         FinderViewMode.Icons => "icons",
+        FinderViewMode.Gallery => "gallery",
         _ => "list"
     };
 
@@ -97,6 +101,7 @@ public static class FinderViewOptionRules
     {
         "columns" or "column" => FinderViewMode.Columns,
         "icons" or "icon" or "grid" => FinderViewMode.Icons,
+        "gallery" => FinderViewMode.Gallery,
         _ => FinderViewMode.List
     };
 

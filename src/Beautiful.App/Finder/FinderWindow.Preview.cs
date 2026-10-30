@@ -140,6 +140,12 @@ public partial class FinderWindow
             return;
         }
 
+        if (_viewMode == FinderViewMode.Gallery)
+        {
+            SelectGalleryRow(row);
+            return;
+        }
+
         ListBox list = _viewMode == FinderViewMode.Icons ? IconList : FileList;
         list.SelectedItem = row;
         list.ScrollIntoView(row);
@@ -162,6 +168,10 @@ public partial class FinderWindow
                 break;
             case FinderViewMode.Columns:
                 current = ColumnSelectedRow();
+                rows = current is null ? [] : [current];
+                break;
+            case FinderViewMode.Gallery:
+                current = _gallerySelection;
                 rows = current is null ? [] : [current];
                 break;
             default:

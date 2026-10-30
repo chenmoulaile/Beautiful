@@ -467,9 +467,11 @@ dotnet publish src/Beautiful.App -c Release -r win-x64 --self-contained true -p:
 | 标签页（P6-c） | `FinderTabSet`（每标签独立 `NavigationHistory`）+ Big Sur 标签条（多标签才出现）；⌘T 新建（插在当前右侧）、⌘W 关标签（最后一个才关窗）；标签点击切换并恢复各自视图选项 | `FinderTabSetTests`（14）；真机 `--tabs` 截图：4 标签、激活态高亮 |
 | 搜索（P6-c） | 当前文件夹实时过滤（零 IO）+「这台 Mac」受控递归：`FinderSearchLimits` 深度 8 / 2000 条 / 8 秒、跳过重解析点（防目录环）；结果带「位置」列；Esc 退出搜索 | `FinderSearchTests`（9）；真机 `--search .cs`：776 命中、状态栏文案正确；**不是全局索引**（Everything 式索引不在范围） |
 | Dock 互通（P6-c） | Dock 文件夹堆栈「在访达中打开」→ 自家访达（目录直接导航，文件打开所在目录） | 代码路径；真机点击 UNVERIFIED(owner) |
-| 画廊视图 / 标签拖出 | **未做** | 画廊（大图 + 胶片条）与拖标签出窗仍在 P6-c 清单上，未实现 |
+| 画廊视图（P6-c 收尾） | 第四种视图（⌘4 / 工具栏第四态）：上方大预览 + 下方横向胶片条。布局/容量/命中/滚动/方向键/大图缩放全部是 Core `FinderGallery` 纯函数；图片条目自己后台解码 84×62 缩略图（shell 图标对 jpg 只会给"图片程序"图标），其余回退 shell 图标+字形；文本给头 40 行等宽预览（每行字符数按可用宽度换算）、文件夹/PDF/媒体给大图标 + 名称/种类/大小/时间的信息卡；←/→/↑/↓ 移动选中、空格 Quick Look 带当前项、双击缩略图/预览打开 | `FinderGalleryTests`（10 条：容量/内容宽/原点/命中含 6px 间隙/滚动居中与两端夹取/方向键夹取/不放大小图/非法源尺寸）；`--finder --path <dir> --view gallery --select <file>` 真机截图 `logs/6c-gallery.png`（412 项、真实缩略图、蓝框选中）、`6c-gallery-text.png`（README 文本预览）、`6c-gallery-folder.png`（文件夹信息卡）；列表/图标视图回归截图 `6c-regress-*.png`。**画廊为单选**（⌘A 只给提示），胶片条非虚拟化、缩略图解码只做前 200 条——边界已写进代码注释 |
+| 视图快捷键顺序修正 | 审计发现 Core `FinderKeyMap` 写的是 ⌘1 图标/⌘2 列表/⌘3 分栏/⌘4 画廊，而窗口实现把 ⌘1 当列表——两处相反。以 macOS 访达为准统一为 ⌘1 图标、⌘2 列表、⌘3 分栏、⌘4 画廊，工具栏提示同步 | `FinderKeyMapTests` 既有映射未变；`FinderViewOptions` 往返测试补 Gallery；窗口键位与 Core 表一致 |
+| 标签拖出 / 注册为文件夹打开处理器 | **未做** | 拖标签出窗仍在 P6-c 清单上；DF-1（改写文件夹打开处理器）按 §16.8 留给所有者决策 |
 
 > Phase 6-b 已完成分栏/图标两视图、Quick Look（含 PDF 首页渲染）、显示简介与每文件夹视图选项；
-> Phase 6-c 已完成文件操作、标签页、搜索与 Dock 互通。
-> **剩余：画廊视图、拖标签出窗、注册为文件夹打开处理器（决策点 DF-1）**。
+> Phase 6-c 已完成文件操作、标签页、搜索、Dock 互通与**画廊视图**（四视图齐了）。
+> **剩余：拖标签出窗、注册为文件夹打开处理器（决策点 DF-1）**。
 > 真机截图证据存于 `logs/6b-*.png` / `logs/6c-*.png`（不入库，`logs/` 已 gitignore）；注入类/拖拽类交互仍为 `UNVERIFIED(owner)`。

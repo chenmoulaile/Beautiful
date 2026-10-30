@@ -111,6 +111,16 @@ public partial class FinderWindow
         {
             ApplyIconLayout();
         }
+        else if (mode == FinderViewMode.Gallery)
+        {
+            RefreshGallery();
+        }
+        else
+        {
+            // 离开画廊：作废在跑的大图解码与缩略图解码，避免切回来时被旧结果覆盖
+            CancelGalleryPreview();
+            CancelGalleryThumbs();
+        }
 
         if (persist)
         {
@@ -120,7 +130,7 @@ public partial class FinderWindow
         UpdateStatus();
     }
 
-    /// <summary>把"当前视图模式/图标尺寸"同步到三个内容宿主、工具栏按钮与滑杆（不读盘、不排序）。</summary>
+    /// <summary>把"当前视图模式/图标尺寸"同步到四个内容宿主、工具栏按钮与滑杆（不读盘、不排序）。</summary>
     private void SyncViewChrome()
     {
         if (FileList is null || ColumnScroll is null || IconList is null)
@@ -131,6 +141,11 @@ public partial class FinderWindow
         FileList.Visibility = _viewMode == FinderViewMode.List ? Visibility.Visible : Visibility.Collapsed;
         ColumnScroll.Visibility = _viewMode == FinderViewMode.Columns ? Visibility.Visible : Visibility.Collapsed;
         IconList.Visibility = _viewMode == FinderViewMode.Icons ? Visibility.Visible : Visibility.Collapsed;
+        if (GalleryHost is not null)
+        {
+            GalleryHost.Visibility = _viewMode == FinderViewMode.Gallery ? Visibility.Visible : Visibility.Collapsed;
+        }
+
         RubberBandLayer.Visibility = _viewMode == FinderViewMode.Icons ? Visibility.Visible : Visibility.Collapsed;
         if (_viewMode != FinderViewMode.Icons)
         {
@@ -171,6 +186,7 @@ public partial class FinderWindow
         ListViewButton.Background = _viewMode == FinderViewMode.List ? active : normal;
         ColumnsButton.Background = _viewMode == FinderViewMode.Columns ? active : normal;
         GridButton.Background = _viewMode == FinderViewMode.Icons ? active : normal;
+        GalleryButton.Background = _viewMode == FinderViewMode.Gallery ? active : normal;
     }
 
     // ---------- 列栈 ----------
@@ -615,8 +631,12 @@ public partial class FinderWindow
             };
     }
 
-    /// <summary>读文本文件头几行（最多 4KB），失败返回空串——预览列永远不因坏文件报错。</summary>
-    private static string ReadHeadLines(string path, int maxLines)
+    /// <summary>
+    /// 读文本文件头几行（最多 4KB），失败返回空串——预览列永远不因坏文件报错。
+    /// <paramref name="maxChars"/> 按调用方的可用宽度给（列预览 120 字符；画廊大预览按宽度算），
+    /// 因为等宽字体的行宽是物理宽度问题：给多了就会被容器直接裁掉，给的字符数以内才有省略号。
+    /// </summary>
+    private static string ReadHeadLines(string path, int maxLines, int maxChars = 120)
     {
         try
         {
@@ -632,7 +652,7 @@ public partial class FinderWindow
                     break;
                 }
 
-                lines.Add(line.Length > 120 ? line[..120] + "…" : line);
+                lines.Add(line.Length > maxChars ? line[..maxChars] + "…" : line);
             }
 
             return string.Join(Environment.NewLine, lines);

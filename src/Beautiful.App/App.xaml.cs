@@ -173,10 +173,14 @@ public partial class App : Application
             if (e.Args.Contains("--launchpad", StringComparer.OrdinalIgnoreCase))
                 Launcher.LaunchpadWindow.ShowOrToggle(_launcher);
             // 7.3 --finder：访达窗口（Phase 6-a 骨架；单例，关闭后可再次打开）
-            //     --view list|columns|icons：直接以指定视图打开（截图/验收入口，不写回该文件夹的持久化选项）
+            //     --view list|columns|icons|gallery：直接以指定视图打开（截图/验收入口，不写回该文件夹的持久化选项）
+            //     --path <dir>：直接打开指定目录（截图/验收入口；正常启动始终用该标签记住的目录）
             if (e.Args.Contains("--finder", StringComparer.OrdinalIgnoreCase))
             {
-                Finder.FinderWindow.ShowSingleton(view: ParseViewArg(e.Args), select: ParseArgValue(e.Args, "--select"));
+                Finder.FinderWindow.ShowSingleton(
+                    ParseArgValue(e.Args, "--path"),
+                    ParseViewArg(e.Args),
+                    ParseArgValue(e.Args, "--select"));
             }
             // 7.4 --quicklook <path>：Quick Look 预览（Phase 6-b 起步；验证/截图入口，单例）
             var quickLookIndex = Array.FindIndex(e.Args,
@@ -815,7 +819,7 @@ public partial class App : Application
     /// 清理全程 try/finally：任何一步抛异常都必须走到 Shutdown（T19 QA）——否则 _exiting 卡死、
     /// 后续退出尝试全部被吞；finally 兜底后 OnExit 仍会幂等重放剩余清理。</summary>
     /// <summary>
-    /// <c>--view list|columns|icons</c> → 访达初始视图。缺省或无法识别返回 <c>null</c>，
+    /// <c>--view list|columns|icons|gallery</c> → 访达初始视图。缺省或无法识别返回 <c>null</c>，
     /// 表示沿用该文件夹上次记住的视图（正常启动路径）。
     /// </summary>
     private static FinderViewMode? ParseViewArg(string[] args)
@@ -832,6 +836,7 @@ public partial class App : Application
             "list" => FinderViewMode.List,
             "columns" or "column" => FinderViewMode.Columns,
             "icons" or "icon" => FinderViewMode.Icons,
+            "gallery" => FinderViewMode.Gallery,
             _ => null
         };
     }
