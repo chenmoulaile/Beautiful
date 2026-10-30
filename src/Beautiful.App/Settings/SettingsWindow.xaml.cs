@@ -152,7 +152,7 @@ public partial class SettingsWindow : Window
         BounceCheck.IsChecked = s.BounceEnabled;
         CapsuleCheck.IsChecked = s.ShowMediaCapsule;
         DockWidgetCheck.IsChecked = s.DockWidgetEnabled;
-        DockAutoHideCheck.IsChecked = s.DockAutoHide;
+        DockHideCombo.SelectedIndex = s.DockHideMode switch { "auto" => 1, "dim" => 2, _ => 0 };
         WindowOpenAnimCheck.IsChecked = s.WindowOpenAnimation;
         DockEdgeCombo.SelectedIndex = s.DockEdge switch { "left" => 1, "right" => 2, _ => 0 };
         HidePanelCheck.IsChecked = s.HidePanelOnDeactivate;
@@ -689,11 +689,12 @@ public partial class SettingsWindow : Window
         if (on) Beautiful.App.Services.WindowOpenAnimator.Reset();
     }
 
-    /// <summary>Dock 自动隐藏（P3-T5 隐藏模式）：立即生效，不需要重启 Dock。</summary>
-    private void DockAutoHide_Changed(object sender, RoutedEventArgs e)
+    /// <summary>Dock 隐藏方式（P3-T5）：常显 / 自动隐藏 / 半透明，立即生效。</summary>
+    private void DockHide_Changed(object sender, SelectionChangedEventArgs e)
     {
         if (_loading) return;
-        App.ApplyDockAutoHide(DockAutoHideCheck.IsChecked == true);
+        var mode = DockHideCombo.SelectedIndex switch { 1 => "auto", 2 => "dim", _ => "off" };
+        App.ApplyDockHideMode(mode);
     }
 
     /// <summary>Dock 小组件开关（Phase 7-T3）：立即重排行尾，不需要重启 Dock。</summary>

@@ -978,6 +978,15 @@ public partial class App : Application
     /// <summary>外部请求打开设置窗口。<see cref="OpenSettings"/> 自己是单例的，重复请求只会激活。</summary>
     internal static void OpenSettingsFromExternal() => (Current as App)?.OpenSettings();
 
+    /// <summary>设置页切换 Dock 隐藏方式：off / auto / dim，立即生效。</summary>
+    internal static void ApplyDockHideMode(string mode)
+    {
+        if (Current is App { _dock: { } dock })
+        {
+            dock.ApplyHideMode(mode);
+        }
+    }
+
     /// <summary>设置页切换 Dock 停靠边（实验）：左右边走竖排面板并释放底部 AppBar。</summary>
     internal static void ApplyDockEdge(string edge)
     {

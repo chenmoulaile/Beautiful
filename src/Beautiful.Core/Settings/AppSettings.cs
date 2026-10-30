@@ -43,6 +43,13 @@ public sealed record AppSettings
     public bool DockAutoHide { get; init; }
 
     /// <summary>
+    /// Dock 隐藏模式（P3-T5 剩余两档）：<c>off</c>（常显）/ <c>auto</c>（自动隐藏，滑下留 4px）/
+    /// <c>dim</c>（半透明：光标离开后整条降到 45% 不透明度，鼠标移上去立刻恢复）。
+    /// 与 <see cref="DockAutoHide"/> 同时存在：布尔项是旧配置的兼容入口，字符串是完整模式。
+    /// </summary>
+    public string DockHideMode { get; init; } = "off";
+
+    /// <summary>
     /// Dock 停靠边（实验功能）：<c>bottom</c>（默认）/ <c>left</c> / <c>right</c>。
     /// <para>
     /// 左右停靠走一块独立的竖排面板，**不参与** DockSurface 的放大场、倒影与拖放排序——

@@ -369,7 +369,7 @@ public partial class DockWindow : AcrylicWindow
         _badges = new DockBadgeService(_vm, Surface, Dispatcher);
         _progress = new TaskbarProgressService(Surface, Dispatcher);
         InitWidget();
-        ApplyAutoHide(SettingsService.Current.DockAutoHide, persist: false);
+        ApplyHideMode(SettingsService.Current.DockHideMode, persist: false);
         ApplyEdge(SettingsService.Current.DockEdge, persist: false);
     }
 
@@ -503,6 +503,67 @@ public partial class DockWindow : AcrylicWindow
             (_, _) => TickAutoHide(), Dispatcher);
         _autoHideTimer.Start();
         Logger.Info("Dock 自动隐藏已开启（光标离开 500ms 后滑下，触底滑回）");
+    }
+
+    /// <summary>
+    /// 切换到指定隐藏模式（P3-T5）：<c>off</c> 常显、<c>auto</c> 自动隐藏、<c>dim</c> 半透明。
+    /// 三种模式互斥，切换时先把上一种的副作用还原（不透明恢复、窗口归位）。
+    /// </summary>
+    public void ApplyHideMode(string mode, bool persist = true)
+    {
+        var normalized = (mode ?? "off").Trim().ToLowerInvariant() switch
+        {
+            "auto" => "auto",
+            "dim" => "dim",
+            _ => "off"
+        };
+
+        if (persist)
+        {
+            SettingsService.UpdateAndSave(SettingsService.Current with
+            {
+                DockHideMode = normalized,
+                DockAutoHide = normalized == "auto"       // 旧布尔项跟随新模式，避免两处不一致
+            });
+        }
+
+        // 先回到"常显 + 不透明"，再按新模式生效：切模式不该留下上一种的残影。
+        Opacity = 1.0;
+        ApplyAutoHide(normalized == "auto", persist: false);
+
+        if (normalized == "dim")
+        {
+            _dimTimer ??= new System.Windows.Threading.DispatcherTimer(
+                TimeSpan.FromMilliseconds(120), System.Windows.Threading.DispatcherPriority.Background,
+                (_, _) => TickDim(), Dispatcher);
+            _dimTimer.Start();
+        }
+        else
+        {
+            _dimTimer?.Stop();
+            _dimTimer = null;
+        }
+
+        Logger.Info($"Dock 隐藏模式：{normalized}");
+    }
+
+    private System.Windows.Threading.DispatcherTimer? _dimTimer;
+
+    /// <summary>半透明模式：光标不在 Dock 上时降到 45%，移上去立刻回 100%。</summary>
+    private void TickDim()
+    {
+        if (_closing || !NativeMethods.GetCursorPos(out var cursor))
+        {
+            return;
+        }
+
+        var inside = cursor.X >= _screenRect.Left && cursor.X <= _screenRect.Right
+                     && cursor.Y >= _screenRect.Top && cursor.Y <= _screenRect.Bottom;
+        var target = inside ? 1.0 : 0.45;
+        if (Math.Abs(Opacity - target) > 0.01)
+        {
+            Opacity = target;
+        }
     }
 
     private void TickAutoHide()

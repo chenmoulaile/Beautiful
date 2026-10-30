@@ -657,8 +657,15 @@
                                   Content="新窗口淡入（实验：跨进程不保证生效）"
                                   Margin="0,8,0,0"
                                   Checked="WindowOpenAnim_Changed" Unchecked="WindowOpenAnim_Changed"/>
-                        <CheckBox x:Name="DockAutoHideCheck" Content="自动隐藏 Dock（光标离开 0.5 秒后滑下，触底滑回）"
-                                  Margin="0,8,0,0" Checked="DockAutoHide_Changed" Unchecked="DockAutoHide_Changed"/>
+                        <StackPanel Orientation="Horizontal" Margin="0,8,0,0">
+                            <TextBlock Text="Dock 隐藏方式" VerticalAlignment="Center"/>
+                            <ComboBox x:Name="DockHideCombo" Width="160" Margin="10,0,0,0"
+                                      SelectionChanged="DockHide_Changed">
+                                <ComboBoxItem Content="常显"/>
+                                <ComboBoxItem Content="自动隐藏（滑下留 4px）"/>
+                                <ComboBoxItem Content="半透明（离开时 45%）"/>
+                            </ComboBox>
+                        </StackPanel>
                         <CheckBox x:Name="DockWidgetCheck" Content="在 Dock 行尾显示时钟 / 天气小组件"
                                   Margin="0,8,0,0" Checked="DockWidget_Changed" Unchecked="DockWidget_Changed"/>
                         <CheckBox x:Name="CapsuleCheck" Content="在 Dock 显示媒体胶囊"
