@@ -116,11 +116,12 @@ public partial class VolumeOsdWindow : Window
         {
             var segment = new Rectangle
             {
-                Width = 8,
-                Height = 12,
+                // 6×16 的竖条 + 3 间距：macOS 的音量格是"细高条"，横条会看着像电池电量。
+                Width = 6,
+                Height = 16,
                 RadiusX = 2,
                 RadiusY = 2,
-                Margin = new Thickness(i == 0 ? 0 : 2, 0, 0, 0),
+                Margin = new Thickness(i == 0 ? 0 : 3, 0, 0, 0),
                 Fill = SegmentIdleBrush()
             };
             _segments.Add(segment);
@@ -175,7 +176,8 @@ public partial class VolumeOsdWindow : Window
         }
 
         var leftPx = monitor.Work.Left + ((monitor.Work.Width - widthPx) / 2);
-        var topPx = monitor.Work.Top + (int)Math.Round(56 * scale);
+        // 顶部 1/8 处（macOS 的 OSD 靠近上沿但不是贴着菜单栏）；小屏也至少留 40 DIP，避免被顶栏压住。
+        var topPx = monitor.Work.Top + (int)Math.Round(Math.Max(40, monitor.Work.Height / 8.0) * scale);
 
         var handle = new System.Windows.Interop.WindowInteropHelper(this).Handle;
         if (handle == IntPtr.Zero)
