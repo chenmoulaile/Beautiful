@@ -6,6 +6,7 @@ using System.Windows.Controls;
 using System.Windows.Input;
 using System.Windows.Media;
 using System.Windows.Shapes;
+using System.Windows.Threading;
 using Beautiful.App.Services;
 using Beautiful.Core.Dock;
 // UseWindowsForms=true + ImplicitUsings 引入了 System.Drawing 全局命名空间，
@@ -121,6 +122,13 @@ public sealed class DockSurface : Canvas
     private readonly Dictionary<string, Border> _progressFills = new(StringComparer.Ordinal);
     private readonly Dictionary<string, (double Fraction, DockProgressState State)> _progressValues =
         new(StringComparer.Ordinal);
+
+    /// <summary>各条目进度条的**目标**宽度（DIP）。实际宽度由 16ms 定时器逐帧逼近，
+    /// 这样 300ms 采样一次也不会一格一格地跳。</summary>
+    private readonly Dictionary<string, double> _progressTargetWidth = new(StringComparer.Ordinal);
+
+    /// <summary>进度条插值时钟（只在有差值时运行；全部到位即停，空闲零开销）。</summary>
+    private DispatcherTimer? _progressAnim;
 
     /// <summary>逐帧几何状态（下标 = 条目下标，与 _containers 对齐）。</summary>
     private double[] _cur = Array.Empty<double>();     // 当前（阻尼后）scale
@@ -797,9 +805,58 @@ public sealed class DockSurface : Canvas
         track.Visibility = Visibility.Visible;
         var width = track.Width;
         fill.Background = ProgressBrush(value.State);
-        fill.Width = value.State == DockProgressState.Indeterminate
-            ? width * DockProgressBar.IndeterminateSegment   // 静态段：不做动画（本项只做"看得见进度"）
+
+        // 不直接写 Width，而是记目标值交给插值时钟逼近：采样是 300ms 一次的，
+        // 直接赋值就是"每 300ms 跳一格"；逐帧线性靠近看起来才像原生任务栏。
+        _progressTargetWidth[itemId] = value.State == DockProgressState.Indeterminate
+            ? width * DockProgressBar.IndeterminateSegment
             : width * DockProgressBar.Clamp(value.Fraction);
+
+        if (double.IsNaN(fill.Width))
+        {
+            fill.Width = 0;
+        }
+
+        if (_progressAnim is null)
+        {
+            _progressAnim = new DispatcherTimer(TimeSpan.FromMilliseconds(16), DispatcherPriority.Render,
+                (_, _) => AnimateProgress(), Dispatcher);
+        }
+
+        if (!_progressAnim.IsEnabled)
+        {
+            _progressAnim.Start();
+        }
+    }
+
+    /// <summary>每帧把填充宽度向目标值靠近 35%，差 0.4 DIP 以内直接吸附并停表。</summary>
+    private void AnimateProgress()
+    {
+        var active = false;
+        foreach (var pair in _progressTargetWidth)
+        {
+            if (!_progressFills.TryGetValue(pair.Key, out var fill))
+            {
+                continue;
+            }
+
+            var target = pair.Value;
+            var current = double.IsNaN(fill.Width) ? 0 : fill.Width;
+            var delta = target - current;
+            if (Math.Abs(delta) < 0.4)
+            {
+                fill.Width = target;
+                continue;
+            }
+
+            fill.Width = current + (delta * 0.35);
+            active = true;
+        }
+
+        if (!active)
+        {
+            _progressAnim?.Stop();
+        }
     }
 
     /// <summary>进度条颜色：正常白、出错红、暂停黄（与 Windows 任务栏语义一致）。</summary>
