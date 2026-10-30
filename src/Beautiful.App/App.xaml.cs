@@ -161,6 +161,9 @@ public partial class App : Application
             // 7.2 --launchpad：启动台（验证/截图入口；与 F4 同一窗口）
             if (e.Args.Contains("--launchpad", StringComparer.OrdinalIgnoreCase))
                 Launcher.LaunchpadWindow.ShowOrToggle(_launcher);
+            // 7.3 --finder：访达窗口（Phase 6-a 骨架；单例，关闭后可再次打开）
+            if (e.Args.Contains("--finder", StringComparer.OrdinalIgnoreCase))
+                Finder.FinderWindow.ShowSingleton();
 
             // 8. 托盘最后就位（SMTC 已随 Dock 构造期异步初始化，失败仅记日志）
             _tray = new TrayIconManager(
