@@ -48,7 +48,7 @@ namespace Beautiful.App.Switcher;
 /// <c>ShowActivated=false</c> + <c>WS_EX_NOACTIVATE</c> + <c>Focusable=false</c>。
 ///
 /// 【形态】<see cref="Window.AllowsTransparency"/>=true 的分层窗口（WPF 唯一保证客户端逐像素 alpha 的
-/// 模式）：圆角/胶囊由 <c>Card</c> 自绘（macOS 18 / Win11 8 / 鸿蒙胶囊），"玻璃"由**显示前抓屏自绘模糊**
+/// 模式）：圆角由 <c>Card</c> 自绘（macOS 18），"玻璃"由**显示前抓屏自绘模糊**
 /// 提供（<see cref="ScreenBlurBackdrop"/>）。v2 的两条路径已整枝删除：<c>SetWindowRgn</c> 裁形（真机上
 /// 根本没生效，面板带硬边）与"非分层 + DWM 系统背板"（半透明卡底下的客户端像素不被合成 → 黑矩形）。
 /// 定位全程物理像素 + 目标显示器有效 DPI 缩放（沿用 FluentPopupHost 的混合 DPI 结论），
@@ -78,13 +78,11 @@ public sealed partial class SwitcherWindow : Window
     private int _watchdogTicks;
 
     private Phase _phase = Phase.Hidden;
-    private string _style = "macos";
     private double _baseIconSize = 56;   // 样式给的图标尺寸（缩小适配前先记下）
     private double _panelRadius = 18;
     private Thickness _bodyPadding = new(16, 13, 16, 13);
     private double _itemGap = 4;
     private double _verticalBias = 0.42; // 面板中心在工作区高度的位置比例（macOS 略高于中线）
-    private bool _pillPanel;             // 鸿蒙胶囊：区域半径 = 高度/2
     private bool _captionVisible = true;
     private ScreenBackdrop? _backdrop;   // 本次会话的抓屏背板（显示前抓一次，面板长大只重瞄不重抓；null = 实心卡底）
     private bool _disposed;
@@ -125,7 +123,6 @@ public sealed partial class SwitcherWindow : Window
                 return;
             }
             BuildTiles(apps);
-            _style = SettingsService.Current.SwitcherStyle; // 每次打开重读：改配置不必重启
             ApplyStyle();
             _visitedApps.Clear();
             _expandedApp = -1;
@@ -311,50 +308,26 @@ public sealed partial class SwitcherWindow : Window
     // ---------- 样式 ----------
 
     /// <summary>
-    /// 三样式落地（<c>SwitcherStyle</c>）：macOS=居中大圆角亚克力 + 56px 图标 + 字幕 + 原样图标；
-    /// Linux=紧凑实底覆盖条 + 40px + 无字幕 + 圆角方形图标（GNOME 不模糊）；
-    /// 鸿蒙=胶囊容器（区域半径=高度/2）+ squircle 图标 + 强制强调色 #0A59F7。
+    /// macOS 卡片样式（v4 唯一样式）：居中大圆角亚克力 + 56px 图标 + 字幕 + 原样图标。
+    /// 旧的 Linux 覆盖条/鸿蒙胶囊分支已随主题收敛删除；<c>SwitcherStyle</c> 旧值由 Normalized 自愈。
     /// </summary>
     private void ApplyStyle()
     {
         var accent = (Brush)Resources["SwitcherAccent"];
-        switch (_style)
-        {
-            case "linux":
-                _baseIconSize = 40; _panelRadius = 6; _itemGap = 2; _verticalBias = 0.5;
-                _pillPanel = false; _captionVisible = false;
-                _bodyPadding = new Thickness(9, 7, 9, 7);
-                accent = ThemeManager.Current.AccentHex is { Length: > 0 } hex ? HexBrush(hex, accent) : accent;
-                Resources["SwitcherTilePadding"] = new Thickness(4);
-                Resources["SwitcherTileRadius"] = new CornerRadius(4);
-                SetIconClip(40, radiusRatio: 8.0 / 44.0); // 圆角方形：半径 8
-                break;
-            case "harmonyos":
-                _baseIconSize = 52; _panelRadius = 26; _itemGap = 3; _verticalBias = 0.44;
-                _pillPanel = true; _captionVisible = true;
-                _bodyPadding = new Thickness(18, 12, 18, 12);
-                accent = HexBrush("#0A59F7", accent); // 鸿蒙强调色固定（与主题字典无关，样式即鸿蒙）
-                Resources["SwitcherTilePadding"] = new Thickness(6);
-                Resources["SwitcherTileRadius"] = new CornerRadius(26);
-                SetIconClip(52, squircle: true);
-                break;
-            default: // macos
-                _baseIconSize = 56; _panelRadius = 18; _itemGap = 4; _verticalBias = 0.42;
-                _pillPanel = false; _captionVisible = true;
-                _bodyPadding = new Thickness(16, 13, 16, 13);
-                accent = HexBrush("#0A84FF", accent);
-                Resources["SwitcherTilePadding"] = new Thickness(7);
-                Resources["SwitcherTileRadius"] = new CornerRadius(14);
-                Resources.Remove("SwitcherIconClip"); // macOS 图标原样，不遮罩
-                break;
-        }
+        _baseIconSize = 56; _panelRadius = 18; _itemGap = 4; _verticalBias = 0.42;
+        _captionVisible = true;
+        _bodyPadding = new Thickness(16, 13, 16, 13);
+        accent = HexBrush("#0A84FF", accent);
+        Resources["SwitcherTilePadding"] = new Thickness(7);
+        Resources["SwitcherTileRadius"] = new CornerRadius(14);
+        Resources.Remove("SwitcherIconClip"); // macOS 图标原样，不遮罩
         Resources["SwitcherAccent"] = accent;
         Resources["SwitcherIconSize"] = _baseIconSize;
 
         // 形状唯一来源：自绘半径随样式。Scrim/Tint/Glow 是 Card 的**子 Border**——WPF 的 CornerRadius
         // 只裁剪 Border 自己的背景，不裁剪子元素；这三层若不带同一半径，其矩形背景会在"该透明的
         // 圆角缺口"里照画不误（真机取证：圆角被画回直角深色块）。必须与 Card 同步赋值。
-        var cardRadius = new CornerRadius(_pillPanel ? 1000 : _panelRadius);
+        var cardRadius = new CornerRadius(_panelRadius);
         Card.CornerRadius = cardRadius;
         Scrim.CornerRadius = cardRadius;
         TintLayer.CornerRadius = cardRadius;
@@ -363,9 +336,9 @@ public sealed partial class SwitcherWindow : Window
         Caption.Visibility = _captionVisible ? Visibility.Visible : Visibility.Collapsed;
         AppRow.ItemContainerStyle = GapContainerStyle(_itemGap);
         WindowRow.ItemContainerStyle = GapContainerStyle(Math.Max(2, _itemGap - 1));
-        // 先把卡底落成**实心**渐变：样式切换（linux ↔ 其余）与背板抓屏都晚于此处，
-        // ShowPanel 抓到背板后再由 ApplyCardFill 换成模糊画刷。默认值必须是"什么都不依赖"的实心底，
-        // 这样任何一条降级路径（抓屏失败 / 环境开关关闭 / linux 样式）都不会出现未绘制的透明洞。
+        // 先把卡底落成**实心**渐变：背板抓屏晚于此处，ShowPanel 抓到背板后再由 ApplyCardFill
+        // 换成模糊画刷。默认值必须是"什么都不依赖"的实心底，这样任何一条降级路径
+        // （抓屏失败 / 环境开关关闭）都不会出现未绘制的透明洞。
         Card.Background = (Brush)Resources["CardFillSolid"];
         Scrim.Background = Brushes.Transparent;
     }
@@ -390,36 +363,6 @@ public sealed partial class SwitcherWindow : Window
         catch { return fallback; }
     }
 
-    /// <summary>
-    /// 图标遮罩几何：<paramref name="squircle"/>=超椭圆（鸿蒙 n=4.4，与 ThemeManager 同一配方，
-    /// 但按面板图标尺寸重建——主题 clip 是按 Dock 的 44px 生成的，尺寸不同不能直接复用）；
-    /// 否则圆角方形。几何必须冻结（模板共享渲染数据）。
-    /// </summary>
-    private void SetIconClip(double size, bool squircle = false, double radiusRatio = 0)
-    {
-        if (size <= 0) { Resources.Remove("SwitcherIconClip"); return; }
-        if (squircle)
-        {
-            var half = size / 2;
-            var pts = Superellipse.Points(half, half, nExp: 4.4);
-            var geo = new StreamGeometry();
-            using (var ctx = geo.Open())
-            {
-                ctx.BeginFigure(new Point(pts[0].X + half, pts[0].Y + half), true, true);
-                for (var i = 1; i < pts.Count; i++)
-                    ctx.LineTo(new Point(pts[i].X + half, pts[i].Y + half), true, false);
-            }
-            geo.Freeze();
-            Resources["SwitcherIconClip"] = geo;
-            return;
-        }
-        if (radiusRatio <= 0) { Resources.Remove("SwitcherIconClip"); return; }
-        var radius = radiusRatio * size;
-        var rect = new RectangleGeometry(new Rect(0, 0, size, size), radius, radius);
-        rect.Freeze();
-        Resources["SwitcherIconClip"] = rect;
-    }
-
     // ---------- 显示 / 隐藏 / 定位 ----------
 
     private void ShowPanel()
@@ -429,9 +372,8 @@ public sealed partial class SwitcherWindow : Window
         // 【抓屏必须在首次 Show 之前】此刻本窗口尚不可见，取回的是"面板下方"的干净内容；
         // 显示之后再抓就会把面板自己的像素抓进背板（鬼影）。矩形由与 Reposition 同一套测量算出，
         // 因此落位后只是"重瞄"同一张已抓好的图，面板长大也不会重抓、也不会重新缩放。
-        // linux 样式（GNOME 覆盖条原生不模糊）与 BEAUTIFUL_NOBLUR=1 / 抓屏失败一样：_backdrop=null
-        // → 卡底维持 ApplyStyle 落的实心渐变，两条分支都是铺满整张卡的不透明底。
-        _backdrop = _style == "linux" ? null : ScreenBlurBackdrop.ForPanel(ComputePanelRect(hwnd));
+        // BEAUTIFUL_NOBLUR=1 / 抓屏失败时 _backdrop=null → 卡底维持 ApplyStyle 落的实心渐变。
+        _backdrop = ScreenBlurBackdrop.ForPanel(ComputePanelRect(hwnd));
         if (!IsVisible) Show(); // 非激活式：Show 不会夺前台（ShowActivated=false + WS_EX_NOACTIVATE）
         _phase = Phase.Showing;
         _expandedApp = -1;
@@ -485,7 +427,7 @@ public sealed partial class SwitcherWindow : Window
     /// 既不重抓屏也不重新缩放（这就是捕获区带余量的意义）。
     /// 任何一条分支都必须把整张卡铺满：本窗口是分层窗口，"没画到"= 真透明 = 直接看穿到桌面，
     /// 那正是 v2 真机上"面板矩形里露背景"的故障形态。背板不可用（抓屏失败 / <c>BEAUTIFUL_NOBLUR=1</c>
-    /// / linux 样式 / 瞄准越界）时一律回落实心渐变 <c>CardFillSolid</c>。
+    /// / 瞄准越界）时一律回落实心渐变 <c>CardFillSolid</c>。
     /// </para>
     /// </summary>
     private void ApplyCardFill(in PhysicalRect panelPx)
@@ -551,16 +493,11 @@ public sealed partial class SwitcherWindow : Window
         return new PhysicalRect(x, y, x + (int)wPx, y + (int)hPx);
     }
 
-    /// <summary>图标尺寸变化后同步三处：尺寸资源、遮罩几何（尺寸相关）、缩小后仍要保持各样式比例。</summary>
+    /// <summary>图标尺寸变化后同步：macOS 图标原样不遮罩。</summary>
     private void SetIconSize(double size)
     {
         Resources["SwitcherIconSize"] = size;
-        switch (_style)
-        {
-            case "linux": SetIconClip(size, radiusRatio: 8.0 / 44.0); break;
-            case "harmonyos": SetIconClip(size, squircle: true); break;
-            default: Resources.Remove("SwitcherIconClip"); break;
-        }
+        Resources.Remove("SwitcherIconClip");
     }
 
     /// <summary>目标显示器工作区（物理像素）与其有效 DPI 缩放；异常一律退化为主屏 + 窗口 DPI。</summary>

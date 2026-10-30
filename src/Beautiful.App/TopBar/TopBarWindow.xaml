@@ -71,7 +71,7 @@
              "条带矩形内没有一个未绘制像素"（分层窗口里未绘制 = 真透明 = 直接看穿到桌面）。 -->
         <Border x:Name="BarBackground" Background="{DynamicResource ThemeDockBackground}"/>
         <Border x:Name="BarGlow" IsHitTestVisible="False" Background="{StaticResource BarInnerGlow}"/>
-        <Border x:Name="BarEdge" IsHitTestVisible="False" BorderBrush="#26FFFFFF" BorderThickness="0,0,0,1"
+        <Border x:Name="BarEdge" IsHitTestVisible="False" BorderBrush="{DynamicResource MacMenuBarHairline}" BorderThickness="0,0,0,1"
                 VerticalAlignment="Stretch"/>
 
         <!-- ══ 左区（Task 9）：[logo 菜单按钮] + 前台应用名（粗体，macOS "应用菜单"位）+

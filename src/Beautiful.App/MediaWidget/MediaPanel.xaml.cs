@@ -9,10 +9,10 @@ using Brushes = System.Windows.Media.Brushes; // 同上，System.Drawing.Brushes
 namespace Beautiful.App.MediaWidget;
 
 /// <summary>
-/// 歌词展开面板：跟随胶囊上方居中的独立分层窗（位置由 DockWindow 在 Show 前计算）。
+/// 正在播放面板：跟随胶囊上方居中的独立分层窗（位置由 DockWindow 在 Show 前计算）。
 /// 失焦自动 Hide（Deactivated → Hide，开关 = 设置项 HidePanelOnDeactivate，经 VM 标志消费）；
 /// 进度条交互用 ValueChanged 差值检测 + 防抖（见构造函数注释），SeekAsync 首次失败 →
-/// IsSeekable=false 隐藏进度条；歌词 CurrentLyricIndex 变化 → ScrollIntoView（VM 事件驱动）。
+/// IsSeekable=false 隐藏进度条。v4 删除逐行文本区，面板只剩封面/标题/进度/三键。
 /// <para>
 /// 【形态（v3 T2/T3）】<see cref="AcrylicWindow"/> 分层窗口：20px 圆角 + 1px 亮边自绘，
 /// 圆角缺口靠 <c>Background={x:Null}</c> 真透明（也真点击穿透）。玻璃感来自
@@ -34,10 +34,8 @@ public partial class MediaPanel
         _vm = vm;
         DataContext = vm;
 
-        _vm.CurrentLyricIndexChanged += OnLyricIndexChanged;
         Closed += (_, _) =>
         {
-            _vm.CurrentLyricIndexChanged -= OnLyricIndexChanged; // 防 VM 侧泄漏
             _seekDebounce?.Stop();                               // 拖动中关闭：不再结算 seek
             _vm.CancelSeek();                                    // 恢复定时器/时间线的进度回写
         };
@@ -71,13 +69,13 @@ public partial class MediaPanel
             var blur = ScreenBlurBackdrop.ForWindow(this, new Rect(0, 0, Width, Height));
             PanelRoot.Background = blur ?? (Brush)Resources["PanelFillSolid"];
             // Scrim 铺**深色遮罩** PanelFillBlur 而非模糊画刷本身（同 FluentMenu 的两层材质）：
-            // 模糊直接赋给 Scrim 就没人压暗卡片，浮在亮背景上会被冲成浅灰、歌词对比度丢失。
+            // 模糊直接赋给 Scrim 就没人压暗卡片，浮在亮背景上会被冲成浅灰、文字对比度丢失。
             // 实心底分支保持透明——PanelFillSolid 本身已是深色，再叠一层只会闷。
             Scrim.Background = blur is not null ? (Brush)Resources["PanelFillBlur"] : Brushes.Transparent;
         }
         catch (Exception ex)
         {
-            // 背板是装饰层：任何异常都不该让"展开歌词面板"这件事失败。实心底已经铺在 XAML 里。
+            // 背板是装饰层：任何异常都不该让"展开媒体面板"这件事失败。实心底已经铺在 XAML 里。
             Logger.Warn($"媒体面板背板失败（改用实心底）: {ex.Message}");
         }
     }
@@ -101,18 +99,4 @@ public partial class MediaPanel
     {
         if (_vm.PanelAutoHideOnDeactivate) Hide(); // 设置项（Task 16）：失焦收起可关
     }
-
-    private void OnLyricIndexChanged(int index)
-    {
-        if ((uint)index < (uint)_vm.Lyrics.Count)
-            LyricsList.ScrollIntoView(_vm.Lyrics[index]);
-    }
-
-    /// <summary>面板展开时对齐到当前歌词行（DockWindow 在 Show 后调用；等一拍布局再滚动）。</summary>
-    public void ScrollToCurrentLine()
-        => Dispatcher.BeginInvoke(System.Windows.Threading.DispatcherPriority.Loaded, new Action(() =>
-        {
-            if ((uint)_vm.CurrentLyricIndex < (uint)_vm.Lyrics.Count)
-                LyricsList.ScrollIntoView(_vm.Lyrics[_vm.CurrentLyricIndex]);
-        }));
 }

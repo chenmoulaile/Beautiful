@@ -12,9 +12,9 @@ using Xunit;
 /// </summary>
 public class QuickSettingsTests
 {
-    /// <summary>砖块投影的测试入口：控制中心总是显式探测壁纸可读性，单测默认按“读得到”走正常分支。</summary>
-    private static IReadOnlyList<QuickTile> Tiles(AppSettings s, ThemeDefinition theme, bool accentAvailable = true)
-        => QuickSettings.ToggleTiles(s, theme, accentAvailable);
+    /// <summary>砖块投影的测试入口（v4：只剩 macOS 语义的三块，不再有壁纸/玻璃壳探测参数）。</summary>
+    private static IReadOnlyList<QuickTile> Tiles(AppSettings s, ThemeDefinition theme)
+        => QuickSettings.ToggleTiles(s, theme);
     // ---------- 分段与白名单同源 ----------
 
     [Fact]
@@ -29,8 +29,9 @@ public class QuickSettingsTests
     [Fact]
     public void 当前选择恒命中分段里的一项()
     {
+        // macOS-only：脏值 "linux" 回落到分段第一项（macos）
         var s = new AppSettings { Theme = "linux", TaskbarPolicy = "keep" };
-        Assert.Equal("linux", QuickSettings.SelectedThemeId(s));
+        Assert.Equal("macos", QuickSettings.SelectedThemeId(s));
         Assert.Equal("keep", QuickSettings.SelectedTaskbarPolicyId(s));
     }
 
@@ -47,10 +48,10 @@ public class QuickSettingsTests
     public void 未知分段标识不改写设置()
     {
         var s = new AppSettings();
+        Assert.Equal("macos", s.Theme);                                   // 默认主题
+        Assert.Same(s, QuickSettings.WithTheme(s, "harmonyos"));          // 未知标识（harmonyos 已非白名单）：返回原对象不改写
         Assert.Same(s, QuickSettings.WithTheme(s, "not-a-theme"));
         Assert.Same(s, QuickSettings.WithTaskbarPolicy(s, "not-a-policy"));
-        Assert.Equal("harmonyos", QuickSettings.WithTheme(s, "harmonyos").Theme);
-        Assert.Equal("keep", QuickSettings.WithTaskbarPolicy(s, "keep").TaskbarPolicy);
     }
 
     // ---------- 放大：强度就是开关 ----------
@@ -119,7 +120,7 @@ public class QuickSettingsTests
         var on = QuickSettings.WithReflection(s, on: true);
         Assert.True(on.ReflectionEnabled);   // 不再是 null（跟随主题）
         // 显式 true 在"默认关"的主题下依然为开：这正是"用户选过"的语义
-        Assert.True(QuickSettings.IsReflectionOn(on, ThemeDefinition.Linux()));
+        Assert.True(QuickSettings.IsReflectionOn(on, ThemeDefinition.MacOs()));
     }
 
     // ---------- 媒体胶囊 ----------
@@ -138,7 +139,9 @@ public class QuickSettingsTests
     [Fact]
     public void 不做放大的主题里放大砖块置灰并给出原因()
     {
-        var tiles = Tiles(new AppSettings { Theme = "linux" }, ThemeDefinition.Linux());
+        // macOS 放大开启（MaxScale=1.8）；用 MaxScale=1.0 模拟"不放大的主题"以验证置灰路径
+        var nonMagnifying = ThemeDefinition.MacOs() with { MaxScale = 1.0 };
+        var tiles = Tiles(new AppSettings { Theme = "macos" }, nonMagnifying);
         var magnify = QuickSettings.FindTile(tiles, QuickSettings.MagnificationId)!;
         Assert.False(magnify.IsEnabled);
         Assert.NotNull(magnify.BlockReason);
@@ -156,18 +159,16 @@ public class QuickSettingsTests
     }
 
     [Fact]
-    public void 倒影对所有主题都可点_因为渲染器真的会画()
+    public void 倒影对macOS主题可点_因为渲染器真的会画()
     {
         // 设置页把倒影限制在 macOS 是观感建议；控制中心按"能不能真的改变画面"判定，
         // 于是这里不能出现一个"点了没反应"的砖块。
-        foreach (var theme in new[] { ThemeDefinition.MacOs(), ThemeDefinition.Linux(), ThemeDefinition.HarmonyOs() })
-        {
-            var tile = QuickSettings.FindTile(
-                Tiles(new AppSettings { Theme = theme.Id.ToLowerInvariant() }, theme),
-                QuickSettings.ReflectionId)!;
-            Assert.True(tile.IsEnabled);
-            Assert.Null(tile.BlockReason);
-        }
+        var theme = ThemeDefinition.MacOs();
+        var tile = QuickSettings.FindTile(
+            Tiles(new AppSettings { Theme = "macos" }, theme),
+            QuickSettings.ReflectionId)!;
+        Assert.True(tile.IsEnabled);
+        Assert.Null(tile.BlockReason);
     }
 
     [Fact]
@@ -179,51 +180,7 @@ public class QuickSettingsTests
         Assert.True(QuickSettings.FindTile(tiles, QuickSettings.MagnificationId)!.IsOn);
         Assert.True(QuickSettings.FindTile(tiles, QuickSettings.ReflectionId)!.IsOn);
         Assert.False(QuickSettings.FindTile(tiles, QuickSettings.MediaCapsuleId)!.IsOn);
-        Assert.True(QuickSettings.FindTile(tiles, QuickSettings.TaskbarGlassId)!.IsOn);
-        Assert.Equal(5, tiles.Count);   // 顺序与数量都是界面的契约（两列 UniformGrid：2+2+1，最后一块自己一行）
-    }
-
-    [Fact]
-    public void 任务栏被隐藏时玻璃壳砖块置灰并写明原因()
-    {
-        // 玻璃壳是给原生任务栏化妆的：任务栏没了就没有可化妆的对象。
-        // 让砖块亮着而屏上什么也没变，是本项目明确不接受的"假状态"。
-        var hidden = Tiles(new AppSettings { TaskbarPolicy = "hide", TaskbarGlass = true }, ThemeDefinition.MacOs());
-        var glass = QuickSettings.FindTile(hidden, QuickSettings.TaskbarGlassId)!;
-        Assert.False(glass.IsEnabled);
-        Assert.False(string.IsNullOrWhiteSpace(glass.BlockReason));
-
-        var kept = Tiles(new AppSettings { TaskbarPolicy = "keep", TaskbarGlass = true }, ThemeDefinition.MacOs());
-        Assert.True(QuickSettings.FindTile(kept, QuickSettings.TaskbarGlassId)!.IsEnabled);
-
-        // autohide 算"看得见"：它只是缩起来，任务栏还在那里，可以化妆
-        Assert.True(QuickSettings.NativeTaskbarVisible(new AppSettings { TaskbarPolicy = "autohide" }));
-    }
-
-    [Fact]
-    public void 壁纸取色砖块按能不能读到壁纸决定可点()
-    {
-        // 关着且读得到 → 可点且为关；开着且读不到 → 已开但仍要灰（用户得知道"现在没法生效"）
-        var available = Tiles(new AppSettings { UseWallpaperAccent = false }, ThemeDefinition.MacOs(), true);
-        var on = QuickSettings.FindTile(available, QuickSettings.WallpaperAccentId)!;
-        Assert.True(on.IsEnabled);
-        Assert.False(on.IsOn);
-        Assert.Null(on.BlockReason);
-
-        var unavailable = Tiles(new AppSettings { UseWallpaperAccent = true }, ThemeDefinition.MacOs(), false);
-        var blocked = QuickSettings.FindTile(unavailable, QuickSettings.WallpaperAccentId)!;
-        Assert.False(blocked.IsEnabled);
-        Assert.True(blocked.IsOn);                       // 设置里的真值照实显示（不是"点了没反应"的假状态）
-        Assert.Equal("读不到当前壁纸文件（幻灯片或纯色桌面）", blocked.BlockReason);
-    }
-
-    [Fact]
-    public void 壁纸取色开关联动设置值()
-    {
-        var on = QuickSettings.WithWallpaperAccent(new AppSettings(), on: true);
-        Assert.True(on.UseWallpaperAccent);
-        Assert.True(QuickSettings.IsWallpaperAccentOn(on));
-        Assert.False(QuickSettings.IsWallpaperAccentOn(QuickSettings.WithWallpaperAccent(on, on: false)));
+        Assert.Equal(3, tiles.Count);   // 顺序与数量都是界面的契约：放大/倒影/媒体胶囊
     }
 
     [Fact]

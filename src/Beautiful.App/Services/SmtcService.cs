@@ -1,5 +1,5 @@
 using System.IO;
-using Beautiful.Core.Lyrics;
+using Beautiful.Core.Media;
 using Windows.Media.Control;
 using Windows.Storage.Streams;
 

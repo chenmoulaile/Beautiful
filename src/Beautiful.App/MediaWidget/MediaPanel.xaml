@@ -3,14 +3,15 @@
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         xmlns:services="clr-namespace:Beautiful.App.Services"
         Title="NowPlaying"
-        Width="420" Height="520"
+        Width="420" Height="300"
         Topmost="True"
         ShowActivated="True"
         Background="{x:Null}"
         WindowStartupLocation="Manual">
 
-    <!-- 歌词展开面板（实况窗大窗）：胶囊上方居中（定位由 DockWindow 计算）。
+    <!-- 正在播放面板（实况窗大窗）：胶囊上方居中（定位由 DockWindow 计算）。
          失焦自动 Hide（Deactivated → code-behind，开关 = HidePanelOnDeactivate 设置项）。
+         v4（Phase 1 T2）：面板只保留封面/标题/进度/三键，即 macOS "正在播放"语义。
          【v3 T2/T3 形态】恒为分层窗口（基类 AcrylicWindow 已置 AllowsTransparency=True）：
          20px 圆角与 1px 亮边由 PanelRoot 自绘，逐像素 alpha 由 WPF 保证。v2 那句"启用模糊的主题转
          非分层 + Win11 系统背板、圆角交 DWM 裁切"连同它的两个分支一起删除——真机上那条路径画不出
@@ -24,7 +25,7 @@
             <GradientStop Color="#C81C1C1E" Offset="0"/>
             <GradientStop Color="#D5171719" Offset="1"/>
         </LinearGradientBrush>
-        <!-- 抓屏模糊之上的遮罩：半透明深色渐变，负责歌词/标题的文字对比度 -->
+        <!-- 抓屏模糊之上的遮罩：半透明深色渐变，负责标题的文字对比度 -->
         <LinearGradientBrush x:Key="PanelFillBlur" StartPoint="0,0" EndPoint="0,1">
             <GradientStop Color="#8C1C1C1E" Offset="0"/>
             <GradientStop Color="#99171719" Offset="1"/>
@@ -74,16 +75,15 @@
                 <RowDefinition Height="Auto"/>
                 <RowDefinition Height="Auto"/>
                 <RowDefinition Height="Auto"/>
-                <RowDefinition Height="*"/>
             </Grid.RowDefinitions>
 
             <!-- 叠放顺序即材质顺序：抓屏模糊（PanelRoot.Background）→ Scrim 深色遮罩 → 主题 tint → 内容。
                  负 Margin 精确抵掉 PanelRoot 的 Padding="20,18"，使这两层铺满整张卡（含四周留白）。
                  IsHitTestVisible=False：只做着色，不抢控件命中。 -->
-            <Border x:Name="Scrim" Grid.RowSpan="4" Margin="-20,-18" CornerRadius="19"
+            <Border x:Name="Scrim" Grid.RowSpan="3" Margin="-20,-18" CornerRadius="19"
                     IsHitTestVisible="False" Background="Transparent"/>
             <!-- 主题 tint 覆盖层：随 DynamicResource 即时体现主题色（换主题即变色，无需代码重刷）。 -->
-            <Border x:Name="TintLayer" Grid.RowSpan="4" Margin="-20,-18" CornerRadius="19"
+            <Border x:Name="TintLayer" Grid.RowSpan="3" Margin="-20,-18" CornerRadius="19"
                     IsHitTestVisible="False" Background="{DynamicResource ThemeBackdropTint}"/>
 
             <!-- 封面 + 标题/歌手 -->
@@ -145,77 +145,6 @@
                 <Button Style="{StaticResource PlayPauseButtonStyle}" Command="{Binding TogglePlayCommand}"/>
                 <Button Style="{StaticResource TransportButtonStyle}" Content="&#xE9AA;" Command="{Binding NextCommand}"/>
             </UniformGrid>
-
-            <!-- 歌词区：VirtualizingStackPanel；当前行 accent 高亮；占位态覆盖其上 -->
-            <Grid Grid.Row="3" Margin="0,10,0,0">
-                <ListBox x:Name="LyricsList" ItemsSource="{Binding Lyrics}"
-                         Background="Transparent" BorderThickness="0"
-                         ScrollViewer.HorizontalScrollBarVisibility="Disabled"
-                         VirtualizingStackPanel.IsVirtualizing="True"
-                         VirtualizingStackPanel.VirtualizationMode="Recycling">
-                    <ListBox.ItemContainerStyle>
-                        <Style TargetType="ListBoxItem">
-                            <Setter Property="Focusable" Value="False"/>
-                            <Setter Property="Template">
-                                <Setter.Value>
-                                    <ControlTemplate TargetType="ListBoxItem">
-                                        <ContentPresenter/>
-                                    </ControlTemplate>
-                                </Setter.Value>
-                            </Setter>
-                        </Style>
-                    </ListBox.ItemContainerStyle>
-                    <ListBox.ItemTemplate>
-                        <DataTemplate>
-                            <StackPanel Margin="0,7">
-                                <TextBlock Text="{Binding Original}" FontSize="16" FontWeight="SemiBold" TextWrapping="Wrap">
-                                    <TextBlock.Style>
-                                        <Style TargetType="TextBlock">
-                                            <Setter Property="Foreground" Value="{DynamicResource ThemeTextPrimary}"/>
-                                            <Setter Property="Opacity" Value="0.72"/>
-                                            <Style.Triggers>
-                                                <DataTrigger Binding="{Binding IsCurrent}" Value="True">
-                                                    <Setter Property="Foreground" Value="{DynamicResource ThemeAccent}"/>
-                                                    <Setter Property="Opacity" Value="1"/>
-                                                </DataTrigger>
-                                            </Style.Triggers>
-                                        </Style>
-                                    </TextBlock.Style>
-                                </TextBlock>
-                                <TextBlock Text="{Binding Translation}" FontSize="13" TextWrapping="Wrap" Margin="0,2,0,0">
-                                    <TextBlock.Style>
-                                        <Style TargetType="TextBlock">
-                                            <Setter Property="Foreground" Value="{DynamicResource ThemeTextPrimary}"/>
-                                            <Setter Property="Opacity" Value="0.65"/>
-                                            <Style.Triggers>
-                                                <DataTrigger Binding="{Binding Translation}" Value="{x:Null}">
-                                                    <Setter Property="Visibility" Value="Collapsed"/>
-                                                </DataTrigger>
-                                            </Style.Triggers>
-                                        </Style>
-                                    </TextBlock.Style>
-                                </TextBlock>
-                            </StackPanel>
-                        </DataTemplate>
-                    </ListBox.ItemTemplate>
-                </ListBox>
-                <TextBlock HorizontalAlignment="Center" VerticalAlignment="Center" FontSize="14" Opacity="0.6"
-                           Foreground="{DynamicResource ThemeTextPrimary}" Text="暂无歌词">
-                    <TextBlock.Style>
-                        <Style TargetType="TextBlock">
-                            <Setter Property="Visibility" Value="Visible"/>
-                            <Style.Triggers>
-                                <DataTrigger Binding="{Binding State}" Value="Loaded">
-                                    <Setter Property="Visibility" Value="Collapsed"/>
-                                </DataTrigger>
-                                <DataTrigger Binding="{Binding State}" Value="Loading">
-                                    <Setter Property="Text" Value="歌词加载中…"/>
-                                </DataTrigger>
-                            </Style.Triggers>
-                        </Style>
-                    </TextBlock.Style>
-                </TextBlock>
-            </Grid>
         </Grid>
     </Border>
 </services:AcrylicWindow>

@@ -17,7 +17,7 @@ public static class SettingsService
     /// <summary>启动时 Load 后即生效；设置窗口经 Update/UpdateAndSave 变更。</summary>
     public static AppSettings Current { get; private set; } = new();
 
-    public static void Load() => Current = new AppSettingsStore().Load();
+    public static void Load() => Current = new AppSettingsStore().Load(Logger.Info);
 
     public static void Save() => new AppSettingsStore().Save(Current);
 
@@ -61,14 +61,8 @@ public static class SettingsService
         }
     }
 
-    /// <summary>设置主题标识 → 主题定义（未知值兜底鸿蒙；AppSettings.Normalized 已收敛，双保险）。</summary>
-    public static ThemeDefinition ThemeDefinitionOf(AppSettings s) => s.Theme switch
-    {
-        "macos" => ThemeDefinition.MacOs(),
-        "linux" => ThemeDefinition.Linux(),
-        "windows" => ThemeDefinition.Windows(),
-        _ => ThemeDefinition.HarmonyOs()
-    };
+    /// <summary>设置主题标识 → 主题定义（v2 macOS-only：已收敛为 macOS，兜底同 macOS）。。</summary>
+    public static ThemeDefinition ThemeDefinitionOf(AppSettings s) => ThemeDefinition.MacOs();
 
     /// <summary>设置策略标识 → TaskbarPolicy（未知值兜底 hide，与默认一致）。</summary>
     public static TaskbarPolicy PolicyOf(AppSettings s) => s.TaskbarPolicy switch

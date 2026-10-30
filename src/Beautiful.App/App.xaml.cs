@@ -42,8 +42,6 @@ public partial class App : Application
     /// <summary>最小化/最大化动画（v3.2）：持有两条 WinEvent 钩子，退出必须卸。</summary>
     private Animation.MinimizeAnimator? _animator;
 
-    /// <summary>任务栏玻璃壳（v3.2 #6）：盖在原生任务栏上的点击穿透装饰层，只美化不接管。</summary>
-    private Services.TaskbarGlassOverlay? _glass;
     private TopBarWindow? _topBar;
     private Switcher.SwitcherService? _switcher;
     private Switcher.SwitcherWindow? _switcherWindow;
@@ -97,6 +95,11 @@ public partial class App : Application
         // 4. 设置加载：先于任何 VM 构造（DockWindow/MediaViewModel 构造期读设置）
         SettingsService.Load();
 
+        // 4.5 系统亮暗监听（v4 Phase 1 T4）：外观=auto 时由 WM_SETTINGCHANGE 驱动换 token。
+        // 监听失败只影响实时性，启动时取样仍然有效（见 SystemAppearance.Start 的降级日志）。
+        SystemAppearance.Start();
+        SystemAppearance.Changed += OnSystemAppearanceChanged;
+
         // 5-8. 任务栏策略/自启落地 → Dock 显示 → --settings → 托盘，整体 try/catch 自愈：
         // 该序列任何一步失败若被全局兜底吞掉（Handled=true）会留下"无 Dock 无托盘 + 任务栏被隐藏"
         // 的僵尸进程，故此处就地回滚（还原任务栏 + 释放托盘）后优雅关停。
@@ -125,9 +128,6 @@ public partial class App : Application
             _dock = new DockWindow(_taskbar, _animator);
             _dock.Show();
 
-            // 6.3 任务栏玻璃壳（v3.2 #6）：必须在任务栏策略落地之后建，否则会给一条已被推出的任务栏化妆
-            ApplyGlassState(SettingsService.Current);
-
             if (e.Args.Contains("--minimized", StringComparer.OrdinalIgnoreCase))
                 Logger.Info("--minimized（开机自启）：Dock 即主 UI，照常显示");
             Logger.Info("Dock 已显示");
@@ -145,12 +145,6 @@ public partial class App : Application
 
             // 6.7 启动器（v3 T7）：Spotlight 式搜索面板。索引在后台线程扫开始菜单，UI 不等待它。
             EnsureLauncher();
-
-            // 6.8 壁纸取色（v3 T7）：这个开关开着时启动算一次（解码在后台线程，不阻塞启动序）。
-            // 关着就什么都不做——"关掉时主题观感与取色功能上线前完全一致"是这条功能的验收点。
-            // 取不到色由 WallpaperAccentService 内部回落主题色并留原因，这里不需要再包一层 try。
-            if (SettingsService.Current.UseWallpaperAccent)
-                _ = WallpaperAccentService.RefreshAsync(true);
 
             // 7. --settings：设置窗口命令行入口（与托盘"设置"等效；窗口为单例）
             if (e.Args.Contains("--settings", StringComparer.OrdinalIgnoreCase))
@@ -182,12 +176,12 @@ public partial class App : Application
     protected override void OnExit(ExitEventArgs e)
     {
         // 兜底路径（系统会话结束、显式 Shutdown 等）也要清理；与 ExitApp 重复调用均幂等
+        SystemAppearance.Changed -= OnSystemAppearanceChanged;
+        SystemAppearance.Stop();
         _tray?.Dispose();
         _tray = null;
         _animator?.Dispose();   // WinEvent 钩子必须卸载（幂等）
         _animator = null;
-        _glass?.Dispose();      // 拆掉盖在原生任务栏上的装饰层（幂等）
-        _glass = null;
         DestroyLauncher();  // 覆盖层是瞬态弹层：兜底路径也要收（Dispose 幂等，ExitApp 已走过一次则 no-op）
         DestroySwitcher(); // 键盘钩子必须卸载（幂等）：残留的 WH_KEYBOARD_LL 会在进程退出时由系统回收，
                            // 但显式 Shutdown 而未走 ExitApp 的路径若卡在非 UI 线程，卸载会失败 → 这里至少留日志
@@ -246,31 +240,45 @@ public partial class App : Application
     }
 
     /// <summary>
+    /// 外观模式（dark/light/auto）：落盘 + 只重写 token 键（不重建窗口）。
+    /// 设置页与控制中心共用这一条路径。
+    /// </summary>
+    public static void ApplyAppearance(string appearance)
+    {
+        var next = SettingsService.Current with { Appearance = appearance };
+        SettingsService.UpdateAndSave(next);
+        ThemeManager.ApplyAppearance(SettingsService.Current.Appearance, Application.Current);
+    }
+
+    /// <summary>强调色板（macOS 12 色）：落盘 + 重写 token 键（ThemeAccent/MacAccent 即时换色）。</summary>
+    public static void ApplyAccentColor(string accentId)
+    {
+        var next = SettingsService.Current with { AccentColor = accentId };
+        SettingsService.UpdateAndSave(next);
+        ThemeManager.ApplyAppearance(SettingsService.Current.Appearance, Application.Current);
+    }
+
+    /// <summary>系统亮暗变化：只有 auto 模式需要动作；固定 dark/light 时用户的选择优先。</summary>
+    private static void OnSystemAppearanceChanged()
+    {
+        if (!string.Equals(SettingsService.Current.Appearance, Core.Design.AppearanceModes.Auto, StringComparison.Ordinal))
+            return;
+        ThemeManager.ApplyAppearance(SettingsService.Current.Appearance, Current);
+    }
+
+    /// <summary>
     /// 主题落地的<b>唯一</b>入口：设置页、托盘子菜单、顶栏"主题"菜单都走这里
     /// （以前三处各写一遍 UpdateAndSave + Apply，加一条主题线要同步改三个地方，必然漏）。
-    /// <para>
-    /// 【为什么 Windows 主题要顺手改任务栏策略】这条线的定位是"不接管、只增强原生任务栏"——
-    /// 玻璃壳与任务栏歌词条都锚在原生任务栏上。策略为 hide 时任务栏被移出屏幕，那些增强一个像素
-    /// 都看不见（用户报的"windows 版美化并没有"就是这个：砖块灰着、屏上什么都没有）。所以选中它的
-    /// 那一刻把策略从 hide 抬到 autohide：原生任务栏回来、增强层有对象可装饰，而 Dock 仍贴真底边
-    /// （autohide 下 AppBar 协商给出的可用底边就是屏幕底）。想再隐藏，设置页与控制中心随时能改回去。
-    /// </para>
+    /// v4 起只剩 macOS 一条主题线；保留本入口是为了让三处调用点继续共用同一条落盘/应用路径。
     /// </summary>
     public static void ApplyTheme(string id)
     {
         var next = SettingsService.Current with { Theme = id };
-        if (string.Equals(id, "windows", StringComparison.OrdinalIgnoreCase)
-            && string.Equals(next.TaskbarPolicy, "hide", StringComparison.OrdinalIgnoreCase))
-        {
-            next = next with { TaskbarPolicy = "autohide" };
-            Logger.Info("切到 Windows 11 主题：任务栏策略由 hide 抬到 autohide（增强层需要原生任务栏在场）");
-        }
         Logger.Info($"主题切换: {id}");
         SettingsService.UpdateAndSave(next);
         ThemeManager.Apply(SettingsService.ThemeDefinitionOf(SettingsService.Current), Application.Current);
-        // 策略真的被上面改动时才需要重放；Apply 内部对"策略没变"是幂等的，不必额外判分支
+        // 策略不随主题变化；Apply 内部对"策略没变"是幂等的
         (Current as App)?._taskbar?.Apply(SettingsService.PolicyOf(SettingsService.Current));
-        (Current as App)?.ApplyGlassState(SettingsService.Current);
     }
 
     /// <summary>重载 Dock：旧实例完整释放（ABM_REMOVE + WindowTracker/SmtcService 于 OnClosed Dispose）后
@@ -430,8 +438,6 @@ public partial class App : Application
         SettingsService.UpdateAndSave(QuickSettings.WithTaskbarPolicy(SettingsService.Current, policyId));
         var app = Current as App;
         app?._taskbar?.Apply(SettingsService.PolicyOf(SettingsService.Current));
-        // 策略一换，玻璃壳的"有没有可装饰的任务栏"就变了：切到隐藏必须把装饰一起拆掉
-        app?.ApplyGlassState(SettingsService.Current);
     }
 
     /// <summary>悬停放大开关：强度在"下限 ×1.0（关）"与"默认倍率（开）"之间切换，落地走 Dock 布局重放。</summary>
@@ -454,56 +460,6 @@ public partial class App : Application
         SettingsService.UpdateAndSave(QuickSettings.WithMediaCapsule(SettingsService.Current, on));
         var dock = (Current as App)?._dock;
         if (dock is not null) dock.MediaVm.CapsuleVisible = on;
-    }
-
-    /// <summary>
-    /// 壁纸取色开关（v3 T7）：落盘 + 立即重放一次取色。设置页与控制中心共用这一个入口
-    /// （与放大/倒影/媒体胶囊同一形状：值只经 QuickSettings 折算一次，落地只经这里一次）。
-    /// </summary>
-    public static void SetWallpaperAccent(bool on)
-    {
-        SettingsService.UpdateAndSave(QuickSettings.WithWallpaperAccent(SettingsService.Current, on));
-        _ = WallpaperAccentService.RefreshAsync(on);
-    }
-
-    /// <summary>
-    /// 玻璃壳开关（v3.2 #6）：写设置 + 建/拆装饰层。策略为"隐藏"时不建层
-    /// （没有可装饰的任务栏，留一条悬空高光比不画更难看），砖块那边已经把这个前提置灰并写明原因。
-    /// </summary>
-    public static void SetTaskbarGlass(bool on)
-    {
-        var next = QuickSettings.WithTaskbarGlass(SettingsService.Current, on);
-        SettingsService.UpdateAndSave(next);
-        (Current as App)?.ApplyGlassState(next);
-    }
-
-    /// <summary>按现值决定玻璃壳在不在。策略变化（隐藏↔保留）也要走这里，否则会出现"任务栏没了、装饰还在"。</summary>
-    private void ApplyGlassState(Core.Settings.AppSettings s)
-    {
-        var want = s.TaskbarGlass && QuickSettings.NativeTaskbarVisible(s);
-        if (want && _glass is null)
-        {
-            try
-            {
-                _glass = new Services.TaskbarGlassOverlay();
-            }
-            catch (Exception ex)
-            {
-                // 装饰层是附属能力，装不上只记日志，绝不连坐主 UI
-                Logger.Warn($"任务栏玻璃壳未启用：{ex.GetType().Name} {ex.Message}");
-                _glass = null;
-            }
-        }
-        else if (!want && _glass is not null)
-        {
-            _glass.Dispose();
-            _glass = null;
-            Logger.Info("任务栏玻璃壳已卸载");
-        }
-        else if (want)
-        {
-            _glass?.Refresh();
-        }
     }
 
 

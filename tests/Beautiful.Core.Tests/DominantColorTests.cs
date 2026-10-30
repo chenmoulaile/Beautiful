@@ -3,7 +3,7 @@ using Beautiful.Core.Imaging;
 using Xunit;
 
 /// <summary>
-/// 壁纸取色取证（v3 T7）：全部用合成位图，因为"什么图该出什么色"是这套功能的契约，
+/// 取色纯函数取证（v3 T7）：全部用合成位图，因为"什么图该出什么色"是这套功能的契约，
 /// 而真实壁纸天天变——用文件当断言基准等于把契约交给运气。
 /// </summary>
 public class DominantColorTests

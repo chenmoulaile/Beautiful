@@ -18,6 +18,7 @@ using Brush = System.Windows.Media.Brush;
 using Color = System.Windows.Media.Color;
 using ColorConverter = System.Windows.Media.ColorConverter;
 using ComboBox = System.Windows.Controls.ComboBox;                                 // 消歧：WinForms 隐式 using 带入同名控件
+using ListBoxItem = System.Windows.Controls.ListBoxItem;
 using RadioButton = System.Windows.Controls.RadioButton;                           // 同上（主题/策略/样式三组分段按钮的按 Tag 反查）
 using ComboBoxItem = System.Windows.Controls.ComboBoxItem;                        // 同上（图标处理方式三项）
 using SelectionChangedEventArgs = System.Windows.Controls.SelectionChangedEventArgs; // 同上
@@ -32,7 +33,7 @@ namespace Beautiful.App.Settings;
 /// 标题栏是自绘的 macOS 三点（关闭/最小化/置顶开关），系统 chrome 已退役，见 XAML 头部注释。
 /// 分组：外观（主题/图标大小/放大强度/倒影/弹跳）· 系统（任务栏策略/顶栏/顶栏时钟四项/自启 + 退出提示）·
 /// 显示器（Dock 与顶栏各自所在显示器，v3 T1）· 窗口切换器（接管开关/样式/全屏直通/应急键说明）·
-/// 媒体与歌词（胶囊/失焦收起/偏移/预览）· 固定应用。
+/// 媒体（胶囊/失焦收起/预览）· 固定应用。
 /// 各 live 目标：
 /// 主题 → ThemeManager.Apply（DockWindow 订阅 ThemeChanged 自行重落尺寸/放大/遮罩）；
 /// 图标大小/放大强度/倒影 → App.ApplyDockLayout（DockWindow 重排条目几何 + 覆盖 ThemeIconSize/遮罩 + 按需重排条带）；
@@ -40,7 +41,7 @@ namespace Beautiful.App.Settings;
 /// （重算文本 + 按"是否显示秒"重排定时器步长）；自启 → 注册表；
 /// 显示器选择 → App.ApplyDockLayout / App.ApplyTopBarGeometry（按新屏的 rcMonitor 与有效 DPI 重新协商条带并搬窗）；
 /// 切换器接管 → App.SetSwitcherEnabled；样式 → 持久化（面板下次呼出重读）；全屏直通 → App.ApplySwitcherHotkey；
-/// 偏移 → MediaViewModel.ApplyLyricsOffset；胶囊/失焦收起 → MediaViewModel 标志；
+/// 胶囊/失焦收起 → MediaViewModel 标志；
 /// 固定应用 → dock.json + DockViewModel.ReloadPinned。
 /// 持久化：离散控件立即 Save；三个滑杆走 400ms 防抖合并写盘（拖动不产生写风暴）。
 /// 渲染器覆盖（Task 15 收尾核对）：倒影/启动弹跳自 Task 15 起在 DockSurface 有渲染器并即时生效；
@@ -79,7 +80,18 @@ public partial class SettingsWindow : Window
 
         LoadState();
         _loading = false;
-        VersionLine.Text = $"Beautiful v{ProductVersion()} · 配置与日志在 {AppContext.BaseDirectory}";
+        SectionNav.SelectedIndex = 0;
+        AboutVersionText.Text = $"Beautiful v{ProductVersion()}（v4.0-alpha / Phase 1）";
+        AboutFontText.Text = Beautiful.Core.Design.FontResolution.Describe(FontProbe.Current);
+        AboutConfigText.Text = $"配置与日志：{AppContext.BaseDirectory}";
+        VersionLine.Text = $"Beautiful v{ProductVersion()} · {Beautiful.Core.Design.FontResolution.Describe(FontProbe.Current)} · 配置与日志在 {AppContext.BaseDirectory}";
+    }
+
+    /// <summary>侧栏导航：把对应分组卡片滚进视野（v4 Phase 1 T7）。不重建控件、不切页，避免丢状态。</summary>
+    private void SectionNav_SelectionChanged(object sender, SelectionChangedEventArgs e)
+    {
+        if (SectionNav.SelectedItem is not ListBoxItem { Tag: string name }) return;
+        if (FindName(name) is FrameworkElement target) target.BringIntoView();
     }
 
     /// <summary>
@@ -100,20 +112,26 @@ public partial class SettingsWindow : Window
     private void LoadState()
     {
         var s = SettingsService.Current;
-        // 选中项按 Tag 反查（Tag = 主题标识）：加主题只改 XAML 与 Core 白名单，这里不用再扩 switch
-        FindThemeRadio(s.Theme).IsChecked = true;
+        // 外观模式（v4 T4）：互斥单选，未命中回落深色
+        (s.Appearance switch
+        {
+            "light" => AppearanceLight,
+            "auto" => AppearanceAuto,
+            _ => AppearanceDark
+        }).IsChecked = true;
+        _loading = true;
+        AccentColorBox.ItemsSource = Beautiful.Core.Design.MacAccents.All
+            .Select(a => new AccentOption(a.Id, a.Name, AccentBrush(ThemeManager.IsDark ? a.DarkHex : a.LightHex)))
+            .ToList();
+        AccentColorBox.SelectedValue = s.AccentColor;
+        _loading = false;
         (s.TaskbarPolicy switch
         {
             "autohide" => TaskbarAutoHide,
             "keep" => TaskbarKeep,
             _ => TaskbarHide
         }).IsChecked = true;
-        (s.SwitcherStyle switch
-        {
-            "linux" => StyleLinux,
-            "harmonyos" => StyleHarmonyOs,
-            _ => StyleMacOs
-        }).IsChecked = true;
+        StyleMacOs.IsChecked = true;
 
         AutostartCheck.IsChecked = s.Autostart;
         TopBarCheck.IsChecked = s.TopBarEnabled;
@@ -136,41 +154,33 @@ public partial class SettingsWindow : Window
         // 滑杆：设值触发 ValueChanged 更新标签；_loading 屏蔽应用/保存（值已由 Current 提供，均已规范化）
         IconSizeSlider.Value = s.DockIconSize;
         MagnifySlider.Value = s.MagnificationStrength;
-        OffsetSlider.Value = s.LyricsOffsetMs;
+
 
         // 图标处理方式（v3 T6）：按 Tag 选中，未知值由 AppSettings.Normalized 收敛成 auto，这里必定命中一项
         SelectTreatment(s.IconTreatment);
+        SelectByTag(GenieEngineBox, s.GenieEngine, "mesh");
+        LauncherEnabledCheck.IsChecked = s.LauncherEnabled;
+        LauncherHotkeyBox.Text = s.LauncherHotkey;
+        MinimizeAnimationCheck.IsChecked = s.MinimizeAnimation;
 
         LoadMonitorSelectors();
 
         _pinned.Clear();
         foreach (var path in _pinnedStore.Load()) _pinned.Add(path);
 
-        // 色块预览与 Dock 实际强调色同源（主题定义 AccentHex），避免 XAML 内散落 hex
-        ThemeWindowsDot.Fill = AccentBrush(ThemeDefinition.Windows());
-        ThemeHarmonyOsDot.Fill = AccentBrush(ThemeDefinition.HarmonyOs());
-        ThemeMacOsDot.Fill = AccentBrush(ThemeDefinition.MacOs());
-        ThemeLinuxDot.Fill = AccentBrush(ThemeDefinition.Linux());
-
         UpdateThemeDependentControls();
         UpdateTaskbarHint();
     }
 
-    private static Brush AccentBrush(ThemeDefinition theme)
+    /// <summary>强调色下拉项：Core 只给 hex，WPF 侧带一枚预览色块。</summary>
+    private sealed record AccentOption(string Id, string Name, Brush Swatch);
+
+    private static Brush AccentBrush(string hex)
     {
-        var brush = new SolidColorBrush((Color)ColorConverter.ConvertFromString(theme.AccentHex));
+        var brush = new SolidColorBrush((Color)ColorConverter.ConvertFromString(hex));
         brush.Freeze();
         return brush;
     }
-
-    /// <summary>按标识找主题单选钮；白名单外的脏值（手改配置）回落分段第一项，绝不让一组四个都不选。</summary>
-    private RadioButton FindThemeRadio(string id) => id switch
-    {
-        "windows" => ThemeWindows,
-        "macos" => ThemeMacOs,
-        "linux" => ThemeLinux,
-        _ => ThemeHarmonyOs,
-    };
 
     /// <summary>
     /// 放大强度滑杆与倒影开关只对"这个主题真的会放大"有意义——判据取主题参数
@@ -220,23 +230,22 @@ public partial class SettingsWindow : Window
 
     // ---------- 外观 ----------
 
-    private void Theme_Checked(object sender, RoutedEventArgs e)
+    /// <summary>外观模式单选：dark/light/auto，落地走 App.ApplyAppearance（落盘 + token 重写，不重建窗口）。</summary>
+    private void Appearance_Checked(object sender, RoutedEventArgs e)
     {
-        if (_loading || sender is not RadioButton { Tag: string id }) return;
-        // 落地走 App.ApplyTheme（与托盘/顶栏同一条：写设置 + 应用 + Windows 主题下的策略联动），
-        // 这里只负责把界面拉回"设置里的真值"——策略可能被 ApplyTheme 顺手改了（见其注释）。
-        App.ApplyTheme(id);
-        _loading = true;
-        FindThemeRadio(SettingsService.Current.Theme).IsChecked = true;
-        (SettingsService.Current.TaskbarPolicy switch
-        {
-            "autohide" => TaskbarAutoHide,
-            "keep" => TaskbarKeep,
-            _ => TaskbarHide
-        }).IsChecked = true;
-        _loading = false;
-        UpdateTaskbarHint();
+        if (_loading) return;
+        var mode = AppearanceLight.IsChecked == true ? "light"
+                 : AppearanceAuto.IsChecked == true ? "auto"
+                 : "dark";
+        App.ApplyAppearance(mode);
         UpdateThemeDependentControls();
+    }
+
+    /// <summary>强调色下拉：12 色板统一来自 Core MacAccents；落地重写 ThemeAccent/MacAccent。</summary>
+    private void AccentColor_Changed(object sender, SelectionChangedEventArgs e)
+    {
+        if (_loading || AccentColorBox.SelectedValue is not string id) return;
+        App.ApplyAccentColor(id);
     }
 
     private void IconSizeSlider_ValueChanged(object sender, RoutedPropertyChangedEventArgs<double> e)
@@ -297,6 +306,60 @@ public partial class SettingsWindow : Window
 
     private static string? TagOf(object? item)
         => (item as ComboBoxItem)?.Tag as string;
+
+    /// <summary>按 Tag 选中 ComboBox 项；未知值回落 fallback（Core 的 Normalized 已保证合法）。</summary>
+    private static void SelectByTag(ComboBox box, string value, string fallback)
+    {
+        foreach (var item in box.Items.OfType<ComboBoxItem>())
+        {
+            if (TagOf(item) == value)
+            {
+                box.SelectedItem = item;
+                return;
+            }
+        }
+        foreach (var item in box.Items.OfType<ComboBoxItem>())
+        {
+            if (TagOf(item) == fallback)
+            {
+                box.SelectedItem = item;
+                return;
+            }
+        }
+    }
+
+    // ---------- 启动台与搜索 ----------
+
+    private void Launcher_Changed(object sender, RoutedEventArgs e)
+    {
+        if (_loading) return;
+        App.SetLauncherEnabled(LauncherEnabledCheck.IsChecked == true);
+    }
+
+    /// <summary>热键应用：Core Canonicalize 负责"至少一个修饰键 + 非空格主键"；非法值自愈为默认串。</summary>
+    private void LauncherHotkey_Apply(object sender, RoutedEventArgs e)
+    {
+        if (_loading) return;
+        var canonical = Beautiful.Core.Launcher.LauncherHotkey.Canonicalize(LauncherHotkeyBox.Text);
+        App.ApplyLauncherHotkey(canonical);
+        LauncherHotkeyBox.Text = SettingsService.Current.LauncherHotkey;
+    }
+
+    // ---------- 动画 ----------
+
+    private void MinimizeAnimation_Changed(object sender, RoutedEventArgs e)
+    {
+        if (_loading) return;
+        // 动画器在启动时装配：只落盘，不假装即时生效（设置页文案已写明"重启生效"）
+        SettingsService.UpdateAndSave(SettingsService.Current with { MinimizeAnimation = MinimizeAnimationCheck.IsChecked == true });
+    }
+
+    private void GenieEngine_Changed(object sender, SelectionChangedEventArgs e)
+    {
+        if (_loading) return;
+        var value = TagOf(GenieEngineBox.SelectedItem) ?? "mesh";
+        SettingsService.UpdateAndSave(SettingsService.Current with { GenieEngine = value });
+    }
 
     private void Bounce_Changed(object sender, RoutedEventArgs e)
     {
@@ -394,9 +457,8 @@ public partial class SettingsWindow : Window
     private void SwitcherStyle_Checked(object sender, RoutedEventArgs e)
     {
         if (_loading) return;
-        var style = sender == StyleLinux ? "linux" : sender == StyleHarmonyOs ? "harmonyos" : "macos";
-        // 面板在每次呼出时重读 SwitcherStyle，无需重启；此处仅落盘（钩子状态不变）
-        SettingsService.UpdateAndSave(SettingsService.Current with { SwitcherStyle = style });
+        // v4：切换器只剩 macOS 卡片；保留落盘路径，旧配置值由 Normalized 自愈。
+        SettingsService.UpdateAndSave(SettingsService.Current with { SwitcherStyle = "macos" });
     }
 
     private void Passthrough_Changed(object sender, RoutedEventArgs e)
@@ -407,18 +469,7 @@ public partial class SettingsWindow : Window
         App.ApplySwitcherHotkey(SettingsService.Current.SwitcherHotkey, on);
     }
 
-    // ---------- 媒体与歌词 ----------
-
-    private void OffsetSlider_ValueChanged(object sender, RoutedPropertyChangedEventArgs<double> e)
-    {
-        if (OffsetLabel is null) return; // XAML 解析期初次触发时标签尚未就绪
-        OffsetLabel.Text = $"{(int)e.NewValue} ms"; // 标签始终跟手（含初始化）
-        if (_loading) return;
-        var offset = (int)e.NewValue; // IsSnapToTickEnabled 步进 50，已对齐
-        SettingsService.Update(SettingsService.Current with { LyricsOffsetMs = offset });
-        _mediaVm.ApplyLyricsOffset(offset);
-        ScheduleSave();
-    }
+    // ---------- 媒体 ----------
 
     private void Capsule_Changed(object sender, RoutedEventArgs e)
     {
@@ -470,6 +521,7 @@ public partial class SettingsWindow : Window
     {
         var s = SettingsService.Current;
         ThemeManager.Apply(SettingsService.ThemeDefinitionOf(s), Application.Current);
+        ThemeManager.ApplyAppearance(s.Appearance, Application.Current);
         _taskbar.Apply(SettingsService.PolicyOf(s));
         SettingsService.SetAutostart(s.Autostart);
         App.SetTopBarEnabled(s.TopBarEnabled);
@@ -486,7 +538,6 @@ public partial class SettingsWindow : Window
         App.ApplyDockLayout();
         _mediaVm.CapsuleVisible = s.ShowMediaCapsule;
         _mediaVm.PanelAutoHideOnDeactivate = s.HidePanelOnDeactivate;
-        _mediaVm.ApplyLyricsOffset(s.LyricsOffsetMs);
         UpdateThemeDependentControls();
         UpdateTaskbarHint();
     }

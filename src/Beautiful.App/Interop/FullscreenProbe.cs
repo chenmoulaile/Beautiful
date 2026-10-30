@@ -28,7 +28,7 @@ public static class FullscreenProbe
     /// <item><description>WorkerW —— 壁纸轮播/桌面小组件用的兄弟桌面窗口。本机这一批全是
     /// <c>vis=False</c>（已被可见性挡掉），留在名单里是给"哪天它显形"兜底。</description></item>
     /// <item><description>Shell_TrayWnd / Shell_SecondaryTrayWnd —— 任务栏。本机实测
-    /// <c>0,1824,2880,1920</c>，本来就够不到整屏，判据本身能挡住；照抄上游名单是因为玻璃壳就盖在
+    /// <c>0,1824,2880,1920</c>，本来就够不到整屏，判据本身能挡住；照抄上游名单是因为装饰层就盖在
     /// 它上面，一旦让位给它就是"装饰层压住它装饰的那条栏"这种自指故障。</description></item>
     /// <item><description>DV2ControlHost / XamlExplorerHostIslandWindow —— 旧搜索框宿主与 24H2 的 XAML 岛。
     /// 前者本机根本没有，后者的实测形态是 <c>vis=False cloak=1</c>（两个判据都能挡）。同样是保守名单。</description></item>

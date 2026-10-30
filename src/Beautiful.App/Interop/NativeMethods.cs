@@ -314,8 +314,9 @@ internal static partial class NativeMethods
     // ---------- 桌面壁纸（v3 T7 壁纸取色） ----------
     // SystemParametersInfoW 的字符串参数按 SPI_GETDESKWALLPAPER 约定**必须由调用方预填满缓冲区**
     // （缓冲区大小取返回的 uiParam），否则返回 FALSE；路径上限是 MAX_PATH。
+    // v4：壁纸取色功能已删除；这段只读接口保留给 Phase 5 Launchpad 的"当前壁纸"底图读取。
     // 取不到不等于没壁纸：Windows 壁纸幻灯片（WPP 文件）与"纯色桌面"下该值都是空串——
-    // 调用方（WallpaperAccentService）据此回落主题强调色并记录原因，绝不拿空串去解图。
+    // 调用方据此走实色降级并记录原因，绝不拿空串去解图。
     // 这里只做**读**：程序从不改用户桌面（换壁纸是用户的权利，验收脚本用自己的 P/Invoke 临时改再还原）。
     public const int SpiGetDeskWallpaper = 0x0073;
     public const int MaxPath = 260;
@@ -474,7 +475,7 @@ internal static partial class NativeMethods
     // ShowWindow nCmdShow：SW_SHOWNOACTIVATE=4（显示但不夺焦；SW_HIDE=0 已在上方"窗口与消息"段定义）。
     public const int SwShowNoActivate = 4;
     // SetWindowPos 的 hwndInsertAfter：HWND_TOPMOST=-1（预览浮于其他窗口之上，配合 SWP_NOACTIVATE 不抢焦点）。
-    // 第二个消费点是 v3.8 的全屏避让（Services/TaskbarGlassOverlay.cs），它还会用到
+    // 第二个消费点是 v3.8 的全屏避让（Dock/顶栏装饰层），它还会用到
     // HWND_NOTOPMOST=-2：取消置顶、把窗口交回普通层。两者都是**状态位**而不是"插到某个句柄后面"，
     // 避让时我们更常用后者——直接插在全屏窗口之下，比先脱离置顶再排队更稳。
     public static readonly IntPtr HwndTopmost = new(-1);

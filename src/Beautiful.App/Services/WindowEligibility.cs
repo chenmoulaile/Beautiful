@@ -80,7 +80,7 @@ internal static class WindowEligibility
     /// 误判代价是"这一次 Alt+Tab 交给系统"（保守方向），比在反作弊游戏中吞掉按键安全得多。
     /// <para>
     /// 【与 <see cref="FullscreenProbe"/> 的分工，别当成重复代码】两处都在判"全屏"，但保守方向相反，
-    /// 所以判据不能合并：这里错判的代价是"Alt+Tab 还给系统一次"，玻璃壳错判的代价是"美化层凭空消失"。
+    /// 所以判据不能合并：这里错判的代价是"Alt+Tab 还给系统一次"，全屏避让错判的代价是"美化层凭空消失"。
     /// 于是这里额外要"无标题栏"这一条硬条件、且不查 cloaked（切换器不在乎谁铺满屏，只在乎要不要抢键）；
     /// 那边用 DWM 可见像素 + cloak/进程/shell 三重资格。
     /// **唯一共用的是那条"四条边都盖住显示器"的几何**——收口到 <see cref="FullscreenAvoidance.CoversMonitor"/>，

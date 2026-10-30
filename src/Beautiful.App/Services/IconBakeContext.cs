@@ -27,12 +27,12 @@ internal static class IconBakeContext
 
     private static readonly LruCache<IconBakeKey, BitmapSourceHolder> Cache = new(CacheCapacity);
 
-    /// <summary>当前烘焙参数（默认：鸿蒙主题 + 44DIP + 100% + auto）。</summary>
+    /// <summary>当前烘焙参数（默认：macOS 主题 + 44DIP + 100% + auto）。</summary>
     public static IconBakeSpec Spec { get; private set; } =
-        new() { IconSizeDip = 44, DpiScale = 1.0, Mask = IconMaskStyle.Squircle, Shadow = true, Highlight = true };
+        new() { IconSizeDip = 44, DpiScale = 1.0, Mask = IconMaskStyle.RoundedRectangle, Shadow = true, Highlight = true };
 
     /// <summary>当前主题标识（进缓存键）。</summary>
-    public static string ThemeId { get; private set; } = "HarmonyOS";
+    public static string ThemeId { get; private set; } = "MacOS";
 
     /// <summary>当前 IconTreatment 设置值（规范形，进缓存键）。</summary>
     public static string Treatment { get; private set; } = IconTreatment.Auto;

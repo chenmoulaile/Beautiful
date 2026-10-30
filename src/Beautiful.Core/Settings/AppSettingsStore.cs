@@ -22,20 +22,62 @@ public sealed class AppSettingsStore
 
     private string FilePath => Path.Combine(_directory, "settings.json");
 
-    public AppSettings Load()
+    public AppSettings Load(Action<string>? onMigration = null)
     {
         try
         {
             if (!File.Exists(FilePath)) return new AppSettings(); // 缺文件：代码默认，不落盘
-            var settings = JsonSerializer.Deserialize<AppSettings>(File.ReadAllText(FilePath));
+            var text = File.ReadAllText(FilePath);
+            var settings = JsonSerializer.Deserialize<AppSettings>(text);
             if (settings is null) return Corrupt();               // "null" 字面量也视为损坏
-            return settings.Normalized();
+            var normalized = settings.Normalized();
+            ReportMigrations(text, settings, normalized, onMigration);
+            return normalized;
         }
         catch (Exception ex) when (ex is JsonException or IOException or UnauthorizedAccessException)
         {
             return Corrupt();
         }
     }
+
+    /// <summary>
+    /// 迁移取证：值域收敛（旧主题/旧切换器样式等）与已删除字段（v4 Phase 1 的歌词偏移/玻璃壳/壁纸取色）
+    /// 逐条回调。App 侧把回调接到 Logger.Info，于是"用户旧配置被自愈"有可 grep 的中文证据行；
+    /// Core 自身不依赖日志设施（纯函数 + 回调），单测可直接收集这些行。
+    /// </summary>
+    private static void ReportMigrations(
+        string text, AppSettings raw, AppSettings normalized, Action<string>? report)
+    {
+        if (report is null) return;
+        if (!string.Equals(raw.Theme, normalized.Theme, StringComparison.Ordinal))
+            report($"设置自愈：Theme={raw.Theme} → {normalized.Theme}（v4 只保留 macOS）");
+        if (!string.Equals(raw.SwitcherStyle, normalized.SwitcherStyle, StringComparison.Ordinal))
+            report($"设置自愈：SwitcherStyle={raw.SwitcherStyle} → {normalized.SwitcherStyle}（v4 只保留 macOS 卡片）");
+        if (!string.Equals(raw.TaskbarPolicy, normalized.TaskbarPolicy, StringComparison.Ordinal))
+            report($"设置自愈：TaskbarPolicy={raw.TaskbarPolicy} → {normalized.TaskbarPolicy}");
+        if (!string.Equals(raw.DockPosition, normalized.DockPosition, StringComparison.Ordinal))
+            report($"设置自愈：DockPosition={raw.DockPosition} → {normalized.DockPosition}");
+        if (!string.Equals(raw.GenieEngine, normalized.GenieEngine, StringComparison.Ordinal))
+            report($"设置自愈：GenieEngine={raw.GenieEngine} → {normalized.GenieEngine}");
+        if (!string.Equals(raw.IconTreatment, normalized.IconTreatment, StringComparison.Ordinal))
+            report($"设置自愈：IconTreatment={raw.IconTreatment} → {normalized.IconTreatment}");
+
+        try
+        {
+            using var doc = JsonDocument.Parse(text);
+            if (doc.RootElement.ValueKind != JsonValueKind.Object) return;
+            foreach (var removed in RemovedFields)
+                if (doc.RootElement.TryGetProperty(removed, out _))
+                    report($"设置迁移：字段 {removed} 已随非 macOS 功能删除（v4 Phase 1），旧值忽略");
+        }
+        catch (JsonException)
+        {
+            // 结构损坏已在上层走 Corrupt 路径；这里只做取证，不改变加载结果
+        }
+    }
+
+    /// <summary>v4 Phase 1 删除的持久化字段（旧文件里出现时只记迁移日志，不删用户的其余配置）。</summary>
+    private static readonly string[] RemovedFields = ["LyricsOffsetMs", "TaskbarGlass", "UseWallpaperAccent"];
 
     public void Save(AppSettings settings)
     {

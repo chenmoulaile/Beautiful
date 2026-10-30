@@ -17,5 +17,8 @@ v3-*.png
 v31-*.png
 dist/
 
+# Apple 字体资产（D-FONT：所有者本地放置，公开仓库不分发；打包时条件性进产物）
+src/Beautiful.App/Assets/Fonts/
+
 # 安装器产物（55MB 级，随 GitHub Release 分发，不进版本库）
 installer/out/

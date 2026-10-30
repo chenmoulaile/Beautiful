@@ -8,7 +8,8 @@ public readonly record struct RgbColor(byte R, byte G, byte B)
 }
 
 /// <summary>
-/// 从 BGRA 像素缓冲取"强调色"（v3 T7 壁纸取色）。
+/// 从 BGRA 像素缓冲取"强调色"（v3 T7；壁纸取色功能已在 v4 Phase 1 删除，
+/// 纯函数保留给 Phase 5 Launchpad 壁纸处理/暗遮罩取样）。
 /// <para>
 /// 【算法三步，每步都为"稳"服务】
 /// ① <b>降采样</b>：按最长边抽稀到 ≤<see cref="MaxSamples"/> 个探针像素（跳过透明像素）。壁纸是

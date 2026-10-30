@@ -1,68 +1,29 @@
-using System.Collections.ObjectModel;
 using System.ComponentModel;
 using System.IO;
-using System.Net.Http; // UseWindowsForms 启用时桌面 SDK 会把 System.Net.Http 移出隐式 using
 using System.Windows.Input;
 using System.Windows.Media.Imaging;
 using System.Windows.Threading;
 using Beautiful.App.Services;
-using Beautiful.Core.Lyrics;
+using Beautiful.Core.Media;
 using Beautiful.Core.Timeline;
 
 namespace Beautiful.App.MediaWidget;
 
-/// <summary>歌词区状态（驱动面板占位文案）。</summary>
-public enum LyricsState
-{
-    /// <summary>无会话/无曲目：胶囊已折叠，面板不应打开。</summary>
-    Idle,
-    /// <summary>曲目已就绪，歌词异步加载中（"歌词加载中…"）。</summary>
-    Loading,
-    /// <summary>歌词已加载。</summary>
-    Loaded,
-    /// <summary>全部来源未命中（"暂无歌词"）。</summary>
-    NoLyrics
-}
-
-/// <summary>歌词列表行：原文 + 可空译文 + 当前行高亮标记（面板 DataTrigger 消费）。</summary>
-public sealed class LyricRow : INotifyPropertyChanged
-{
-    private bool _isCurrent;
-
-    public LyricRow(TimeSpan time, string original, string? translation)
-        => (Time, Original, Translation) = (time, original, translation);
-
-    public TimeSpan Time { get; }
-    public string Original { get; }
-    public string? Translation { get; }
-
-    public bool IsCurrent
-    {
-        get => _isCurrent;
-        set
-        {
-            if (_isCurrent == value) return;
-            _isCurrent = value;
-            PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(IsCurrent)));
-        }
-    }
-
-    public event PropertyChangedEventHandler? PropertyChanged;
-}
-
 /// <summary>
-/// 媒体胶囊 + 歌词展开面板共用 VM。消费 <see cref="SmtcService"/>（WinRT 事件到达于线程池线程，
+/// 媒体胶囊 + "正在播放"面板共用 VM。消费 <see cref="SmtcService"/>（WinRT 事件到达于线程池线程，
 /// 全部经 Dispatcher 编组到 UI 线程后再触碰状态），<see cref="PlaybackClock"/> 负责位置外推，
-/// 500ms DispatcherTimer 驱动进度与歌词行二分定位，<see cref="LyricService"/> 异步加载双语歌词。
+/// 500ms DispatcherTimer 驱动进度。
+/// <para>
+/// v4：旧逐行文本引擎整体删除（Phase 1 T2）。面板回到 macOS "正在播放"语义——
+/// 封面 + 标题/艺术家 + 进度 + 三键；不再有任何音乐服务网络请求。
+/// </para>
 /// </summary>
 public sealed class MediaViewModel : INotifyPropertyChanged, IDisposable
 {
     private readonly SmtcService _smtc;
-    private readonly LyricService _lyrics;
     private readonly PlaybackClock _clock = new();
     private readonly Dispatcher _dispatcher;
     private readonly DispatcherTimer _tickTimer;
-    private int _lyricLoadSeq;   // 歌词加载代际号：曲目快速切换时丢弃过期加载结果
     private bool _seeking;       // 面板 Slider 交互期间：暂停定时器/时间线对 PositionSeconds 的回写（防抖结算后复位）
     private int _seekGen;        // seek 代际号：BeginSeek/换曲递增；结算时比对，飞行期间又有新交互/换曲则本结果作废
     private bool _seekFailed;    // 首次 SeekAsync 失败 → 本任务内隐藏进度条（换会话时重置）
@@ -75,18 +36,10 @@ public sealed class MediaViewModel : INotifyPropertyChanged, IDisposable
     private double _positionSeconds;
     private double _durationSeconds;
     private bool _isSeekable = true;
-    private LyricsState _state = LyricsState.Idle;
-    private int _currentLyricIndex = -1;
-    private int _offsetMs;                    // 歌词对齐偏移（设置项；设置窗口经 ApplyLyricsOffset 热更新）
-    private LyricDocument? _lastRawDoc;       // 当前曲目原始歌词（未对齐）：偏移变更时就地重对齐，免网络
     private bool _capsuleVisible;             // Dock 媒体胶囊显示开关（设置项）
     private bool _panelAutoHideOnDeactivate;  // 媒体面板失焦自动收起（设置项；MediaPanel 消费）
 
     public event PropertyChangedEventHandler? PropertyChanged;
-    /// <summary>当前歌词行下标变化（-1 = 无高亮行）：面板 code-behind 订阅以 ScrollIntoView。</summary>
-    public event Action<int>? CurrentLyricIndexChanged;
-
-    public ObservableCollection<LyricRow> Lyrics { get; } = new();
 
     public ICommand TogglePlayCommand { get; }
     public ICommand NextCommand { get; }
@@ -98,17 +51,8 @@ public sealed class MediaViewModel : INotifyPropertyChanged, IDisposable
         _dispatcher = dispatcher;
         // 设置项初值（SettingsService.Load 先于本构造发生；App.OnStartup 顺序保证）
         var settings = SettingsService.Current;
-        _offsetMs = settings.LyricsOffsetMs;
         _capsuleVisible = settings.ShowMediaCapsule;
         _panelAutoHideOnDeactivate = settings.HidePanelOnDeactivate;
-        // 每个 provider 一个共享 HttpClient，随 VM 生命周期复用（严禁按曲目新建）
-        _lyrics = new LyricService(
-            new ILyricsProvider[]
-            {
-                new NetEaseProvider(new HttpClient()),
-                new LrcLibProvider(new HttpClient())
-            },
-            new LyricCacheService());
 
         TogglePlayCommand = new RelayCommand(_ => _ = _smtc.TogglePlayPauseAsync());
         NextCommand = new RelayCommand(_ => _ = _smtc.NextAsync());
@@ -205,47 +149,6 @@ public sealed class MediaViewModel : INotifyPropertyChanged, IDisposable
         CapsuleText = string.IsNullOrWhiteSpace(meta.Artist) ? meta.Title : $"{meta.Artist} - {meta.Title}";
         CoverImage = DecodeCover(meta.CoverBytes);
         DurationSeconds = Math.Max(0, meta.Duration.TotalSeconds);
-        _lyricLoadSeq++;
-        ResetLyricRows(LyricsState.Loading);
-        _ = LoadLyricsAsync(meta, _lyricLoadSeq);
-    }
-
-    private async Task LoadLyricsAsync(TrackMeta meta, int seq)
-    {
-        LyricDocument? doc = null;
-        try { doc = await _lyrics.GetLyricsAsync(meta); }
-        catch (Exception ex) { Logger.Warn($"歌词加载失败: {ex.Message}"); }
-
-        await _dispatcher.InvokeAsync(() =>
-        {
-            if (seq != _lyricLoadSeq) return; // 曲目已切换/会话解绑：丢弃过期结果
-            if (doc is null || doc.Lines.Count == 0)
-            {
-                ResetLyricRows(LyricsState.NoLyrics);
-                return;
-            }
-            // 双语对齐偏移：读设置项（设置窗口热更经 ApplyLyricsOffset）
-            _lastRawDoc = doc;
-            var aligned = BilingualAligner.WithOffset(doc, _offsetMs);
-            foreach (var line in aligned.Lines)
-                Lyrics.Add(new LyricRow(line.Time, line.Original, line.Translation));
-            State = LyricsState.Loaded;
-        });
-    }
-
-    /// <summary>
-    /// 设置窗口调整歌词偏移后调用：按新偏移就地重建当前歌词行（用缓存的原始文档，免网络）。
-    /// 无已加载歌词（加载中/无歌词/空闲）时不动作——在途加载与下次加载都会按新偏移对齐。
-    /// </summary>
-    public void ApplyLyricsOffset(int offsetMs)
-    {
-        _offsetMs = offsetMs;
-        if (_lastRawDoc is not { Lines.Count: > 0 } || State != LyricsState.Loaded) return;
-        Lyrics.Clear();
-        _currentLyricIndex = -1;
-        RaisePropertyChanged(nameof(CurrentLyricIndex));
-        foreach (var line in BilingualAligner.WithOffset(_lastRawDoc, offsetMs).Lines)
-            Lyrics.Add(new LyricRow(line.Time, line.Original, line.Translation));
     }
 
     private void ApplyPlaying(bool playing)
@@ -266,41 +169,11 @@ public sealed class MediaViewModel : INotifyPropertyChanged, IDisposable
     private void OnTick(object? sender, EventArgs e)
     {
         if (!HasSession) return;
-        var pos = _clock.CurrentPosition;
-        if (!_seeking) SetPosition(pos);
-        UpdateCurrentLyricIndex(FindLyricIndex(pos));
-    }
-
-    /// <summary>
-    /// 二分定位：Time &lt;= pos 的最后一行下标；pos 早于首行或无歌词时 -1。
-    /// 空集合 hi=-1 直接返回 -1；越过末行时 lo 越界收敛为末行。
-    /// </summary>
-    private int FindLyricIndex(TimeSpan pos)
-    {
-        int lo = 0, hi = Lyrics.Count - 1, ans = -1;
-        while (lo <= hi)
-        {
-            var mid = lo + (hi - lo) / 2;
-            if (Lyrics[mid].Time <= pos) { ans = mid; lo = mid + 1; }
-            else hi = mid - 1;
-        }
-        return ans;
-    }
-
-    private void UpdateCurrentLyricIndex(int index)
-    {
-        if (index == _currentLyricIndex) return;
-        if ((uint)_currentLyricIndex < (uint)Lyrics.Count) Lyrics[_currentLyricIndex].IsCurrent = false;
-        if ((uint)index < (uint)Lyrics.Count) Lyrics[index].IsCurrent = true;
-        _currentLyricIndex = index;
-        RaisePropertyChanged(nameof(CurrentLyricIndex));
-        CurrentLyricIndexChanged?.Invoke(index);
+        if (!_seeking) SetPosition(_clock.CurrentPosition);
     }
 
     private void ClearTrack()
     {
-        _lyricLoadSeq++;                 // 在途歌词加载作废
-        _lastRawDoc = null;              // 原始文档随曲目一并失效
         TrackTitle = "";
         Artist = "";
         CapsuleText = "";
@@ -313,15 +186,6 @@ public sealed class MediaViewModel : INotifyPropertyChanged, IDisposable
         _seeking = false;    // 换曲/换会话必解除 Slider 交互挂起（面板实例复用，Closed 未必触发）
         _seekFailed = false;
         IsSeekable = true;
-        ResetLyricRows(LyricsState.Idle);
-    }
-
-    private void ResetLyricRows(LyricsState state)
-    {
-        Lyrics.Clear();
-        _currentLyricIndex = -1;
-        RaisePropertyChanged(nameof(CurrentLyricIndex));
-        State = state;
     }
 
     private void SetPosition(TimeSpan pos)
@@ -462,17 +326,6 @@ public sealed class MediaViewModel : INotifyPropertyChanged, IDisposable
         }
     }
 
-    public LyricsState State
-    {
-        get => _state;
-        private set
-        {
-            if (_state == value) return;
-            _state = value;
-            RaisePropertyChanged();
-        }
-    }
-
     /// <summary>Dock 是否显示媒体胶囊条目（设置项；MediaItemTemplate 宽度触发器消费）。</summary>
     public bool CapsuleVisible
     {
@@ -496,8 +349,6 @@ public sealed class MediaViewModel : INotifyPropertyChanged, IDisposable
             RaisePropertyChanged();
         }
     }
-
-    public int CurrentLyricIndex => _currentLyricIndex;
 
     private void RaisePropertyChanged([System.Runtime.CompilerServices.CallerMemberName] string? name = null)
         => PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(name));

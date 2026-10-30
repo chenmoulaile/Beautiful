@@ -58,7 +58,8 @@ public readonly record struct OverlayZOrder(bool KeepTopmost, IntPtr PlaceAfter)
 
 /// <summary>
 /// 全屏避让：盖住整块显示器的前台窗口（全屏游戏、F11、视频全屏）出现时，装饰性置顶层必须落下。
-/// 算法移植自 <c>ANYNC/TaskbarLyrics</c> 的 <c>SmartTopmostPolicy</c>（MIT，出处见
+/// 算法移植自第三方 MIT 项目（作者 ANYNC）的 <c>SmartTopmostPolicy</c>（出处与许可见
+/// THIRD-PARTY-NOTICES.md）：
 /// THIRD-PARTY-NOTICES.md），只取这段无依赖的纯数学，不带它的 WebView2/EF Core/OpenCC 栈。
 /// <para>
 /// 【为什么"最大化窗口"不会触发放下——本机实测】2880×1920 屏 + 96px 常驻任务栏下，最大化的
@@ -69,7 +70,7 @@ public readonly record struct OverlayZOrder(bool KeepTopmost, IntPtr PlaceAfter)
 /// </para>
 /// <para>
 /// 【为什么这里不处理"任务栏自动隐藏时最大化=整屏"】那条推断成立时，任务栏矩形已经不在屏内，
-/// 调用方的 <c>TaskbarGlassMath.IsDecoratable</c> 早就先返回假、把装饰层收掉了；两者互斥，
+/// 调用方的"可装饰判定"早就先返回假、把装饰层收掉了；两者互斥，
 /// 不会同时出现"装饰层在画"与"最大化窗口盖住整屏"。剩下唯一的空隙是自动隐藏栏探出 1px 的
 /// 瞬间——那时装饰层本来就只有一条 1px 的影子，让不让位看不出来。
 /// </para>

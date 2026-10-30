@@ -13,7 +13,7 @@ namespace Beautiful.App.Shell;
 /// 托盘图标（System.Windows.Forms.NotifyIcon，运行于 WPF UI 线程——Dispatcher 泵送 Win32 消息）。
 /// 图标为代码绘制的 16x16 圆点（主题强调色，构建时取值不随主题热更新——托盘图标为静态资源语义）。
 /// 右键弹自绘 <see cref="FluentMenu"/>（macOS 质感高级弹层，替代 v1 WinForms ContextMenuStrip 灰皮）：
-/// 设置… / 主题▸（鸿蒙/macOS/Linux，勾选=当前主题，每次打开重建即刷新） / 重载 Dock / 分隔 / 退出；
+/// 设置… / 主题▸（v4 只剩 macOS；勾选=当前主题，每次打开重建即刷新） / 重载 Dock / 分隔 / 退出；
 /// 左键双击 = 设置。回调注入（openSettings/reloadDock/exit/applyTheme/currentTheme）——本类不持有
 /// Dock/Settings 引用，重载 Dock 等生命周期编排归 App。<see cref="Dispose"/> 必须在退出路径调用
 /// （关未决弹层 + 移除图标，防幽灵图标）。
@@ -74,7 +74,7 @@ public sealed class TrayIconManager : IDisposable
         {
             new() { Id = "settings", Label = "设置…", Glyph = "\uE713", Invoke = _openSettings },
             // 主题子菜单直接来自 QuickSettings.Themes 这一份白名单（与控制中心分段、顶栏主题菜单同源）：
-            // 加第四条线时这里不用补一行，也不会出现"设置页有、托盘没有"的两样。
+            // v4 只剩 macOS 一项；未来换外观模式时同样只改这一处投影。
             new() { Id = "theme", Label = "主题", Glyph = "\uE790",
                     Children = [.. QuickSettings.Themes.Select(o => ThemeItem(o.Id, o.Label, theme))] },
             new() { Id = "reload", Label = "重载 Dock", Glyph = "\uE72C", Invoke = _reloadDock },

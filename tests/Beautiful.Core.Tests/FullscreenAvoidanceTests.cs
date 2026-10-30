@@ -3,7 +3,7 @@ using Beautiful.Core.Layout;
 using Xunit;
 
 /// <summary>
-/// 全屏避让纯函数测试（v3.8，算法移植自 TaskbarLyrics 的 SmartTopmostPolicy，MIT）。
+/// 全屏避让纯函数测试（v3.8，算法移植自第三方 MIT 项目，出处见 THIRD-PARTY-NOTICES.md）。
 /// <para>
 /// 这条线只能在这里锁：真机上"起一个全屏游戏再看装饰层掉不掉"要么扰动用户正在用的机器，
 /// 要么根本没有 GPU 直通。而让位/浮着的每个分支都取决于矩形与标志位的组合，纯函数能穷举。
@@ -128,7 +128,7 @@ public class FullscreenAvoidanceTests
     {
         // 本机 2026-10-17 取证到的真实形态：TextInputHost.exe 的 Windows.UI.Core.CoreWindow
         // IsWindowVisible=true、矩形 0,0,2880,1920 正好铺满、DWMWA_CLOAKED=2。
-        // 它一旦抢到前台又没有 cloak 判据，玻璃壳会凭空消失且再也回不来。
+        // 它一旦抢到前台又没有 cloak 判据，装饰层会凭空消失且再也回不来。
         var d = FullscreenAvoidance.Evaluate(
             new PhysicalRect(0, 0, 2880, 1920),
             Window(new PhysicalRect(0, 0, 2880, 1920), cloaked: true));

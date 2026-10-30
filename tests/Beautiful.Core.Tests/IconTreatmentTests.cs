@@ -100,7 +100,7 @@ public class IconBakeSpecTests
     [Fact]
     public void 有形状或有高光就不是纯几何()
     {
-        Assert.False(new IconBakeSpec { IconSizeDip = 44, DpiScale = 1, Mask = IconMaskStyle.Squircle }.GeometryOnly);
+        Assert.False(new IconBakeSpec { IconSizeDip = 44, DpiScale = 1, Mask = IconMaskStyle.RoundedRectangle }.GeometryOnly);
         Assert.False(new IconBakeSpec { IconSizeDip = 44, DpiScale = 1, Highlight = true }.GeometryOnly);
         Assert.True(new IconBakeSpec { IconSizeDip = 44, DpiScale = 1 }.GeometryOnly);
     }
@@ -154,99 +154,13 @@ public class IconBakeSpecTests
     }
 }
 
-/// <summary>遮罩形状：主题数据 → 归一化点位 / 半径的钳制（形状属主唯一性由 IconTreatmentTests 锁）。</summary>
-public class IconMaskGeometryTests
-{
-    [Fact]
-    public void squircle单位点落在单位方框内且数量与采样一致()
-    {
-        var pts = IconBake.SquircleUnitPoints();
-        Assert.Equal(IconBake.SquircleSamples, pts.Count);
-        foreach (var (x, y) in pts)
-        {
-            Assert.InRange(x, -1e-9, 1 + 1e-9);
-            Assert.InRange(y, -1e-9, 1 + 1e-9);
-        }
-    }
-
-    [Fact]
-    public void squircle四个轴向端点贴着单位方框()
-    {
-        var pts = IconBake.SquircleUnitPoints();
-        Assert.Equal(1.0, pts[0].X, 6);      // θ=0
-        Assert.Equal(0.5, pts[0].Y, 6);
-        Assert.Equal(0.0, pts[48].X, 4);     // θ=π
-        Assert.Equal(1.0, pts[24].Y, 6);     // θ=π/2
-    }
-
-    [Fact]
-    public void squircle比圆更饱满_因此与既有ThemeIconClip同观感()
-    {
-        // n=4.4 > 2 ⇒ 45° 方向上比圆鼓出来；这正是"连续圆角"的判别式，也是它不同于 RectangleGeometry 的地方
-        var pts = IconBake.SquircleUnitPoints();
-        var x45 = pts[12].X;                       // θ=π/4
-        Assert.True(x45 > 0.5 + 0.5 * Math.Sqrt(0.5), $"45° 点 x={x45:0.###} 应比圆的 0.8536 更靠外");
-        Assert.True(x45 < 1.0);
-    }
-
-    [Fact]
-    public void squircle关于中心对称()
-    {
-        var pts = IconBake.SquircleUnitPoints();
-        for (var i = 0; i < pts.Count; i++)
-        {
-            var mirror = pts[(i + pts.Count / 2) % pts.Count];   // θ → θ+π
-            Assert.Equal(1 - pts[i].X, mirror.X, 6);
-            Assert.Equal(1 - pts[i].Y, mirror.Y, 6);
-        }
-    }
-
-    [Fact]
-    public void 像素映射按矩形缩放不平移错()
-    {
-        var px = IconBake.ToPixels(IconBake.SquircleUnitPoints(), 10, 20, 100, 100);
-        Assert.Equal(110, px[0].X, 6);   // 单位点 (1,0.5) → (10+100, 20+50)
-        Assert.Equal(70, px[0].Y, 6);
-    }
-
-    [Fact]
-    public void 半径比例钳到零到半点边()
-    {
-        Assert.Equal(0.2, IconBake.ClampRadiusRatio(IconMaskStyle.RoundedRectangle, 0.2), 6);
-        Assert.Equal(IconBake.MaxMaskRadiusRatio, IconBake.ClampRadiusRatio(IconMaskStyle.RoundedRectangle, 0.9), 6);
-        Assert.Equal(0, IconBake.ClampRadiusRatio(IconMaskStyle.RoundedRectangle, -1), 6);
-        Assert.Equal(0, IconBake.ClampRadiusRatio(IconMaskStyle.RoundedRectangle, double.NaN), 6);
-        // None 就是"没有形状"，别让残留的 ratio 生效
-        Assert.Equal(0, IconBake.ClampRadiusRatio(IconMaskStyle.None, 0.25), 6);
-        // Squircle 的"圆角"由超椭圆指数决定：ClampRadiusRatio 只管数值域，"哪种形状用半径"是 RadiusPx 的决定
-        Assert.Equal(0.25, IconBake.ClampRadiusRatio(IconMaskStyle.Squircle, 0.25), 6);
-        Assert.Equal(0, IconBake.RadiusPx(IconMaskStyle.Squircle, 0.25, 66));
-    }
-
-    [Fact]
-    public void 半径像素按artwork边长取整()
-    {
-        Assert.Equal(13, IconBake.RadiusPx(IconMaskStyle.RoundedRectangle, 0.2, 66));    // floor(13.2)
-        Assert.Equal(0, IconBake.RadiusPx(IconMaskStyle.Squircle, 0.2, 66));
-        Assert.Equal(0, IconBake.RadiusPx(IconMaskStyle.None, 0.2, 66));
-        Assert.Equal(0, IconBake.RadiusPx(IconMaskStyle.RoundedRectangle, 0.2, 0));      // 退化尺寸不炸
-    }
-
-    [Fact]
-    public void 烘焙半径随图块增大()
-    {
-        var small = new IconBakeSpec { IconSizeDip = 32, DpiScale = 1, Mask = IconMaskStyle.RoundedRectangle, MaskRadiusRatio = 0.2, Shadow = true };
-        var large = new IconBakeSpec { IconSizeDip = 72, DpiScale = 2, Mask = IconMaskStyle.RoundedRectangle, MaskRadiusRatio = 0.2, Shadow = true };
-        Assert.True(large.RadiusPx > small.RadiusPx);
-        Assert.Equal((int)Math.Floor(small.ArtworkPx * 0.2), small.RadiusPx);
-    }
-}
+/// <summary>设置项 IconTreatment → 实际烘焙参数（含"形状单一属主"不变量）。
 
 /// <summary>设置项 IconTreatment → 实际烘焙参数（含"形状单一属主"不变量）。</summary>
 public class IconTreatmentTests
 {
     [Fact]
-    public void auto_按主题给形状与投影()
+    public void auto_按macOS主题给形状与投影()
     {
         var mac = IconTreatment.Resolve("auto", ThemeDefinition.MacOs().IconMask,
                                          ThemeDefinition.MacOs().IconMaskRadiusRatio, ThemeDefinition.MacOs().IconShadow);
@@ -254,20 +168,6 @@ public class IconTreatmentTests
         Assert.True(mac.Shadow);
         Assert.True(mac.Highlight);
         Assert.True(mac.BakesMask);     // macOS 的形状归烘焙位图
-
-        var harmony = IconTreatment.Resolve("auto", ThemeDefinition.HarmonyOs().IconMask,
-                                            ThemeDefinition.HarmonyOs().IconMaskRadiusRatio, ThemeDefinition.HarmonyOs().IconShadow);
-        Assert.Equal(IconMaskStyle.Squircle, harmony.Mask);
-        Assert.True(harmony.Shadow);
-        Assert.True(harmony.BakesMask);
-
-        // GNOME dash 平铺：无遮罩、无投影、形状属主留在 XAML 的 ThemeIconClip
-        var linux = IconTreatment.Resolve("auto", ThemeDefinition.Linux().IconMask,
-                                          ThemeDefinition.Linux().IconMaskRadiusRatio, ThemeDefinition.Linux().IconShadow);
-        Assert.Equal(IconMaskStyle.None, linux.Mask);
-        Assert.False(linux.Shadow);
-        Assert.False(linux.Highlight);
-        Assert.False(linux.BakesMask);
     }
 
     [Fact]
@@ -278,14 +178,14 @@ public class IconTreatmentTests
         Assert.Equal(IconTreatment.FallbackRadiusRatio, forced.RadiusRatio, 6);
         Assert.True(forced.Shadow);
         Assert.True(forced.BakesMask);
-        // 主题已经有形状时不覆盖它（鸿蒙仍应是 squircle，不是被换成圆角方块）
-        Assert.Equal(IconMaskStyle.Squircle, IconTreatment.Resolve("mask", IconMaskStyle.Squircle, 0, false).Mask);
+        // 主题已有形状时不覆盖它（macOS 的圆角方块不被换掉）
+        Assert.Equal(IconMaskStyle.RoundedRectangle, IconTreatment.Resolve("mask", IconMaskStyle.RoundedRectangle, 0.2, false).Mask);
     }
 
     [Fact]
     public void plain_什么都不烧_形状交回XAML()
     {
-        var plain = IconTreatment.Resolve("plain", IconMaskStyle.Squircle, 0.25, true);
+        var plain = IconTreatment.Resolve("plain", IconMaskStyle.RoundedRectangle, 0.2, true);
         Assert.Equal(IconMaskStyle.None, plain.Mask);
         Assert.False(plain.Shadow);
         Assert.False(plain.Highlight);
@@ -301,7 +201,7 @@ public class IconTreatmentTests
         Assert.Equal("mask", IconTreatment.Canonical("  MaSk "));
         Assert.Equal("plain", IconTreatment.Canonical("PLAIN"));
         // 未知值走 auto 而不是报错（与 AppSettings 的其它枚举串同一纪律）
-        Assert.True(IconTreatment.Resolve("乱写", IconMaskStyle.Squircle, 0, true).BakesMask);
+        Assert.True(IconTreatment.Resolve("乱写", IconMaskStyle.RoundedRectangle, 0, true).BakesMask);
     }
 
     [Fact]
@@ -317,33 +217,19 @@ public class IconTreatmentTests
     }
 }
 
-/// <summary>主题的图标数据（形状/投影都是主题参数，不是渲染器里的 if）。</summary>
+/// <summary>macOS 图标遮罩数据（形状/投影都是主题参数）。。</summary>
 public class ThemeIconMaskTests
 {
     [Fact]
-    public void 三主题的图标形状各按原生()
+    public void macOS图标为圆角方形带投影_遮罩口径为零()
     {
-        Assert.Equal(IconMaskStyle.RoundedRectangle, ThemeDefinition.MacOs().IconMask);
-        Assert.Equal(IconMaskStyle.Squircle, ThemeDefinition.HarmonyOs().IconMask);
-        Assert.Equal(IconMaskStyle.None, ThemeDefinition.Linux().IconMask);
-
-        Assert.True(ThemeDefinition.MacOs().IconShadow);
-        Assert.True(ThemeDefinition.HarmonyOs().IconShadow);
-        Assert.False(ThemeDefinition.Linux().IconShadow);
-
-        // 只有圆角方形主题需要半径
-        Assert.Equal(0.2, ThemeDefinition.MacOs().IconMaskRadiusRatio, 6);
-        Assert.Equal(0, ThemeDefinition.HarmonyOs().IconMaskRadiusRatio, 6);
-    }
-
-    [Fact]
-    public void 既有的XAML遮罩口径未被改动()
-    {
-        // IconCornerRadiusRatio 是 ThemeIconClip（XAML 侧）的数据源，T6 不动它：
-        // plain 方式与 GNOME 仍然完全沿用 v3 T4 的观感。
-        Assert.Equal(0, ThemeDefinition.MacOs().IconCornerRadiusRatio, 6);
-        Assert.Equal(0.25, ThemeDefinition.HarmonyOs().IconCornerRadiusRatio, 6);
-        Assert.Equal(8.0 / 44.0, ThemeDefinition.Linux().IconCornerRadiusRatio, 6);
+        var t = ThemeDefinition.MacOs();
+        Assert.Equal(IconMaskStyle.RoundedRectangle, t.IconMask);      // 圆角方块
+        Assert.True(t.IconShadow);                                     // 贴近柔影
+        Assert.Equal(0.2, t.IconMaskRadiusRatio, 6);                   // Big Sur ≈ 边长 20%
+        // IconCornerRadiusRatio 是 ThemeIconClip（XAML 侧）的数据源，macOS=0 ⇒
+        // 形状归烘焙位图独有，XAML 不注入 clip（T6 单属主不变量）
+        Assert.Equal(0, t.IconCornerRadiusRatio, 6);
     }
 }
 

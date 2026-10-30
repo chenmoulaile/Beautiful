@@ -5,35 +5,29 @@ using Xunit;
 public class AppSettingsTests
 {
     [Fact]
-    public void 默认值_鸿蒙_隐藏任务栏_不自启_偏移0_胶囊与失焦收起开启()
+    public void 默认值_macOS_隐藏任务栏_不自启_偏移0_胶囊与失焦收起开启()
     {
         var s = new AppSettings();
-        Assert.Equal("harmonyos", s.Theme);
+        Assert.Equal("macos", s.Theme);
+        Assert.Equal("dark", s.Appearance);
+        Assert.Equal("blue", s.AccentColor);
         Assert.Equal("hide", s.TaskbarPolicy);
         Assert.False(s.Autostart);
-        Assert.Equal(0, s.LyricsOffsetMs);
         Assert.True(s.ShowMediaCapsule);
         Assert.True(s.HidePanelOnDeactivate);
     }
 
     [Fact]
-    public void Offset收敛_合法范围内原样_越界钳制到正负2000()
-    {
-        Assert.Equal(0, new AppSettings { LyricsOffsetMs = 0 }.Normalized().LyricsOffsetMs);
-        Assert.Equal(2000, new AppSettings { LyricsOffsetMs = 2000 }.Normalized().LyricsOffsetMs);
-        Assert.Equal(-2000, new AppSettings { LyricsOffsetMs = -2000 }.Normalized().LyricsOffsetMs);
-        Assert.Equal(2000, new AppSettings { LyricsOffsetMs = 5000 }.Normalized().LyricsOffsetMs);
-        Assert.Equal(-2000, new AppSettings { LyricsOffsetMs = -5000 }.Normalized().LyricsOffsetMs);
-        Assert.Equal(150, new AppSettings { LyricsOffsetMs = 150 }.Normalized().LyricsOffsetMs);
-    }
-
-    [Fact]
     public void 未知Theme或任务栏策略_收敛为默认值()
     {
-        Assert.Equal("harmonyos", new AppSettings { Theme = "mac0s" }.Normalized().Theme);
+        Assert.Equal("macos", new AppSettings { Theme = "mac0s" }.Normalized().Theme);
         Assert.Equal("macos", new AppSettings { Theme = "macos" }.Normalized().Theme);
-        Assert.Equal("linux", new AppSettings { Theme = "linux" }.Normalized().Theme);
-        Assert.Equal("harmonyos", new AppSettings { Theme = "HARMONYOS" }.Normalized().Theme);
+        Assert.Equal("macos", new AppSettings { Theme = "linux" }.Normalized().Theme);
+        Assert.Equal("macos", new AppSettings { Theme = "HARMONYOS" }.Normalized().Theme);
+        Assert.Equal("auto", new AppSettings { Appearance = "AUTO" }.Normalized().Appearance);
+        Assert.Equal("dark", new AppSettings { Appearance = "sepia" }.Normalized().Appearance);
+        Assert.Equal("purple", new AppSettings { AccentColor = " PURPLE " }.Normalized().AccentColor);
+        Assert.Equal("blue", new AppSettings { AccentColor = "chartreuse" }.Normalized().AccentColor);
         Assert.Equal("hide", new AppSettings { TaskbarPolicy = "always" }.Normalized().TaskbarPolicy);
         Assert.Equal("autohide", new AppSettings { TaskbarPolicy = "AutoHide" }.Normalized().TaskbarPolicy);
         Assert.Equal("keep", new AppSettings { TaskbarPolicy = "keep" }.Normalized().TaskbarPolicy);
@@ -56,7 +50,6 @@ public class AppSettingsTests
         Assert.True(s.FullscreenPassthrough);
         Assert.Equal("ctrl+alt+space", s.LauncherHotkey);
         Assert.True(s.LauncherEnabled);       // v3 T7：启动器默认开（关掉它等于没有这个功能）
-        Assert.False(s.UseWallpaperAccent);   // 壁纸取色默认关：主题观感与取色功能上线前完全一致
         Assert.False(s.AutoHideDock);
     }
 
@@ -86,8 +79,8 @@ public class AppSettingsTests
     public void v2未知样式或停靠位_收敛为默认_大小写与首尾空白归一()
     {
         Assert.Equal("macos", new AppSettings { SwitcherStyle = "weird" }.Normalized().SwitcherStyle);
-        Assert.Equal("linux", new AppSettings { SwitcherStyle = "Linux" }.Normalized().SwitcherStyle);
-        Assert.Equal("harmonyos", new AppSettings { SwitcherStyle = "  HARMONYOS  " }.Normalized().SwitcherStyle);
+        Assert.Equal("macos", new AppSettings { SwitcherStyle = "Linux" }.Normalized().SwitcherStyle);
+        Assert.Equal("macos", new AppSettings { SwitcherStyle = "  HARMONYOS  " }.Normalized().SwitcherStyle);
         Assert.Equal("bottom", new AppSettings { DockPosition = "x" }.Normalized().DockPosition);
         Assert.Equal("left", new AppSettings { DockPosition = "LEFT" }.Normalized().DockPosition);
         Assert.Equal("bottom", new AppSettings { DockPosition = "diagonal" }.Normalized().DockPosition);
@@ -120,7 +113,7 @@ public class AppSettingsTests
         {
             DockIconSize = 500, MagnificationStrength = 12, SwitcherStyle = "weird",
             DockPosition = "x", Theme = "nope", TaskbarPolicy = "nope",
-            SwitcherHotkey = null!, LauncherHotkey = " ", LyricsOffsetMs = 99999
+            SwitcherHotkey = null!, LauncherHotkey = " "
         }.Normalized();
         Assert.Equal(once, once.Normalized());
     }
@@ -131,13 +124,12 @@ public class AppSettingsTests
         // SettingsService.Update/UpdateAndSave 现内部过 Normalized()（Task 1 评审遗留修复）：
         // 内存态 Current 与落盘态同源，滑杆写出的越界值须**立即**钳回，而不是等重启 Load 才改。
         // 合法区间值不得被改写（滑杆拖动逐帧 Update，若合法值也被规范化扰动会破坏实时预览）。
-        var ok = new AppSettings { DockIconSize = 60, MagnificationStrength = 2.0, LyricsOffsetMs = 800 };
+        var ok = new AppSettings { DockIconSize = 60, MagnificationStrength = 2.0 };
         Assert.Equal(ok, ok.Normalized());
 
-        var bad = new AppSettings { DockIconSize = 200, MagnificationStrength = 9, LyricsOffsetMs = 5000 }.Normalized();
+        var bad = new AppSettings { DockIconSize = 200, MagnificationStrength = 9 }.Normalized();
         Assert.Equal(72, bad.DockIconSize);         // 图标尺寸上限
         Assert.Equal(2.5, bad.MagnificationStrength); // 放大强度上限
-        Assert.Equal(2000, bad.LyricsOffsetMs);     // 歌词偏移上限
     }
 
     [Fact]
@@ -205,15 +197,16 @@ public class AppSettingsStoreTests : IDisposable
     {
         var original = new AppSettings
         {
-            Theme = "linux",
+            Theme = "macos",
+            Appearance = "light",
+            AccentColor = "purple",
             TaskbarPolicy = "keep",
             Autostart = true,
-            LyricsOffsetMs = -350,
             ShowMediaCapsule = false,
             HidePanelOnDeactivate = false,
             TopBarEnabled = false,
             SwitcherEnabled = false,
-            SwitcherStyle = "harmonyos",
+            SwitcherStyle = "macos",
             SwitcherHotkey = "ctrl+alt+tab",
             DockIconSize = 64,
             MagnificationStrength = 2.2,
@@ -232,6 +225,26 @@ public class AppSettingsStoreTests : IDisposable
         };
         _store.Save(original);
         Assert.Equal(original, _store.Load());
+    }
+
+    [Fact]
+    public void 旧主题与已删除字段_加载自愈并逐条报告迁移()
+    {
+        // v4 Phase 1：三主题/歌词/玻璃壳/壁纸取色的持久化字段被删除。旧文件必须
+        // 1) 值域自愈为 macos，2) 已删除字段只忽略不报错、不删用户的其余配置，
+        // 3) 每条自愈都有一条可 grep 的中文证据（App 侧把回调接到 Logger.Info）。
+        Directory.CreateDirectory(_dir);
+        File.WriteAllText(Path.Combine(_dir, "settings.json"),
+            """{"Theme":"linux","SwitcherStyle":"harmonyos","LyricsOffsetMs":120,"TaskbarGlass":false,"UseWallpaperAccent":true}""");
+        var notes = new List<string>();
+        var s = _store.Load(notes.Add);
+        Assert.Equal("macos", s.Theme);
+        Assert.Equal("macos", s.SwitcherStyle);
+        Assert.Contains(notes, n => n.Contains("Theme=linux"));
+        Assert.Contains(notes, n => n.Contains("LyricsOffsetMs"));
+        Assert.Contains(notes, n => n.Contains("TaskbarGlass"));
+        Assert.Contains(notes, n => n.Contains("UseWallpaperAccent"));
+        Assert.True(File.Exists(Path.Combine(_dir, "settings.json")));
     }
 
     [Fact]
@@ -278,27 +291,14 @@ public class AppSettingsStoreTests : IDisposable
     {
         Directory.CreateDirectory(_dir);
         File.WriteAllText(Path.Combine(_dir, "settings.json"),
-            """{"Theme":"macos","LyricsOffsetMs":250}""");
+            """{"Theme":"macos","DockIconSize":60}""");
         var s = _store.Load();
         Assert.Equal("macos", s.Theme);
-        Assert.Equal(250, s.LyricsOffsetMs);
+        Assert.Equal(60, s.DockIconSize);
         Assert.Equal("hide", s.TaskbarPolicy);   // 缺省 → 默认
         Assert.True(s.ShowMediaCapsule);
         Assert.True(s.HidePanelOnDeactivate);
         Assert.False(s.Autostart);
-    }
-
-    [Fact]
-    public void Offset越界JSON_加载时钳制到正负2000()
-    {
-        Directory.CreateDirectory(_dir);
-        File.WriteAllText(Path.Combine(_dir, "settings.json"),
-            """{"LyricsOffsetMs":5000}""");
-        Assert.Equal(2000, _store.Load().LyricsOffsetMs);
-
-        File.WriteAllText(Path.Combine(_dir, "settings.json"),
-            """{"LyricsOffsetMs":-5000}""");
-        Assert.Equal(-2000, _store.Load().LyricsOffsetMs);
     }
 
     [Fact]
@@ -307,7 +307,7 @@ public class AppSettingsStoreTests : IDisposable
         // 升级兼容：v1 已有用户的 settings.json 不含 v2 字段，加载后须落在 v2 代码默认而不是 false/0
         Directory.CreateDirectory(_dir);
         File.WriteAllText(Path.Combine(_dir, "settings.json"),
-            """{"Theme":"macos","TaskbarPolicy":"hide","Autostart":true,"LyricsOffsetMs":-20,"ShowMediaCapsule":false,"HidePanelOnDeactivate":true}""");
+            """{"Theme":"macos","TaskbarPolicy":"hide","Autostart":true,"ShowMediaCapsule":false,"HidePanelOnDeactivate":true}""");
         var s = _store.Load();
         Assert.Equal("macos", s.Theme);
         Assert.True(s.TopBarEnabled);
@@ -323,7 +323,6 @@ public class AppSettingsStoreTests : IDisposable
         Assert.True(s.FullscreenPassthrough);
         Assert.Equal("ctrl+alt+space", s.LauncherHotkey);
         Assert.True(s.LauncherEnabled);       // v3 T7：启动器默认开（关掉它等于没有这个功能）
-        Assert.False(s.UseWallpaperAccent);   // 壁纸取色默认关：主题观感与取色功能上线前完全一致
         Assert.False(s.AutoHideDock);
         // v3.1 新增的顶栏时钟四项：旧文件里没有这些键，必须落在"与 v3.0.0 观感一致"的代码默认，
         // 而不是布尔零值（零值会把日期/星期/24 小时制全关掉，顶栏就只剩一个光秃秃的时间）。
@@ -359,7 +358,7 @@ public class AppSettingsStoreTests : IDisposable
         Directory.CreateDirectory(_dir);
         File.WriteAllText(Path.Combine(_dir, "settings.json"), """{"ClockShowSeconds":"yes","Theme":"macos"}""");
         var s = _store.Load();
-        Assert.Equal("harmonyos", s.Theme);
+        Assert.Equal("macos", s.Theme);
         Assert.False(s.ClockShowSeconds);
         Assert.True(s.ClockShowDate);
     }
@@ -417,7 +416,7 @@ public class AppSettingsStoreTests : IDisposable
         var s = _store.Load();
         Assert.Equal("auto", s.DockMonitor);
         Assert.Equal("auto", s.TopBarMonitor);
-        Assert.Equal("linux", s.Theme);
+        Assert.Equal("macos", s.Theme);
         Assert.True(File.Exists(Path.Combine(_dir, "settings.json")));
     }
 
@@ -447,7 +446,7 @@ public class AppSettingsStoreTests : IDisposable
     {
         Directory.CreateDirectory(_dir);
         File.WriteAllText(Path.Combine(_dir, "settings.json"),
-            """{"LyricsOffsetMs":"abc"}""");
+            """{"DockIconSize":"abc"}""");
         Assert.Equal(new AppSettings(), _store.Load());
         Assert.False(File.Exists(Path.Combine(_dir, "settings.json")));
     }

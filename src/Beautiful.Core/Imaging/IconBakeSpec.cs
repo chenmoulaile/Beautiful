@@ -65,7 +65,7 @@ public sealed record IconBakeSpec
     /// <summary>遮罩形状（主题数据）。</summary>
     public IconMaskStyle Mask { get; init; } = IconMaskStyle.None;
 
-    /// <summary>圆角方形半径比例（<see cref="IconMaskStyle.Squircle"/> 忽略本值）。</summary>
+    /// <summary>圆角方形半径比例：<see cref="IconMaskStyle.RoundedRectangle"/> 时生效，<see cref="IconMaskStyle.None"/> 时忽略。</summary>
     public double MaskRadiusRatio { get; init; }
 
     /// <summary>是否烘焙投影。</summary>

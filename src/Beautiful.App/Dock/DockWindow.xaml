@@ -173,7 +173,7 @@
         <Border x:Name="DockPanelRoot" Padding="10,6"
                 CornerRadius="{DynamicResource ThemePanelCornerRadius}"
                 Background="{DynamicResource ThemeDockBackground}"
-                BorderBrush="#33FFFFFF" BorderThickness="1"/>
+                BorderBrush="{DynamicResource MacDockBorder}" BorderThickness="1"/>
         <dock:DockSurface x:Name="Surface" Margin="10,6"
                           ItemsSource="{Binding Items}"
                           TemplateSelector="{StaticResource ItemSelector}"/>

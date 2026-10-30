@@ -1219,7 +1219,6 @@ public partial class DockWindow : AcrylicWindow
             _mediaPanel.RefreshBackdrop();
             _mediaPanel.Show();      // Show 默认激活 → Deactivated 自动收起链路生效
             _mediaPanel.Activate();
-            _mediaPanel.ScrollToCurrentLine();
         }
         catch (Exception ex)
         {

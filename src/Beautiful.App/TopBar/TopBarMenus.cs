@@ -44,7 +44,7 @@ public static class TopBarMenus
     {
         var current = ctx.CurrentTheme();
         // 选项直接来自 QuickSettings.Themes 这一份白名单（与控制中心分段同源）：
-        // 加第四条主题线时这里不用动，也不会出现"设置页有、顶栏菜单没有"的两样。
+        // v4 只剩 macOS；未来换外观模式时同样只改这份投影。
         return QuickSettings.Themes.Select(o => new MenuItemView
         {
             Id = o.Id, Label = o.Label, IsChecked = current == o.Id, Invoke = () => ctx.ApplyTheme(o.Id),

@@ -8,17 +8,20 @@ namespace Beautiful.Core.Settings;
 /// </summary>
 public sealed record AppSettings
 {
-    /// <summary>主题标识："harmonyos" | "macos" | "linux" | "windows"。</summary>
-    public string Theme { get; init; } = "harmonyos";
+    /// <summary>主题标识：macOS-Only（默认 "macos"）。Normalization 收敛为 KnownThemes。</summary>
+    public string Theme { get; init; } = "macos";
+
+    /// <summary>外观模式："dark"（默认，Big Sur 暗色形态）| "light" | "auto"（跟随系统 AppsUseLightTheme）。</summary>
+    public string Appearance { get; init; } = Design.AppearanceModes.Dark;
+
+    /// <summary>macOS 强调色板 id（blue/purple/…，白名单见 <see cref="Design.MacAccents"/>），未知值收敛为 blue。</summary>
+    public string AccentColor { get; init; } = Design.MacAccents.DefaultId;
 
     /// <summary>任务栏策略："hide" | "autohide" | "keep"。</summary>
     public string TaskbarPolicy { get; init; } = "hide";
 
     /// <summary>开机自启（HKCU Run "Beautiful"）。</summary>
     public bool Autostart { get; init; }
-
-    /// <summary>歌词对齐偏移（毫秒，-2000..2000，加载时钳制）。</summary>
-    public int LyricsOffsetMs { get; init; }
 
     /// <summary>Dock 是否显示媒体胶囊条目。</summary>
     public bool ShowMediaCapsule { get; init; } = true;
@@ -98,13 +101,6 @@ public sealed record AppSettings
     /// </summary>
     public string LauncherHotkey { get; init; } = "ctrl+alt+space";
 
-    /// <summary>
-    /// 是否用当前壁纸的取色结果覆盖主题强调色（v3 T7）。关（默认）时主题观感与取色功能上线前完全一致；
-    /// 开时由 App 侧读壁纸 → <see cref="Imaging.DominantColor"/> 取色 → 覆盖 <c>ThemeAccent</c> 一个资源键，
-    /// <b>不改任何 Themes/*.xaml 的颜色值</b>（取不到色即回落，见 App 侧 WallpaperAccentService）。
-    /// </summary>
-    public bool UseWallpaperAccent { get; init; }
-
     /// <summary>Dock 是否自动收起。</summary>
     public bool AutoHideDock { get; init; }
 
@@ -126,14 +122,6 @@ public sealed record AppSettings
     /// 点击/右键会转发回图标自己的窗口。关掉只是少一颗按钮，不影响系统托盘本身。
     /// </summary>
     public bool ShowTrayInTopBar { get; init; } = true;
-
-    /// <summary>
-    /// 任务栏"玻璃壳"（v3.2，#6）：在<b>原生任务栏</b>上盖一层点击穿透的自绘装饰
-    /// （面向屏幕内侧的圆角收口 + 1px 高光亮边 + 主题强调色发丝线）。
-    /// 不移动、不隐藏、不接管原生任务栏的任何交互，所以它与"隐藏任务栏"策略是互斥的：
-    /// 策略为 hide 时没有可装饰的东西，装饰层会自己消失。
-    /// </summary>
-    public bool TaskbarGlass { get; init; } = true;
 
     /// <summary>
     /// genie 的渲染引擎：<c>mesh</c>（默认）= 一张纹理三角网，顶点走 macOS 灯罩曲线，
@@ -165,14 +153,14 @@ public sealed record AppSettings
     /// </summary>
     public string IconTreatment { get; init; } = "auto";
 
-    /// <summary>合法主题标识（小写）。windows = Win11 原生那条线（不接管，只增强）。</summary>
-    public static IReadOnlyList<string> KnownThemes { get; } = ["harmonyos", "macos", "linux", "windows"];
+    /// <summary>合法主题标识（小写）。v4 只保留 macOS。</summary>
+    public static IReadOnlyList<string> KnownThemes { get; } = ["macos"];
 
     /// <summary>合法任务栏策略标识（小写）。</summary>
     public static IReadOnlyList<string> KnownTaskbarPolicies { get; } = ["hide", "autohide", "keep"];
 
     /// <summary>合法切换器样式标识（小写，与主题标识同名，供设置面板下拉复用）。</summary>
-    public static IReadOnlyList<string> KnownSwitcherStyles { get; } = ["macos", "linux", "harmonyos"];
+    public static IReadOnlyList<string> KnownSwitcherStyles { get; } = ["macos"];
 
     /// <summary>合法 Dock 停靠边标识（小写，供设置面板下拉复用）。</summary>
     public static IReadOnlyList<string> KnownDockPositions { get; } = ["bottom", "top", "left", "right"];
@@ -211,7 +199,7 @@ public sealed record AppSettings
     public const int MaxMonitorIndex = 16;
 
     /// <summary>
-    /// 加载侧规范化：数值字段钳制到合法区间（LyricsOffsetMs ±2000、DockIconSize 32..72、
+    /// 加载侧规范化：数值字段钳制到合法区间（DockIconSize 32..72、
     /// MagnificationStrength 1.0..2.5）；枚举串字段（主题/策略/切换器样式/停靠边/图标处理方式）
     /// 小写去空白后比对白名单，未知值收敛为默认，避免手改配置把 App 侧映射打到兜底分支之外的未定义行为。
     /// 显示器选择器（DockMonitor/TopBarMonitor）走 <see cref="MonitorSelectorOrDefault"/>：
@@ -225,8 +213,9 @@ public sealed record AppSettings
     /// </summary>
     public AppSettings Normalized() => this with
     {
-        LyricsOffsetMs = Math.Clamp(LyricsOffsetMs, -2000, 2000),
-        Theme = Canonical(Theme, "harmonyos", KnownThemes),
+        Theme = Canonical(Theme, "macos", KnownThemes),
+        Appearance = Design.AppearanceModes.Canonical(Appearance),
+        AccentColor = Design.MacAccents.Canonical(AccentColor),
         TaskbarPolicy = Canonical(TaskbarPolicy, "hide", KnownTaskbarPolicies),
         SwitcherStyle = Canonical(SwitcherStyle, "macos", KnownSwitcherStyles),
         DockPosition = Canonical(DockPosition, "bottom", KnownDockPositions),

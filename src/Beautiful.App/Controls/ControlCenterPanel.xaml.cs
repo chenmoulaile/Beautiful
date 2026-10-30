@@ -164,11 +164,6 @@ public partial class ControlCenterPanel : UserControl, IBackdropAware, IPopupSha
                 _ctx.ApplyTheme(id);
                 ThemeLabel.Text = $"当前主题：{ThemeManager.Current.DisplayName}";
                 RebuildTilesDeferred();
-                // App.ApplyTheme 可能顺手改了任务栏策略（Windows 11 主题需要原生任务栏在场），
-                // 所以分段也要重画一遍——否则屏上留着"隐藏"高亮而配置已经是"自动隐藏"，
-                // 那是"假状态"。与砖块同一理由排在 Background 优先级：不在本次 Checked 事件里
-                // 拆掉正被遍历的控件树。
-                Dispatcher.BeginInvoke(DispatcherPriority.Background, new Action(BuildPolicySegments));
                 break;
             case PolicyGroup:
                 App.SetTaskbarPolicy(id);
@@ -180,9 +175,8 @@ public partial class ControlCenterPanel : UserControl, IBackdropAware, IPopupSha
     // ---------- 开关砖块 ----------
 
     /// <summary>
-    /// 四个开关砖块：完全按 <see cref="QuickSettings.ToggleTiles"/> 的投影生成（含置灰与原因）。
-    /// 其中"壁纸取色"的一块要问 <see cref="WallpaperAccentService"/> 当前读不读得到壁纸文件——
-    /// 读不到（纯色桌面/幻灯片）就灰着写原因，而不是点上去后画面一动不动。
+    /// 开关砖块：完全按 <see cref="QuickSettings.ToggleTiles"/> 的投影生成（含置灰与原因）。
+    /// v4 只剩 macOS 语义的放大/倒影/媒体胶囊三块。
     /// </summary>
     private void BuildTiles()
     {
@@ -192,9 +186,8 @@ public partial class ControlCenterPanel : UserControl, IBackdropAware, IPopupSha
         {
             var settings = SettingsService.Current;
             var theme = ThemeManager.Current;
-            var accentAvailable = WallpaperAccentService.IsWallpaperReadable();
             TileHost.Children.Clear();
-            foreach (var tile in QuickSettings.ToggleTiles(settings, theme, accentAvailable))
+            foreach (var tile in QuickSettings.ToggleTiles(settings, theme))
             {
                 var toggle = new ToggleButton
                 {
@@ -230,8 +223,6 @@ public partial class ControlCenterPanel : UserControl, IBackdropAware, IPopupSha
             case QuickSettings.MagnificationId: App.SetMagnification(on); break;
             case QuickSettings.ReflectionId: App.SetReflection(on); break;
             case QuickSettings.MediaCapsuleId: App.SetMediaCapsule(on); break;
-            case QuickSettings.WallpaperAccentId: App.SetWallpaperAccent(on); break;
-            case QuickSettings.TaskbarGlassId: App.SetTaskbarGlass(on); break;
             default: break;   // 未知砖块 Id：不写任何东西，下面的重投影会把界面拉回真值
         }
         RebuildTilesDeferred();

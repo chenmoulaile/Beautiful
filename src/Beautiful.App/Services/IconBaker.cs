@@ -190,30 +190,15 @@ internal static class IconBaker
     // ---------- 几何 ----------
 
     /// <summary>
-    /// 遮罩几何（绘制坐标）：<see cref="IconMaskStyle.Squircle"/> 复用 Core 的 <see cref="Superellipse"/>
-    /// 采样（与既有鸿蒙 ThemeIconClip 同一条曲线，不发明第二种形状）；圆角方形用 RectangleGeometry；
+    /// 遮罩几何（绘制坐标）：圆角方形用 RectangleGeometry；
     /// <see cref="IconMaskStyle.None"/> 返回 null（调用方按"不裁形"处理）。
     /// </summary>
     private static Geometry? MaskGeometry(IconBakeSpec spec, Rect rect, double k) => spec.Mask switch
     {
         IconMaskStyle.None => null,
-        IconMaskStyle.Squircle => SquircleGeometry(rect),
         // 半径由 Core 按 artwork 像素算，这里换算到当前画布坐标（乘超采样倍数 k）
         _ => Freeze(new RectangleGeometry(rect, spec.RadiusPx * k, spec.RadiusPx * k))
     };
-
-    private static Geometry SquircleGeometry(Rect rect)
-    {
-        var pts = IconBake.ToPixels(IconBake.SquircleUnitPoints(), rect.X, rect.Y, rect.Width, rect.Height);
-        var geo = new StreamGeometry();
-        using (var ctx = geo.Open())
-        {
-            ctx.BeginFigure(new Point(pts[0].X, pts[0].Y), isFilled: true, isClosed: true);
-            for (var i = 1; i < pts.Count; i++)
-                ctx.LineTo(new Point(pts[i].X, pts[i].Y), isStroked: true, isSmoothJoin: true);
-        }
-        return Freeze(geo);
-    }
 
     private static Geometry Freeze(Geometry geo)
     {

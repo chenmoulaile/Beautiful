@@ -1,5 +1,7 @@
 using System.Windows;
 using System.Windows.Media;
+using Beautiful.App.Services;
+using Beautiful.Core.Design;
 using Beautiful.Core.Themes;
 using Application = System.Windows.Application;
 using Color = System.Windows.Media.Color;   // UseWindowsForms 隐式 using 与 System.Drawing.Color 冲突
@@ -8,79 +10,62 @@ using Point = System.Windows.Point;
 namespace Beautiful.App.Themes;
 
 /// <summary>
-/// 主题引擎入口：Apply = 换 Current 记录 + 清理旧 /Themes/*.xaml 字典后合并新字典
-/// + 注入运行时几何（鸿蒙 squircle 图标遮罩，冻结以提升渲染性能）+ 广播 ThemeChanged。
-/// DockWindow 订阅 ThemeChanged 重设亚克力/放大参数；其余外观（底色/圆角/图标尺寸/字体/指示）
-/// 经 DynamicResource 引用字典键，换字典即即时生效，无需逐控件改写。
+/// 外观引擎入口（v4 Phase 1 T4）：Apply = 换 Current 记录 + 清理旧 /Themes/*.xaml 字典后合并新字典
+/// + 按当前外观模式注入 <see cref="MacTokens"/>（亮/暗两套颜色/度量/字体/动效）+ 注入运行时几何
+/// （图标遮罩几何，冻结以提升渲染性能）+ 广播 ThemeChanged。
+/// 换外观 = 重新写同一份字典的 token 键（DynamicResource 即时生效），不重建窗口。
 /// </summary>
 public static class ThemeManager
 {
-    public static ThemeDefinition Current { get; private set; } = ThemeDefinition.HarmonyOs();
+    public static ThemeDefinition Current { get; private set; } = ThemeDefinition.MacOs();
     public static event Action<ThemeDefinition>? ThemeChanged;
 
-    /// <summary>主题字典里强调色的资源键（Dock 指示条/顶栏高亮/启动器选中行都 DynamicResource 引用它）。</summary>
-    private const string AccentKey = "ThemeAccent";
+    private static string _appearance = AppearanceModes.Dark;
+    private static double _iconSize = 44;
 
-    /// <summary>壁纸取色的覆盖值（null = 不覆盖）。见 <see cref="SetWallpaperAccent"/>。</summary>
-    private static Color? _accentOverride;
+    /// <summary>当前生效的外观模式（dark/light/auto 的规范化值）。</summary>
+    public static string Appearance => _appearance;
+
+    /// <summary>当前实际是否深色（auto 时取系统 AppsUseLightTheme）。</summary>
+    public static bool IsDark => AppearanceModes.IsDark(_appearance, SystemAppearance.IsLight);
 
     public static void Apply(ThemeDefinition theme, Application app)
     {
         Current = theme;
+        _appearance = AppearanceModes.Canonical(SettingsService.Current.Appearance);
         var uri = new Uri($"/Themes/{theme.Id}.xaml", UriKind.Relative);
         var dict = new ResourceDictionary { Source = uri };
         var clip = CreateIconClip(theme, theme.IconSize);
         if (clip is not null) dict["ThemeIconClip"] = clip; // 键缺省 → DynamicResource 不解析 → Clip=null（macOS 不遮罩）
-        ApplyDockMetrics(dict, theme, theme.IconSize);
+        ApplyTokens(dict, theme, theme.IconSize);
         // 先移除旧主题字典再合并，避免叠加（旧 clip 几何随旧字典一并清理）
         for (var i = app.Resources.MergedDictionaries.Count - 1; i >= 0; i--)
             if (app.Resources.MergedDictionaries[i].Source?.OriginalString.Contains("/Themes/") == true)
                 app.Resources.MergedDictionaries.RemoveAt(i);
         app.Resources.MergedDictionaries.Add(dict);
-        // 壁纸取色开着时，换主题必须把覆盖重新贴回新字典（否则"切一下主题强调色就跑回主题值"，
-        // 用户看到的是开关明明开着却失效了）。撤销覆盖同样是这里说了算。
-        ApplyAccentOverride(app);
         ThemeChanged?.Invoke(theme);
     }
 
     /// <summary>
-    /// 设/撤壁纸强调色覆盖（v3 T7）。<b>只改当前主题字典里 <see cref="AccentKey"/> 这一个键的值</b>：
-    /// Themes/*.xaml 的颜色值一个都不动（那是主题的作者意图，覆盖它等于篡改主题），也不新增第二套键名。
-    /// 传 null 即把该键写回 <see cref="ThemeDefinition.AccentHex"/>——主题定义里本来就有这个十六进制，
-    /// 于是"撤销"有一个与 XAML 同源的准确答案，不需要自己记住"原来的画刷是谁"。
+    /// 外观模式变更（设置页/系统亮暗广播）：只重写 token 键，不重载 XAML、不重建窗口。
+    /// 颜色/字体/圆角都是 DynamicResource → 所有已打开表面即时响应。
     /// </summary>
-    public static void SetWallpaperAccent(Color? accent)
+    public static void ApplyAppearance(string? appearance, Application app)
     {
-        _accentOverride = accent;
-        if (System.Windows.Application.Current is { } app) ApplyAccentOverride(app);
-    }
-
-    /// <summary>当前覆盖值（诊断/设置页回显用；null = 强调色仍由主题决定）。</summary>
-    public static Color? WallpaperAccent => _accentOverride;
-
-    private static void ApplyAccentOverride(Application app)
-    {
+        _appearance = AppearanceModes.Canonical(appearance);
         var dict = FindThemeDictionary(app);
-        if (dict is null) return;   // 主题字典尚未合并（构造早期）：Apply 时会再贴一次，这里不抢跑
-        var brush = new SolidColorBrush(_accentOverride ?? ParseAccentHex(Current.AccentHex));
-        brush.Freeze();             // 冻结后才能被渲染线程共享（与主题字典里其余画刷同一形态）
-        dict[AccentKey] = brush;
+        if (dict is null) return; // 主题字典尚未合并（构造早期）：Apply 时会按当时的模式贴一次
+        ApplyTokens(dict, Current, _iconSize);
+        Logger.Info($"外观切换：{_appearance}（实际 {(_appearance == AppearanceModes.Auto ? (IsDark ? "深色" : "浅色") : _appearance)}）");
     }
 
-    /// <summary>主题定义里的强调色 → Color。形状固定是 "#RRGGBB"，解析失败绝不猜一个颜色画上去。</summary>
-    private static Color ParseAccentHex(string hex)
+    private static void ApplyTokens(ResourceDictionary dict, ThemeDefinition theme, double iconSize)
     {
-        try
-        {
-            return (Color)System.Windows.Media.ColorConverter.ConvertFromString(hex);
-        }
-        catch (FormatException)
-        {
-            return Color.FromRgb(0x0A, 0x59, 0xF7);
-        }
+        var accent = MacAccents.Hex(SettingsService.Current.AccentColor, IsDark);
+        MacTokenDictionary.Apply(dict, MacTokens.For(IsDark), accent, FontProbe.Current.Family);
+        ApplyDockMetrics(dict, theme, iconSize);
     }
 
-    /// <summary>取当前合并字典里那份来自 /Themes/*.xaml 的字典（与 <see cref="ApplyIconSize"/> 同一找法）。</summary>
     private static ResourceDictionary? FindThemeDictionary(Application app)
     {
         for (var i = app.Resources.MergedDictionaries.Count - 1; i >= 0; i--)
@@ -115,13 +100,8 @@ public static class ThemeManager
     /// </summary>
     public static void ApplyIconSize(double iconSize, Application app)
     {
-        var dict = null as ResourceDictionary;
-        for (var i = app.Resources.MergedDictionaries.Count - 1; i >= 0; i--)
-            if (app.Resources.MergedDictionaries[i].Source?.OriginalString.Contains("/Themes/") == true)
-            {
-                dict = app.Resources.MergedDictionaries[i];
-                break;
-            }
+        _iconSize = iconSize;
+        var dict = FindThemeDictionary(app);
         if (dict is null) return; // 主题字典尚未合并（构造早期）：Apply 时已按主题默认尺寸注入，无需覆盖
         ApplyDockMetrics(dict, Current, iconSize);
         var clip = CreateIconClip(Current, iconSize);
@@ -130,41 +110,21 @@ public static class ThemeManager
     }
 
     /// <summary>
-    /// 图标遮罩策略（spec 4.2 表）：ratio=0 不遮罩（macOS 原样）；ratio=0.25 鸿蒙 squircle
-    /// （Superellipse nExp=4.4，|x/22|^4.4+|y/22|^4.4=1）；其余 = 圆角方形（半径 = ratio·size，Linux 取 8）。
+    /// 图标遮罩策略（spec 4.2 表）：ratio=0 不遮罩（macOS 原样）；其余 = 圆角方形（半径 = ratio·size）。
     /// 遮罩几何按传入 size 构建（与图片宽高同源），使尺寸覆盖后遮罩仍严丝合缝。
     /// <para>
-    /// 【v3 T6：形状只有一个属主】烘焙位图自己已经把遮罩/高光/投影烧进像素时（<see cref="Services.IconBakeContext.BakesMask"/>，
-    /// 即 macOS 圆角方块与鸿蒙 squircle 在 auto/mask 下），这里必须返回 null → 模板的
-    /// <c>Clip={DynamicResource ThemeIconClip}</c> 解析不到键 → Clip=null，不再有第二层几何裁剪。
-    /// 两条都开会出现"同一形状被抗锯齿两遍"的灰边，并且投影会被 XAML 的 clip 沿方框切掉。
-    /// 反之在 plain 方式或 GNOME（主题本就无遮罩）下，形状仍由这里的几何负责 —— 与 v2/v3 T4 的观感完全一致。
+    /// 【形状只有一个属主（v3 T6）】烘焙位图自己已经把遮罩/高光/投影烧进像素时（<see cref="Services.IconBakeContext.BakesMask"/>），
+    /// 这里必须返回 null → 模板的 <c>Clip={DynamicResource ThemeIconClip}</c> 解析不到键 → Clip=null，
+    /// 避免"同一形状被抗锯齿两遍"的灰边及投影被 XAML clip 切掉。
     /// </para>
     /// </summary>
     private static Geometry? CreateIconClip(ThemeDefinition theme, double size)
     {
         if (Services.IconBakeContext.BakesMask) return null;
         if (theme.IconCornerRadiusRatio <= 0) return null;
-        if (theme.IconCornerRadiusRatio == 0.25) return CreateSquircleClip(size);
         var radius = theme.IconCornerRadiusRatio * size;
         var rect = new RectangleGeometry(new Rect(0, 0, size, size), radius, radius);
         rect.Freeze();
         return rect;
-    }
-
-    /// <summary>Superellipse 采样 → 平移到 (0,0)-(size,size) 后构建冻结 StreamGeometry（96 段折线，视觉平滑）。</summary>
-    private static Geometry CreateSquircleClip(double iconSize)
-    {
-        var half = iconSize / 2;
-        var pts = Superellipse.Points(half, half, nExp: 4.4);
-        var geo = new StreamGeometry();
-        using (var ctx = geo.Open())
-        {
-            ctx.BeginFigure(new Point(pts[0].X + half, pts[0].Y + half), isFilled: true, isClosed: true);
-            for (var i = 1; i < pts.Count; i++)
-                ctx.LineTo(new Point(pts[i].X + half, pts[i].Y + half), isStroked: true, isSmoothJoin: false);
-        }
-        geo.Freeze();
-        return geo;
     }
 }

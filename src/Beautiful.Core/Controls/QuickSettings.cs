@@ -43,19 +43,10 @@ public static class QuickSettings
     public const string MagnificationId = "magnification";
     public const string ReflectionId = "reflection";
     public const string MediaCapsuleId = "mediaCapsule";
-    public const string WallpaperAccentId = "wallpaperAccent";
 
-    /// <summary>任务栏玻璃壳砖块（v3.2 #6）：只美化原生任务栏，不接管。</summary>
-    public const string TaskbarGlassId = "taskbarGlass";
-
-    /// <summary>主题分段（左→右）。鸿蒙放最后一位，与设置页的先后顺序一致；
-    /// Windows 11 排第一——它是"不接管、只增强原生"的那条线，与其他三个"换一副面孔"不同类。</summary>
     public static IReadOnlyList<QuickOption> Themes { get; } =
     [
-        new("windows", "Windows 11"),
-        new("macos", "macOS"),
-        new("linux", "Linux"),
-        new("harmonyos", "鸿蒙")
+        new("macos", "macOS")
     ];
 
     /// <summary>系统任务栏策略分段。中文措辞沿用设置页（隐藏/自动隐藏/保留），同一件事不出现两个名字。</summary>
@@ -103,12 +94,6 @@ public static class QuickSettings
     /// <summary>媒体胶囊是否打开。</summary>
     public static bool IsMediaCapsuleOn(AppSettings s) => s.ShowMediaCapsule;
 
-    /// <summary>壁纸取色是否打开（关时主题观感与取色功能上线前完全一致）。</summary>
-    public static bool IsWallpaperAccentOn(AppSettings s) => s.UseWallpaperAccent;
-
-    /// <summary>玻璃壳开关的现值。</summary>
-    public static bool IsTaskbarGlassOn(AppSettings s) => s.TaskbarGlass;
-
     // ---------- 开关：写入 ----------
 
     /// <summary>
@@ -130,55 +115,37 @@ public static class QuickSettings
     /// <summary>设媒体胶囊显隐。</summary>
     public static AppSettings WithMediaCapsule(AppSettings s, bool on) => s with { ShowMediaCapsule = on };
 
-    /// <summary>设壁纸取色强调色的开关（落盘后由 App 侧 WallpaperAccentService 立即重放一次）。</summary>
-    public static AppSettings WithWallpaperAccent(AppSettings s, bool on) => s with { UseWallpaperAccent = on };
-
-    /// <summary>写玻璃壳开关。</summary>
-    public static AppSettings WithTaskbarGlass(AppSettings s, bool on) => s with { TaskbarGlass = on };
-
     // ---------- 砖块投影 ----------
 
     /// <summary>
-    /// 把当前设置投影成界面上的四个开关砖块（数组顺序 = 界面顺序）。
+    /// 把当前设置投影成界面上的开关砖块（数组顺序 = 界面顺序）。
     /// <para>
     /// 【放大为什么要置灰】放大是<b>主题能力</b>而不是用户偏好：<c>ThemeDefinition.MaxScale</c> 为 1
-    /// 时（Linux/GNOME dash、鸿蒙）渲染器压根不做放大，勾上去不会有任何可见变化。按本项目的一贯裁定
+    /// 时渲染器压根不做放大，勾上去不会有任何可见变化。按本项目的一贯裁定
     /// （没有能力支撑的控件必须置灰并写明原因，见 TopBarMenus 的置灰条目），这里给原因而不是留死开关。
     /// 原因文案不重复主题名——面板标题行已经写着"当前主题：xxx"，砖块只有 90 DIP 宽，
     /// 写全名会被截成省略号，反而看不出为什么灰着。
     /// </para>
     /// <para>
     /// 【倒影为什么<em>不</em>按主题置灰】倒影是渲染器按旗标增删镜像元素（DockSurface.SyncReflections），
-    /// 三个主题都真画。设置页把它限制在 macOS 是"观感建议"，控制中心按能力口径放行——
+    /// 真画。设置页把它限制在 macOS 是"观感建议"，控制中心按能力口径放行——
     /// 关掉它确实会变、打开它确实会多一截镜像，不是死控件。
     /// </para>
     /// <para>
-    /// 【壁纸取色按"读不读得到壁纸"置灰】<paramref name="wallpaperAccentAvailable"/> 由 App 侧探测
-    /// （幻灯片 / 纯色桌面 / 权限受限都会让它为 false）。取不到色的开关必须灰并写明原因，
-    /// 否则点上去只会得到一个"我开了但画面没变"的强调色——这正是本项目定级的死控件。
+    /// v4（Phase 1 T3）：壁纸取色与任务栏玻璃壳两项随非 macOS 功能线删除；
+    /// 控制中心只剩 macOS 语义的放大/倒影/媒体胶囊三块。
     /// </para>
     /// </summary>
     /// <param name="s">当前设置。</param>
     /// <param name="theme">当前主题定义（放大能力与倒影默认值都来自它）。</param>
-    /// <param name="wallpaperAccentAvailable">当前能不能读到壁纸文件（见上）。</param>
-    public static IReadOnlyList<QuickTile> ToggleTiles(AppSettings s, ThemeDefinition theme, bool wallpaperAccentAvailable) =>
+    public static IReadOnlyList<QuickTile> ToggleTiles(AppSettings s, ThemeDefinition theme) =>
     [
         new(MagnificationId, "放大", IsMagnificationOn(s),
             theme.ShowMagnification,
             theme.ShowMagnification ? null : "该主题不做悬停放大"),
         new(ReflectionId, "倒影", IsReflectionOn(s, theme), true, null),
         new(MediaCapsuleId, "媒体胶囊", IsMediaCapsuleOn(s), true, null),
-        new(WallpaperAccentId, "壁纸取色", IsWallpaperAccentOn(s), wallpaperAccentAvailable,
-            wallpaperAccentAvailable ? null : "读不到当前壁纸文件（幻灯片或纯色桌面）"),
-        // 玻璃壳是"给原生任务栏化妆"，任务栏被隐藏时没有可化妆的对象——置灰并写明原因，
-        // 而不是让砖块亮着却屏上什么也没变（那是"假状态"，本项目不接受）
-        new(TaskbarGlassId, "任务栏玻璃壳", IsTaskbarGlassOn(s), NativeTaskbarVisible(s),
-            NativeTaskbarVisible(s) ? null : "任务栏策略为隐藏，没有可装饰的任务栏"),
     ];
-
-    /// <summary>原生任务栏当前是否可见（玻璃壳的前提）。autohide 算可见——它只是缩起来，仍然在那里。</summary>
-    public static bool NativeTaskbarVisible(AppSettings s) =>
-        !string.Equals(s.TaskbarPolicy, "hide", System.StringComparison.OrdinalIgnoreCase);
 
     /// <summary>按 Id 找砖块投影（点击后刷新单项状态用）；未知 Id 返回 null。</summary>
     public static QuickTile? FindTile(IReadOnlyList<QuickTile> tiles, string id) =>

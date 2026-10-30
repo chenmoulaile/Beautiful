@@ -12,4 +12,10 @@
   <ItemGroup>
     <ProjectReference Include="..\Beautiful.Core\Beautiful.Core.csproj" />
   </ItemGroup>
+  <!-- D-FONT（v4 Phase 1 T5）：SF Pro 字体由所有者本地放到 Assets/Fonts/（.gitignore 排除，
+       公开仓库不分发 Apple 资产）。文件存在就编进 exe；不存在则跳过，云 CI 无字体也能过门禁。 -->
+  <ItemGroup Condition="Exists('Assets\Fonts')">
+    <Resource Include="Assets\Fonts\*.otf" />
+    <Resource Include="Assets\Fonts\*.ttf" />
+  </ItemGroup>
 </Project>
