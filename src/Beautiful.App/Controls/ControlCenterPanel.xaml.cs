@@ -82,7 +82,48 @@ public partial class ControlCenterPanel : UserControl, IBackdropAware, IPopupSha
         RefreshWifi();
         RefreshBrightness();
         BuildMixer();
+        StartStatus();
         _loading = false;
+    }
+
+    // ---------- 系统状态行（P4-T9 / P4-T10） ----------
+
+    private SystemStatusService? _status;
+
+    /// <summary>
+    /// 起状态采样并立刻刷一次。面板是瞬态弹层，关闭时由宿主 Dispose（见 <see cref="DisposeStatus"/>）。
+    /// 电量图标码点按 Core 给的档位映射，避免 UI 里再写一遍阈值。
+    /// </summary>
+    private void StartStatus()
+    {
+        _status = new SystemStatusService(Dispatcher);
+        _status.Updated += (_, _) => ApplyStatus(_status.Current);
+        ApplyStatus(_status.Current);
+    }
+
+    private void ApplyStatus(SystemStatus status)
+    {
+        BatteryValue.Text = status.Battery;
+        BatteryGlyph.Text = status.BatteryGlyphKey switch
+        {
+            "battery-0" => "\uE83F",
+            "battery-1" => "\uE840",
+            "battery-2" => "\uE841",
+            "battery-3" => "\uE850",
+            "battery-4" => "\uE83F",
+            "battery-charging" => "\uE83E",
+            _ => "\uE83F"
+        };
+        NetworkValue.Text = status.Network;
+        BluetoothValue.Text = status.Bluetooth;
+        InputValue.Text = status.Input;
+    }
+
+    /// <summary>关闭时停采样（面板每次打开都会新建，不停就是每开一次多一个 5s 定时器）。</summary>
+    public void DisposeStatus()
+    {
+        _status?.Dispose();
+        _status = null;
     }
 
     /// <summary>注入宿主（打开方在 ShowAt 之前调用）。</summary>

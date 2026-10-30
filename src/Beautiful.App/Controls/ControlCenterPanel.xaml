@@ -241,6 +241,44 @@
                     <TextBlock x:Name="WifiReason" FontSize="10.5" Opacity="0.62" TextWrapping="Wrap"
                                Margin="4,0,4,6" Visibility="Collapsed"/>
 
+                    <!-- ============ 系统状态行（P4-T9 / P4-T10） ============
+                         电量 / 网络 / 蓝牙 / 输入法：四项一次采样、同一行显示，避免"电量新、网络旧"。
+                         全部只读系统接口，读不到就显示占位，不做假开关。 -->
+                    <Border Style="{StaticResource CcGroupStyle}" Margin="0,0,0,8">
+                        <UniformGrid Columns="4">
+                            <StackPanel>
+                                <TextBlock x:Name="BatteryGlyph" Text="&#xE83F;" FontSize="14"
+                                           HorizontalAlignment="Center"
+                                           FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets"
+                                           Foreground="{DynamicResource ThemeTextPrimary}"/>
+                                <TextBlock x:Name="BatteryValue" Text="--" FontSize="10.5" Opacity="0.72"
+                                           HorizontalAlignment="Center" Margin="0,2,0,0"/>
+                            </StackPanel>
+                            <StackPanel>
+                                <TextBlock Text="&#xE774;" FontSize="14" HorizontalAlignment="Center"
+                                           FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets"
+                                           Foreground="{DynamicResource ThemeTextPrimary}"/>
+                                <TextBlock x:Name="NetworkValue" Text="离线" FontSize="10.5" Opacity="0.72"
+                                           HorizontalAlignment="Center" Margin="0,2,0,0"
+                                           TextTrimming="CharacterEllipsis" MaxWidth="66"/>
+                            </StackPanel>
+                            <StackPanel>
+                                <TextBlock Text="&#xE702;" FontSize="14" HorizontalAlignment="Center"
+                                           FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets"
+                                           Foreground="{DynamicResource ThemeTextPrimary}"/>
+                                <TextBlock x:Name="BluetoothValue" Text="不可用" FontSize="10.5" Opacity="0.72"
+                                           HorizontalAlignment="Center" Margin="0,2,0,0"/>
+                            </StackPanel>
+                            <StackPanel>
+                                <TextBlock x:Name="InputValue" Text="EN" FontSize="13" FontWeight="SemiBold"
+                                           HorizontalAlignment="Center"
+                                           Foreground="{DynamicResource ThemeTextPrimary}"/>
+                                <TextBlock Text="输入法" FontSize="10.5" Opacity="0.72"
+                                           HorizontalAlignment="Center" Margin="0,2,0,0"/>
+                            </StackPanel>
+                        </UniformGrid>
+                    </Border>
+
                     <!-- ============ 显示（Big Sur：图标 + 滑杆 + 读数，整块一个瓦片） ============ -->
                     <Border Style="{StaticResource CcGroupStyle}">
                         <Grid>

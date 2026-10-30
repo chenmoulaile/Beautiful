@@ -101,6 +101,9 @@ public partial class TopBarWindow : AcrylicWindow
     private Button? _mediaButton;
     private TextBlock? _mediaText;
     private Button? _clockButton;
+    private Button? _inputButton;
+    private TextBlock? _inputText;
+    private System.Windows.Threading.DispatcherTimer? _inputTimer;
     private TextBlock? _clockText;
     private TextBlock? _networkText;
     private TextBlock? _batteryText;
@@ -584,6 +587,13 @@ public partial class TopBarWindow : AcrylicWindow
         // 【宽度变化不跳动】RightHost 是 HorizontalAlignment=Right 的横向栈：时钟变宽/变窄只会让它在
         // **左侧**扩张，右邻（音量/网络/电量/启动器/控制中心）始终钉在条带右缘不动。因此"显示秒"这种
         // 增减 3 个字符的改动不会让整个状态区左右抖动，唯一会位移的是最左的媒体迷你，而它有 MaxWidth 钳制。
+        // 输入法指示（P4-T10）：时钟左侧一个小徽标（中 / EN / あ）。只读 InputLanguageManager，
+        // 不可用就显示 EN——不猜、不写假状态。
+        (_inputButton, _inputText) = MakeStatusItem("输入法", iconFont: false);
+        _inputButton.ToolTip = "当前输入法";
+        _inputButton.Click += (_, _) => OpenInputSettings();
+        StartInputBadge();
+
         (_clockButton, _clockText) = MakeStatusItem("时钟", iconFont: false);
         // 左键 = 通知中心（Big Sur 语义）；右键保留原来的月历浮层（不想读系统通知时的轻量入口）
         _clockButton.Click += (_, _) => OpenClockFlyout();
@@ -919,6 +929,42 @@ public partial class TopBarWindow : AcrylicWindow
     /// 时钟左键：默认打开通知中心（Phase 4-T5）；设置里关掉后回退月历浮层。
     /// 面板自己处理"再点一次收起"（见 NotificationCenterWindow 的关闭时间戳）。
     /// </summary>
+    /// <summary>
+    /// 输入法指示（P4-T10）：1s 一次读 <see cref="System.Windows.Input.InputLanguageManager"/>。
+    /// 语言切换是通过焦点窗口生效的，没有"语言变化"事件可订阅（InputLanguageChanged 只在自家窗口收到），
+    /// 所以轮询是最省事且不会漏的方式；一次读取是纯内存操作，1s 一拍几乎无成本。
+    /// </summary>
+    private void StartInputBadge()
+    {
+        UpdateInputBadge();
+        _inputTimer = new System.Windows.Threading.DispatcherTimer(
+            TimeSpan.FromSeconds(1), System.Windows.Threading.DispatcherPriority.Background,
+            (_, _) => UpdateInputBadge(), Dispatcher);
+        _inputTimer.Start();
+    }
+
+    private void UpdateInputBadge()
+    {
+        if (_inputText is null) return;
+        var badge = Core.TopBar.StatusTiles.InputBadge(
+            System.Windows.Input.InputLanguageManager.Current.CurrentInputLanguage?.Name);
+        if (_inputText.Text != badge) _inputText.Text = badge;
+    }
+
+    /// <summary>点输入法徽标：打开 Windows 的"语言和区域"设置（我们没有自绘的输入法选择器）。</summary>
+    private void OpenInputSettings()
+    {
+        try
+        {
+            System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(
+                "ms-settings:keyboard") { UseShellExecute = true });
+        }
+        catch (Exception ex)
+        {
+            Logger.Warn($"打开输入法设置失败：{ex.Message}");
+        }
+    }
+
     private void OpenClockFlyout()
     {
         if (!SettingsService.Current.NotificationCenterEnabled || _clockButton is null)
@@ -1093,8 +1139,14 @@ public partial class TopBarWindow : AcrylicWindow
         _controlCenterHost?.Close();
     }
 
+    private FrameworkElement? host_Content_AsControlCenter()
+        => _controlCenterHost?.Content as FrameworkElement;
+
     private void OnControlCenterClosed(object? sender, EventArgs e)
     {
+        // 先停状态采样：面板是每次新建的，不在关闭路径停就是"开一次多一个 5s 定时器"。
+        (host_Content_AsControlCenter() as Controls.ControlCenterPanel)?.DisposeStatus();
+
         var host = sender as FluentPopupHost;
         if (host is not null)
         {
