@@ -206,6 +206,8 @@
                       ItemTemplateSelector="{StaticResource ItemSelector}"
                       Margin="0,8,0,8"
                       PreviewMouseLeftButtonUp="VerticalList_Click"
+                      PreviewMouseMove="VerticalList_Move"
+                      MouseLeave="VerticalList_Leave"
                       PreviewMouseRightButtonUp="VerticalList_RightUp">
             <ItemsControl.ItemsPanel>
                 <ItemsPanelTemplate>

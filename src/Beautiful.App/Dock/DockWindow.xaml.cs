@@ -453,6 +453,55 @@ public partial class DockWindow : AcrylicWindow
             NativeMethods.SwpNozorder | NativeMethods.SwpNoactivate);
     }
 
+    /// <summary>当前被放大的竖排条目容器（null = 没有）。</summary>
+    private FrameworkElement? _verticalHovered;
+
+    /// <summary>
+    /// 竖排面板的悬停放大（实验）：鼠标下的条目放大到 1.12，其余保持原样。
+    /// <para>
+    /// 这里**不是** DockSurface 的连续高斯放大场——那套几何按水平行 + 前缀和推挤写的；
+    /// 实验版用最朴素的"当前条目放大"，保证不碰主路径，观感也够用。
+    /// </para>
+    /// </summary>
+    private void VerticalList_Move(object sender, System.Windows.Input.MouseEventArgs e)
+    {
+        var hit = (e.OriginalSource as FrameworkElement);
+        while (hit is not null and not System.Windows.Controls.ContentPresenter)
+        {
+            hit = System.Windows.Media.VisualTreeHelper.GetParent(hit) as FrameworkElement;
+        }
+
+        var container = hit as FrameworkElement;
+        if (ReferenceEquals(container, _verticalHovered))
+        {
+            return;
+        }
+
+        SetVerticalScale(_verticalHovered, 1.0);
+        _verticalHovered = container;
+        SetVerticalScale(_verticalHovered, 1.12);
+    }
+
+    private void VerticalList_Leave(object sender, System.Windows.Input.MouseEventArgs e)
+    {
+        SetVerticalScale(_verticalHovered, 1.0);
+        _verticalHovered = null;
+    }
+
+    private static void SetVerticalScale(FrameworkElement? element, double scale)
+    {
+        if (element is null) return;
+        if (element.RenderTransform is not ScaleTransform st || st.IsFrozen)
+        {
+            st = new ScaleTransform(1, 1);
+            element.RenderTransformOrigin = new Point(0.5, 0.5);
+            element.RenderTransform = st;
+        }
+
+        st.ScaleX = scale;
+        st.ScaleY = scale;
+    }
+
     /// <summary>竖排面板左键：直接用 DataContext 找到条目（不经过 DockSurface 的命中表）。</summary>
     private void VerticalList_Click(object sender, System.Windows.Input.MouseButtonEventArgs e)
     {
