@@ -30,16 +30,16 @@ Beautiful 接管日常桌面三件套：屏幕底部是悬浮 Dock（应用固�
 
 | 目标 | 现在 | 证据/边界 |
 |---|---|---|
-| C++ 进程内层 + 注入 payload | `src/Beautiful.Native/`（C ABI、材质/捕获/场景/注入）、`src/Beautiful.TrayBridge/`（空 payload：心跳/卸载/宿主 Mutex 自卸载）、`tools/NativeSmoke/`；`scripts/build-native.cmd` 用 VS2022 v143 /W4 + /WX 编译 | native 构建 **0 警告 0 错误**；`NativeSmoke`：ABI/health/scene/screen capture/inject gate **5 PASS / 1 SKIP / 0 FAIL** |
+| C++ 进程内层 + 注入 payload | `src/Beautiful.Native/`（C ABI、材质/捕获/场景/注入）、`src/Beautiful.TrayBridge/`（空 payload：心跳/卸载/宿主 Mutex 自卸载）、`tools/NativeSmoke/`；`scripts/build-native.cmd` 用 VS2022 v143 /W4 + /WX 编译 | native 构建 **0 警告 0 错误**；`NativeSmoke`：ABI/health/material probe/scene/screen capture/inject gate **6 PASS / 0 SKIP / 0 FAIL** |
 | 协议固定布局 | `Core/Native/NativeProtocol`（BnRect/BnHealth/BnMaterialDesc/BnCaptureResult）+ 尺寸/偏移单测；NativeSmoke 打印同一组 `sizeof` | `NativeProtocolTests`；C# 777 通过 |
-| 材质引擎（D-BLUR 一级路） | DComp + `Windows.UI.Composition` HostBackdrop 背板窗口；`NativeMaterialHost` 按 `GetWindowRect` 物理像素同步菜单栏/Dock，探针可用时让出 WPF 静态底 | **本 VM HostBackdrop 探针失败（code=-2）→ 自动回落静态 tint**；真机实时模糊 **UNVERIFIED(owner)** |
+| 材质引擎（D-BLUR 一级路） | DComp + `Windows.UI.Composition` HostBackdrop 背板窗口；`NativeMaterialHost` 按 `GetWindowRect` 物理像素同步菜单栏/Dock，探针可用时让出 WPF 静态底 | HostBackdrop 探针通过（modules=0xF）；agent smoke 已在真实 Win11 创建 Dock/菜单栏两块背板（`logs/native.log`: `Material created`），截图无黑块；**材质目视仍待所有者按 §2.5 回执** |
 | 捕获服务 | WGC（Graphics Capture）优先 → native PrintWindow → 屏幕 BitBlt；5×4 纯色判废；`WindowCapture` 在开关开启时优先走 native | `NativeSmoke` 屏幕捕获 PASS；WGC 真窗口路径 **UNVERIFIED(owner)**（本 VM 无控制台窗口可抓） |
 | 场景渲染骨架 | D3D11 离屏纹理/回读基准图（渐变+网格），为 Phase 3-T7 genie 铺路 | `NativeSmoke scene offscreen render` PASS |
 | 注入框架 | 仅 explorer、OS build 闸门、心跳、卸载闭环、宿主 Mutex 自卸载兜底；设置页「底层增强」总/分开关 + 注入演练二次确认 | **默认关闭 `NativeTrayBridge`**；注入演练 **UNVERIFIED(owner)**，核对清单 `scripts/verify/native-inject-checklist.md` |
 | 纯 C# 形态 | `BEAUTIFUL_NONATIVE=1`/DLL 缺失/坏镜像/探针失败全部只记日志并降级；`BEAUTIFUL_NONATIVE=1` 仍是 CI/无桌面形态 | 所有 native 调用过 `NativeLoader` Guard；失败不抛给 UI |
 | 发布/诊断 | `install-local.cmd` 先编译 native 再 publish；CI 增 native 构建 + NativeSmoke；`diag.ps1` 增 `[Native 模块]` 段 | 本机 `dist\Beautiful\Beautiful.exe` 已重新发布；版本 `4.0.0-alpha.1` |
 
-> Phase 2 未完成/待回执：HostBackdrop 真机实拍、WGC 对 Chrome/Electron 窗口的实测、注入演练 explorer 健康回执、看门狗"explorer 异常重启 ≥2 次/10min 自动禁用"（当前只有手动开关与 payload 自卸载兜底）。
+> Phase 2 未完成/待回执：材质真机目视、WGC 对 Chrome/Electron 窗口的实测、注入演练 explorer 健康回执、看门狗"explorer 异常重启 ≥2 次/10min 自动禁用"（当前只有手动开关与 payload 自卸载兜底）。
 
 ## v4.0-alpha Phase 3 变更（Dock，进行中）
 

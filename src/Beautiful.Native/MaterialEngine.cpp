@@ -2,7 +2,9 @@
 #include "NativeCommon.h"
 
 #include <mutex>
+#include <dispatcherqueue.h>
 #include <winrt/Windows.Foundation.h>
+#include <winrt/Windows.System.h>
 #include <winrt/Windows.UI.h>
 #include <winrt/Windows.UI.Composition.h>
 #include <winrt/Windows.UI.Composition.Desktop.h>
@@ -15,6 +17,38 @@ namespace
     constexpr wchar_t kClassName[] = L"Beautiful.Native.Material";
     std::once_flag g_classOnce;
     bool g_classRegistered = false;
+    std::once_flag g_queueOnce;
+    winrt::com_ptr<ABI::Windows::System::IDispatcherQueueController> g_queueController;
+
+    /// <summary>
+    /// Windows.UI.Composition 在 Win11 上要求创建线程有 DispatcherQueue；WPF 的 UI 线程没有，
+    /// 直接 `Compositor()` 会得到 0x80070005 "caller must initialize DispatcherQueue"。
+    /// 在本线程创建一个（保持 controller 存活到进程退出），这是 HostBackdrop 能真正工作的前提。
+    /// </summary>
+    void EnsureDispatcherQueue()
+    {
+        std::call_once(g_queueOnce, [] {
+            try
+            {
+                DispatcherQueueOptions options{};
+                options.dwSize = sizeof(options);
+                options.threadType = DQTYPE_THREAD_CURRENT;
+                options.apartmentType = DQTAT_COM_NONE;
+                winrt::com_ptr<ABI::Windows::System::IDispatcherQueueController> controller;
+                const HRESULT hr = CreateDispatcherQueueController(options, controller.put());
+                if (SUCCEEDED(hr))
+                {
+                    g_queueController = controller;
+                    bn::Log(L"INFO", L"DispatcherQueue 已创建（Compositor 前置）");
+                }
+                else
+                {
+                    bn::Log(L"WARN", L"CreateDispatcherQueueController hr=0x%08X", static_cast<unsigned>(hr));
+                }
+            }
+            catch (...) { bn::Log(L"WARN", L"DispatcherQueue 创建异常"); }
+        });
+    }
 
     LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
     {
@@ -89,6 +123,7 @@ namespace bn
     {
         try
         {
+            EnsureDispatcherQueue();
             // 探针只创建 Composition 对象 + HostBackdrop 画刷，不需要窗口：
             // 失败（旧系统/无 DComp）返回明确错误，由 C# 走二级/三级降级。
             Compositor compositor;
@@ -113,6 +148,7 @@ namespace bn
     {
         try
         {
+            EnsureDispatcherQueue();
             if (!EnsureClass()) return nullptr;
             auto* material = new Material();
             material->owner = owner;

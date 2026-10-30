@@ -75,7 +75,9 @@
         <Setter Property="Height" Value="16"/>
         <Setter Property="Stretch" Value="Uniform"/>
         <Setter Property="Fill" Value="Transparent"/>
-        <Setter Property="Stroke" Value="{DynamicResource MacTextSecondary}"/>
+        <!-- 设置页跟随系统配色（窗口本身不套 app 深色 token）：用 SystemColors 文本色，
+             避免"app 是深色 → 白色描边，设置窗口是浅色 → 图标看不见"。 -->
+        <Setter Property="Stroke" Value="{DynamicResource {x:Static SystemColors.ControlTextBrushKey}}"/>
         <Setter Property="StrokeThickness" Value="1.5"/>
         <Setter Property="StrokeStartLineCap" Value="Round"/>
         <Setter Property="StrokeEndLineCap" Value="Round"/>

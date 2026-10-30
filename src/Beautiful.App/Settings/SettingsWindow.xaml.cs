@@ -183,7 +183,7 @@ public partial class SettingsWindow : Window
     }
 
     /// <summary>强调色下拉项：Core 只给 hex，WPF 侧带一枚预览色块。</summary>
-    private sealed record AccentOption(string Id, string Name, Brush Swatch);
+    public sealed record AccentOption(string Id, string Name, Brush Swatch);
 
     private static Brush AccentBrush(string hex)
     {

@@ -297,7 +297,7 @@
                         <StackPanel Orientation="Horizontal" Margin="0,12,0,0">
                             <TextBlock Text="强调色" Style="{StaticResource RowLabel}" Width="72"/>
                             <ComboBox x:Name="AccentColorBox" Width="300" VerticalAlignment="Center"
-                                      SelectionChanged="AccentColor_Changed">
+                                      SelectedValuePath="Id" SelectionChanged="AccentColor_Changed">
                                 <ComboBox.ItemTemplate>
                                     <DataTemplate>
                                         <StackPanel Orientation="Horizontal">
