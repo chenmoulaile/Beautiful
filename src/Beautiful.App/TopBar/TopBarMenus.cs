@@ -5,6 +5,7 @@ using System.Windows;
 using Beautiful.App.Controls;
 using Beautiful.App.Interop;
 using Beautiful.App.Services;
+using Beautiful.App.Shell;
 using Beautiful.Core.Controls;
 using MessageBox = System.Windows.MessageBox;
 
@@ -31,7 +32,7 @@ public static class TopBarMenus
     /// <summary>logo（"Beautiful" 应用菜单）：关于 / 设置… / 主题▸ / 重载 Dock / 分隔 / 退出。</summary>
     public static List<MenuItemView> BeautifulMenu(TopBarContext ctx) => new()
     {
-        new() { Id = "about", Label = "关于 Beautiful", Glyph = InfoGlyph, Invoke = ShowAbout },
+        new() { Id = "about", Label = "关于本机", Glyph = InfoGlyph, Invoke = ShowAbout },
         new() { Id = "sep0", IsSeparator = true },
         new() { Id = "settings", Label = "设置…", Glyph = GearGlyph, Invoke = ctx.OpenSettings },
         new() { Id = "syssettings", Label = "系统设置…", Glyph = GearGlyph, Invoke = () => Launch("ms-settings:") },
@@ -158,10 +159,7 @@ public static class TopBarMenus
             NativeMethods.ShowWindow(w.Handle, NativeMethods.SwMinimize);
     }
 
-    private static void ShowAbout()
-        => MessageBox.Show(
-            "Beautiful\n\nmacOS 风格悬浮 Dock + 顶部菜单栏（Finder 栏）。\nWindows 11 · WPF · .NET 8。",
-            "关于 Beautiful", MessageBoxButton.OK, MessageBoxImage.Information);
+    private static void ShowAbout() => AboutWindow.ShowSingleton();
 
     /// <summary>睡眠：powrprof SetSuspendState（不强制、不关唤醒）。失败只记日志，不弹假成功。</summary>
     private static void Sleep()

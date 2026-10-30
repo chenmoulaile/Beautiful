@@ -154,6 +154,9 @@ public partial class App : Application
             // 7. --settings：设置窗口命令行入口（与托盘"设置"等效；窗口为单例）
             if (e.Args.Contains("--settings", StringComparer.OrdinalIgnoreCase))
                 OpenSettings();
+            // 7.1 --about：关于本机卡（验证/截图入口；与 logo 菜单同一单例）
+            if (e.Args.Contains("--about", StringComparer.OrdinalIgnoreCase))
+                Shell.AboutWindow.ShowSingleton();
 
             // 8. 托盘最后就位（SMTC 已随 Dock 构造期异步初始化，失败仅记日志）
             _tray = new TrayIconManager(

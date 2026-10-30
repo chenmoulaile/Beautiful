@@ -432,6 +432,6 @@ dotnet publish src/Beautiful.App -c Release -r win-x64 --self-contained true -p:
 | 目标 | 现在 | 证据/边界 |
 |---|---|---|
 | 菜单栏 24px（P4-T1） | `BarHeightDip` 30→24、XAML 高度 24；token `MenuBarHeight=24` 已对齐；AppBar 条带同值 | 真实 Win11 smoke 截图确认排版无裁切；**Big Sur 并排对比 UNVERIFIED(owner)** |
-| logo 菜单系统动作（P4-T2 起步） | 新增：系统设置… / Microsoft Store… / 任务管理器… / 睡眠 / 重新启动…（二次确认）/ 关机…（二次确认）/ 锁定屏幕 / 注销…（二次确认）；重启/关机会先走 Beautiful 完整退出链路 | 代码/XAML 编译；**关机/重启/注销只做了二次确认，未在真机实际触发**（避免误操作）；关于本机 Big Sur 信息卡、最近项目▸、真菜单镜像仍未做 |
+| logo 菜单系统动作（P4-T2 起步） | 新增：系统设置… / Microsoft Store… / 任务管理器… / 睡眠 / 重新启动…（二次确认）/ 关机…（二次确认）/ 锁定屏幕 / 注销…（二次确认）；重启/关机会先走 Beautiful 完整退出链路；「关于本机」改为 Big Sur 风格非分层信息卡（壁纸缩略/机器名/型号/CPU/内存/Windows/字体，`--about` 可验） | 代码/XAML 编译；真实 Win11 `--about` 截图验证；**关机/重启/注销只做了二次确认，未在真机实际触发**（避免误操作）；真应用菜单镜像仍未做 |
 
 > Phase 4 仅完成"24px + logo 菜单真实系统动作"；控制中心/通知中心/真应用菜单/托盘像素/蓝牙电池等仍待后续。
