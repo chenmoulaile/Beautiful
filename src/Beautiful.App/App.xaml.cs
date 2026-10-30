@@ -214,6 +214,15 @@ public partial class App : Application
                 hideTimer.Start();
             }
 
+            // 7.008 --tray-capture <png>：把系统托盘区截成 PNG（P4-T8 不注入路线），跑完退出
+            var trayShot = ParseArgValue(e.Args, "--tray-capture");
+            if (!string.IsNullOrWhiteSpace(trayShot))
+            {
+                var saved = TrayCapture.CaptureToFile(trayShot!);
+                Logger.Info($"托盘截屏：结果={(saved is null ? "失败" : saved)}");
+                ExitApp();
+            }
+
             // 7.02 --dock-edge left|right|bottom：停靠边实验入口（截图/验收用，不写设置）
             var dockEdge = ParseArgValue(e.Args, "--dock-edge");
             if (!string.IsNullOrWhiteSpace(dockEdge))
