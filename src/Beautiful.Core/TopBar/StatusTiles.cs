@@ -55,6 +55,16 @@ public static class StatusTiles
         => on switch { true => "开", false => "关", null => "不可用" };
 
     /// <summary>
+    /// 账户 + USB 一行（P4-T11）：<c>chenk · USB 2 个</c>。
+    /// 用户名为空给 <c>未登录</c>；USB 数量为负（读不到）时只说账户，不编数字。
+    /// </summary>
+    public static string AccountLine(string? userName, int usbCount)
+    {
+        var name = string.IsNullOrWhiteSpace(userName) ? "未登录" : userName!.Trim();
+        return usbCount < 0 ? name : $"{name} · USB {usbCount} 个";
+    }
+
+    /// <summary>
     /// 输入法徽标：中文/日文/韩文键盘显示单字，其余显示 <c>EN</c>。
     /// 参数是 BCP-47 语言标签（如 <c>zh-Hans-CN</c>）或输入法描述，取前两位判断。
     /// </summary>

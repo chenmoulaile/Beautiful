@@ -59,4 +59,11 @@ public class StatusTilesTests
     [InlineData(null, "EN")]
     public void 输入法徽标按语言与关键字(string? tag, string expected)
         => Assert.Equal(expected, StatusTiles.InputBadge(tag));
+
+    [Theory]
+    [InlineData("chenk", 2, "chenk · USB 2 个")]
+    [InlineData("chenk", -1, "chenk")]
+    [InlineData("", 0, "未登录 · USB 0 个")]
+    public void 账户行拼装(string? user, int usb, string expected)
+        => Assert.Equal(expected, StatusTiles.AccountLine(user, usb));
 }

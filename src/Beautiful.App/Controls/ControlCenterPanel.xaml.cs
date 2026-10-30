@@ -117,6 +117,7 @@ public partial class ControlCenterPanel : UserControl, IBackdropAware, IPopupSha
         NetworkValue.Text = status.Network;
         BluetoothValue.Text = status.Bluetooth;
         InputValue.Text = status.Input;
+        AccountLine.Text = status.Account;
     }
 
     /// <summary>关闭时停采样（面板每次打开都会新建，不停就是每开一次多一个 5s 定时器）。</summary>

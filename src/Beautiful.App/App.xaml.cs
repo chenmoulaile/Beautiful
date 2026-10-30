@@ -192,6 +192,14 @@ public partial class App : Application
                 _topBar?.ShowControlCenterForDiagnostics();
             }
 
+            // 7.01 --tray-probe：托盘真实像素的只读探针（P4-T8 第一步，不注入），跑完退出
+            if (e.Args.Contains("--tray-probe", StringComparer.OrdinalIgnoreCase))
+            {
+                var found = TrayProbe.Run();
+                Logger.Info($"托盘探针：可用按钮 {found} 个 → {(found > 0 ? "UIA 路径可行" : "UIA 读不到，需另找路径")}");
+                ExitApp();
+            }
+
             // 7.03 --dock-autohide：开启自动隐藏并在 1.2s 后强制滑下（截图/验收"隐藏态"用）
             if (e.Args.Contains("--dock-autohide", StringComparer.OrdinalIgnoreCase))
             {

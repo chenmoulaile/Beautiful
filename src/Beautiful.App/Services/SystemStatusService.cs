@@ -11,10 +11,11 @@ using Windows.Devices.Radios;
 namespace Beautiful.App.Services;
 
 /// <summary>一次状态采样（顶栏/控制中心共用的四个字段）。</summary>
-public sealed record SystemStatus(string Battery, string BatteryGlyphKey, string Network, string Bluetooth, string Input)
+public sealed record SystemStatus(string Battery, string BatteryGlyphKey, string Network, string Bluetooth,
+    string Input, string Account)
 {
     public static readonly SystemStatus Unknown =
-        new("--", "battery-unknown", "离线", "不可用", "EN");
+        new("--", "battery-unknown", "离线", "不可用", "EN", "未登录");
 }
 
 /// <summary>
@@ -54,7 +55,8 @@ public sealed class SystemStatusService : IDisposable
             BatteryGlyphKey: ReadBatteryGlyphKey(),
             Network: ReadNetwork(),
             Bluetooth: StatusTiles.BluetoothText(_bluetoothOn),
-            Input: StatusTiles.InputBadge(ReadInputLanguage()));
+            Input: StatusTiles.InputBadge(ReadInputLanguage()),
+            Account: StatusTiles.AccountLine(Environment.UserName, ReadUsbCount()));
 
         if (status != _current)
         {
@@ -108,6 +110,24 @@ public sealed class SystemStatusService : IDisposable
         catch (NetworkInformationException)
         {
             return StatusTiles.NetworkText(false, false, null);
+        }
+    }
+
+    /// <summary>
+    /// 可移动磁盘数量（"USB 设备"的诚实口径：只数能挂载的卷，不数键鼠/摄像头——
+    /// 后者要 SetupAPI 逐设备枚举，代价远大于收益，且数字对用户没有意义）。
+    /// 读不到返回 -1，由 Core 决定不显示数字。
+    /// </summary>
+    private static int ReadUsbCount()
+    {
+        try
+        {
+            return System.IO.DriveInfo.GetDrives()
+                .Count(d => d.DriveType == System.IO.DriveType.Removable && d.IsReady);
+        }
+        catch (Exception)
+        {
+            return -1;
         }
     }
 

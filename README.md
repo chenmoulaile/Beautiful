@@ -2,7 +2,7 @@
 
 Windows 11 的 macOS 桌面还原壳：悬浮 Dock（Big Sur 风）+ macOS 菜单栏 + Alt+Tab 应用切换器 + 悬停窗口预览 + Spotlight 启动器 + 控制中心 + 访达。WPF + .NET 8，自包含发布，中文界面。
 
-> 版本 `4.0.0-alpha.6`。界面截图不入库（`logs/`、`docs/` 已 gitignore），观感以发布包实跑为准。
+> 版本 `4.0.0-alpha.7`。界面截图不入库（`logs/`、`docs/` 已 gitignore），观感以发布包实跑为准。
 > 完成度一律以**实测**为准：没跑过的写"未验证"，不写"已支持"。
 
 ## 现在能用的
@@ -67,7 +67,8 @@ dotnet test tests/Beautiful.Core.Tests
 
 - 分层：`Beautiful.Core`（纯函数与规则，全部可单测）/ `Beautiful.App`（WPF 外壳）/ `Beautiful.Native`（C++ 材质与捕获，可选）。
 - 视觉：`Core/Design/MacTokens` 单一事实源（亮/暗两套），App 侧注入 `Mac*` 资源键。
-- **未做（如实列出）**：托盘真实像素（需注入 explorer）、左右停靠的放大/倒影与工作区预留、贴边隐藏/半透明两档。
+- **未做（如实列出）**：托盘真实像素（探针已跑：`Shell_TrayWnd`/`TrayNotifyWnd`/`XamlExplorerHostIsland` 的 UIA 子树都返回 0，
+  说明"只读 UIA 取托盘"这条路在 Win11 24H2 上走不通，剩下只有注入）、左右停靠的放大/倒影与工作区预留、贴边隐藏/半透明两档。
 - 已知差异：第三方拷贝进度只能轮询（原生任务栏是进程内直写，跨进程无接口）；天气依赖第三方免费接口。
 - 交互类（悬停放大、拖拽建夹、点通知跳转）仍需人工点一次确认，代码与提交信息标 `UNVERIFIED(owner)`。
 

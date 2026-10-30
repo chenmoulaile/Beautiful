@@ -238,6 +238,9 @@
                                 Click="Focus_Click"
                                 AutomationProperties.Name="控制中心 打开专注模式设置"/>
                     </UniformGrid>
+                    <TextBlock x:Name="AccountLine" Text="未登录" FontSize="10.5" Opacity="0.62"
+                               Margin="4,0,4,8" TextTrimming="CharacterEllipsis"
+                               ToolTip="账户与可移动磁盘数量"/>
                     <TextBlock x:Name="WifiReason" FontSize="10.5" Opacity="0.62" TextWrapping="Wrap"
                                Margin="4,0,4,6" Visibility="Collapsed"/>
 
