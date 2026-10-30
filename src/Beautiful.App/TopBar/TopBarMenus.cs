@@ -34,10 +34,21 @@ public static class TopBarMenus
         new() { Id = "about", Label = "关于 Beautiful", Glyph = InfoGlyph, Invoke = ShowAbout },
         new() { Id = "sep0", IsSeparator = true },
         new() { Id = "settings", Label = "设置…", Glyph = GearGlyph, Invoke = ctx.OpenSettings },
+        new() { Id = "syssettings", Label = "系统设置…", Glyph = GearGlyph, Invoke = () => Launch("ms-settings:") },
+        new() { Id = "store", Label = "Microsoft Store…", Invoke = () => Launch("ms-windows-store:") },
+        new() { Id = "taskmgr", Label = "任务管理器…", Invoke = () => Launch("taskmgr.exe") },
+        new() { Id = "sep1", IsSeparator = true },
+        new() { Id = "sleep", Label = "睡眠", Invoke = Sleep },
+        new() { Id = "restart", Label = "重新启动…", Invoke = () => PowerAction(ctx, "/r /t 0", "重新启动") },
+        new() { Id = "shutdown", Label = "关机…", Invoke = () => PowerAction(ctx, "/s /t 0", "关机") },
+        new() { Id = "sep2", IsSeparator = true },
+        new() { Id = "lock", Label = "锁定屏幕", Invoke = Lock },
+        new() { Id = "signout", Label = "注销…", Invoke = () => PowerAction(ctx, "/l", "注销") },
+        new() { Id = "sep3", IsSeparator = true },
         new() { Id = "theme", Label = "主题", Glyph = ThemeGlyph, Children = ThemeSubmenu(ctx) },
         new() { Id = "reload", Label = "重载 Dock", Glyph = ReloadGlyph, Invoke = ctx.ReloadDock },
-        new() { Id = "sep1", IsSeparator = true },
-        new() { Id = "quit", Label = "退出", Glyph = QuitGlyph, Invoke = ctx.Exit },
+        new() { Id = "sep4", IsSeparator = true },
+        new() { Id = "quit", Label = "退出 Beautiful", Glyph = QuitGlyph, Invoke = ctx.Exit },
     };
 
     private static List<MenuItemView> ThemeSubmenu(TopBarContext ctx)
@@ -152,16 +163,58 @@ public static class TopBarMenus
             "Beautiful\n\nmacOS 风格悬浮 Dock + 顶部菜单栏（Finder 栏）。\nWindows 11 · WPF · .NET 8。",
             "关于 Beautiful", MessageBoxButton.OK, MessageBoxImage.Information);
 
-    /// <summary>Shell 启动（explorer.exe / ms-settings: URI / sndvol.exe）：UseShellExecute 让系统解析协议。</summary>
-    public static void Launch(string target)
+    /// <summary>睡眠：powrprof SetSuspendState（不强制、不关唤醒）。失败只记日志，不弹假成功。</summary>
+    private static void Sleep()
     {
         try
         {
-            Process.Start(new ProcessStartInfo(target) { UseShellExecute = true });
+            if (!SetSuspendState(false, false, false))
+                MessageBox.Show("睡眠请求失败（可能被策略禁用）。", "Beautiful", MessageBoxButton.OK, MessageBoxImage.Warning);
+        }
+        catch (Exception ex)
+        {
+            MessageBox.Show($"睡眠请求失败：{ex.Message}", "Beautiful", MessageBoxButton.OK, MessageBoxImage.Warning);
+        }
+    }
+
+    /// <summary>锁定屏幕：LockWorkStation，失败无副作用。</summary>
+    private static void Lock()
+    {
+        try { LockWorkStation(); }
+        catch { /* 顶栏菜单动作失败不拖垮 UI */ }
+    }
+
+    /// <summary>重启/关机/注销：先二次确认，再走 Beautiful 完整退出链路，最后交给系统 shutdown。</summary>
+    private static void PowerAction(TopBarContext ctx, string shutdownArgs, string title)
+    {
+        var answer = MessageBox.Show(
+            $"{title}会先退出 Beautiful，再执行系统操作。\n\n确认{title}？",
+            title, MessageBoxButton.YesNo, MessageBoxImage.Warning, MessageBoxResult.No);
+        if (answer != MessageBoxResult.Yes) return;
+        try { ctx.Exit(); } catch { /* 退出链路自身已有兜底 */ }
+        Launch("shutdown.exe", shutdownArgs);
+    }
+
+    /// <summary>Shell 启动（explorer.exe / ms-settings: URI / sndvol.exe）：UseShellExecute 让系统解析协议。</summary>
+    public static void Launch(string target, string? arguments = null)
+    {
+        try
+        {
+            Process.Start(new ProcessStartInfo(target)
+            {
+                UseShellExecute = true,
+                Arguments = arguments ?? string.Empty
+            });
         }
         catch
         {
             // 状态项/菜单动作的落地失败不应崩溃顶栏（目标不存在或被策略禁用）
         }
     }
+
+    [System.Runtime.InteropServices.DllImport("powrprof.dll", SetLastError = true)]
+    private static extern bool SetSuspendState(bool hibernate, bool forceCritical, bool disableWakeEvent);
+
+    [System.Runtime.InteropServices.DllImport("user32.dll")]
+    private static extern bool LockWorkStation();
 }

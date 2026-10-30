@@ -13,7 +13,7 @@
         ResizeMode="NoResize"
         SizeToContent="Manual"
         Focusable="False"
-        Height="30">
+        Height="24">
 
     <!-- 形态（v3 T2/T3 裁定，替换 v2 的"非分层 + DWMWA_SYSTEMBACKDROP_TYPE 真背板"）：
          顶栏是**常驻**表面，不能做实时抓屏（重抓会把自身像素抓进背板 = 鬼影；为抓屏先隐藏一帧 = 闪烁），

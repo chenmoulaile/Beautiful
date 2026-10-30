@@ -55,7 +55,7 @@ namespace Beautiful.App.TopBar;
 /// </summary>
 public partial class TopBarWindow : AcrylicWindow
 {
-    private const double BarHeightDip = 30; // macOS 顶栏视觉高度（DIP；AppBar 条带同值）
+    private const double BarHeightDip = 24; // macOS 顶栏视觉高度（DIP；AppBar 条带同值）
     private const int IconFontDip = 13;
 
     /// <summary>
