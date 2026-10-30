@@ -200,6 +200,24 @@ public partial class App : Application
                 _dock?.ApplyBadgeForDiagnostics(dockBadge!);
             }
 
+            // 7.06 --dock-progress <0..1>：Dock 进度条截图入口（示例值，不改系统）
+            var dockProgress = ParseArgValue(e.Args, "--dock-progress");
+            if (!string.IsNullOrWhiteSpace(dockProgress)
+                && double.TryParse(dockProgress, System.Globalization.NumberStyles.Float,
+                    System.Globalization.CultureInfo.InvariantCulture, out var progressFraction))
+            {
+                _shotDock = true;
+                _dock?.ApplyProgressForDiagnostics(progressFraction);
+            }
+
+            // 7.07 --progress-probe：读一次 Explorer 拷贝对话框进度（不存在就报没找到），跑完退出
+            if (e.Args.Contains("--progress-probe", StringComparer.OrdinalIgnoreCase))
+            {
+                var (found, fraction) = TaskbarProgressService.Probe();
+                Logger.Info($"进度探针：found={found} fraction={fraction:0.###}");
+                ExitApp();
+            }
+
             // 7.10 --banner-test：通知横幅截图入口（用固定示例内容，不读真实通知）
             if (e.Args.Contains("--banner-test", StringComparer.OrdinalIgnoreCase))
             {

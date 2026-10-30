@@ -116,6 +116,12 @@ public sealed class DockSurface : Canvas
     /// <summary>当前角标文字（按条目 Id）：条目重建/换源后据此把角标重新挂回新容器。</summary>
     private readonly Dictionary<string, string> _badgeTexts = new(StringComparer.Ordinal);
 
+    /// <summary>进度条轨道（按条目 Id）与其填充元素：只覆盖状态，不进 DockItem。</summary>
+    private readonly Dictionary<string, Border> _progressTracks = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, Border> _progressFills = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, (double Fraction, DockProgressState State)> _progressValues =
+        new(StringComparer.Ordinal);
+
     /// <summary>逐帧几何状态（下标 = 条目下标，与 _containers 对齐）。</summary>
     private double[] _cur = Array.Empty<double>();     // 当前（阻尼后）scale
     private double[] _tgt = Array.Empty<double>();     // 目标 scale（来自放大场）
@@ -456,6 +462,8 @@ public sealed class DockSurface : Canvas
         _items.Clear();
         _reflections.Clear();
         _badgeElements.Clear();   // 容器已销毁：映射会在下面按 _badgeTexts 重新挂回
+        _progressTracks.Clear();
+        _progressFills.Clear();
 
         var items = ItemsSource;
         if (items is not null)
@@ -476,6 +484,7 @@ public sealed class DockSurface : Canvas
                     fe.SizeChanged += OnContainerSizeChanged;
                     Children.Add(fe);               // Panel.Children 负责可视/逻辑父子关系
                     AttachBadge(fe, item.Id);       // 已知角标（换源/重建后）跟着新容器一起挂回去
+                    AttachProgress(fe, item.Id);    // 进度条同理
                 }
                 _containers.Add(fe);
             }
@@ -673,6 +682,138 @@ public sealed class DockSurface : Canvas
         grid.Children.Add(badge);
         _badgeElements[itemId] = badge;
         Logger.Info($"Dock 角标：已挂 {text}");
+    }
+
+    // ---------- 进度条（Phase 7-T1） ----------
+
+    /// <summary>
+    /// 按"进程 exe 文件名 → (进度, 状态)"应用图标下沿的进度条；不在表里的条目清除。
+    /// 与角标同一套 exe 键规则（不同启动路径的同一应用能命中）。
+    /// </summary>
+    public void ApplyProgress(
+        IReadOnlyDictionary<string, (double Fraction, DockProgressState State)> byProcess)
+    {
+        foreach (var item in _items)
+        {
+            if (item is null || item.Kind == DockItemKind.Separator)
+            {
+                continue;
+            }
+
+            var exe = ExecutableKeyOf(item);
+            if (exe.Length > 0 && byProcess.TryGetValue(exe, out var value))
+            {
+                SetProgress(item.Id, value.Fraction, value.State);
+            }
+            else
+            {
+                SetProgress(item.Id, 0, DockProgressState.None);
+            }
+        }
+    }
+
+    /// <summary>给某条目设置进度（<see cref="DockProgressState.None"/> 或非法值 = 隐藏）。</summary>
+    public void SetProgress(string itemId, double fraction, DockProgressState state)
+    {
+        if (state == DockProgressState.None)
+        {
+            _progressValues.Remove(itemId);
+        }
+        else
+        {
+            _progressValues[itemId] = (DockProgressBar.Clamp(fraction), state);
+        }
+
+        if (_progressTracks.TryGetValue(itemId, out var track))
+        {
+            ApplyProgressVisual(track, itemId);
+            return;
+        }
+
+        if (state != DockProgressState.None)
+        {
+            var index = _items.FindIndex(item => string.Equals(item?.Id, itemId, StringComparison.Ordinal));
+            if (index >= 0 && index < _containers.Count && _containers[index] is { } container)
+            {
+                AttachProgress(container, itemId);
+            }
+        }
+    }
+
+    /// <summary>若该条目有已知进度，就在模板根 Grid 的底部挂一条细进度带。</summary>
+    private void AttachProgress(FrameworkElement container, string? itemId)
+    {
+        if (itemId is null || container is not Grid grid)
+        {
+            return;
+        }
+
+        if (!_progressValues.ContainsKey(itemId))
+        {
+            return;
+        }
+
+        var trackWidth = Math.Max(12, IconSize * DockProgressBar.WidthRatio);
+        var fill = new Border
+        {
+            Width = 0,
+            HorizontalAlignment = System.Windows.HorizontalAlignment.Left,
+            Background = System.Windows.Media.Brushes.White,
+            CornerRadius = new CornerRadius(1.5)
+        };
+
+        var track = new Border
+        {
+            Width = trackWidth,
+            Height = DockProgressBar.HeightDip,
+            CornerRadius = new CornerRadius(1.5),
+            Background = new SolidColorBrush(Color.FromArgb(0x55, 0xFF, 0xFF, 0xFF)),
+            HorizontalAlignment = System.Windows.HorizontalAlignment.Center,
+            VerticalAlignment = VerticalAlignment.Bottom,
+            Margin = new Thickness(0, 0, 0, 3),
+            IsHitTestVisible = false,
+            Child = fill,
+            // 与角标一致的轻投影：白条压在彩色图标上时要有边界，否则看着像图标本身的一部分
+            Effect = new System.Windows.Media.Effects.DropShadowEffect
+            {
+                BlurRadius = 3, ShadowDepth = 0, Opacity = 0.4, Color = Colors.Black
+            }
+        };
+
+        grid.Children.Add(track);
+        _progressTracks[itemId] = track;
+        _progressFills[itemId] = fill;
+        ApplyProgressVisual(track, itemId);
+    }
+
+    private void ApplyProgressVisual(Border track, string itemId)
+    {
+        if (!_progressValues.TryGetValue(itemId, out var value) || !_progressFills.TryGetValue(itemId, out var fill))
+        {
+            track.Visibility = Visibility.Collapsed;
+            return;
+        }
+
+        track.Visibility = Visibility.Visible;
+        var width = track.Width;
+        fill.Background = ProgressBrush(value.State);
+        fill.Width = value.State == DockProgressState.Indeterminate
+            ? width * DockProgressBar.IndeterminateSegment   // 静态段：不做动画（本项只做"看得见进度"）
+            : width * DockProgressBar.Clamp(value.Fraction);
+    }
+
+    /// <summary>进度条颜色：正常白、出错红、暂停黄（与 Windows 任务栏语义一致）。</summary>
+    private static Brush ProgressBrush(DockProgressState state)
+    {
+        var color = state switch
+        {
+            DockProgressState.Error => Color.FromRgb(0xE8, 0x11, 0x23),
+            DockProgressState.Paused => Color.FromRgb(0xFF, 0xB9, 0x00),
+            _ => Color.FromRgb(0xFF, 0xFF, 0xFF)
+        };
+        var brush = new SolidColorBrush(color);
+        brush.Freeze();
+        return brush;
     }
 
     /// <summary>角标底色：macOS 的红色（比系统强调色更"提醒"）。冻结共享，避免每个角标一份 brush。</summary>

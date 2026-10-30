@@ -63,6 +63,9 @@ public partial class DockWindow : AcrylicWindow
 
     /// <summary>角标服务（Phase 7-T2）：定时读白名单应用标题里的未读数。</summary>
     private DockBadgeService? _badges;
+
+    /// <summary>进度条服务（Phase 7-T1）：轮询 Explorer 拷贝对话框的 UIA 进度。</summary>
+    private TaskbarProgressService? _progress;
     // 组合根（本任务最简路径）：DockWindow 持有 SmtcService + MediaViewModel，
     // MediaViewModel 构造期自启动 SMTC；MediaPanel 惰性创建（胶囊点击时）。
     // App.OnStartup / DockViewModel 保持不动（媒体条目由 DockViewModel 的 suffix 占位提供）。
@@ -343,6 +346,7 @@ public partial class DockWindow : AcrylicWindow
 
         // 角标（Phase 7-T2）：标题解析是纯函数，服务只做定时采样；关窗口时在 OnClosed 里停掉。
         _badges = new DockBadgeService(_vm, Surface, Dispatcher);
+        _progress = new TaskbarProgressService(Surface, Dispatcher);
     }
 
     // ---------- 主题引擎（Task 13） ----------
@@ -617,11 +621,26 @@ public partial class DockWindow : AcrylicWindow
         // 截图里就只剩一个干净的 Dock（这个坑实测踩过一次）。
         _badges?.Dispose();
         _badges = null;
+        _progress?.Dispose();
+        _progress = null;
 
         var item = _vm.Items.FirstOrDefault(i => i.Kind != DockItemKind.Separator);
         if (item is not null)
         {
             Surface.SetBadge(item.Id, text);
+        }
+    }
+
+    /// <summary>诊断入口：给第一个条目打一条示例进度（截图验收用，不进产品逻辑）。</summary>
+    public void ApplyProgressForDiagnostics(double fraction)
+    {
+        _progress?.Dispose();
+        _progress = null;
+
+        var item = _vm.Items.FirstOrDefault(i => i.Kind != DockItemKind.Separator);
+        if (item is not null)
+        {
+            Surface.SetProgress(item.Id, fraction, DockProgressState.Normal);
         }
     }
 
@@ -636,6 +655,8 @@ public partial class DockWindow : AcrylicWindow
         if (_taskbar is not null) _taskbar.PolicyApplied -= OnTaskbarPolicyApplied;
         _badges?.Dispose();
         _badges = null;
+        _progress?.Dispose();
+        _progress = null;
         _vm.Detach();
         _tracker.Dispose();
         _mediaVm.Dispose();                          // 停定时器 + 解除 SmtcService 事件订阅

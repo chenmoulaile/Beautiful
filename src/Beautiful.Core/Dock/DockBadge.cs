@@ -155,6 +155,42 @@ public static class DockProgressBar
     }
 
     /// <summary>
+    /// 解析拷贝对话框进度条的可访问文本（Explorer 实测给的是 "56%"）。
+    /// 解析不到返回 -1（调用方据此画"忙碌但不知道多少"的不确定态），解析到则钳到 0..1。
+    /// 允许 "56 %"、"56%"、前后空白；不带百分号的裸数字一律不认——那不是进度语义。
+    /// </summary>
+    public static double ParsePercentText(string? text)
+    {
+        if (string.IsNullOrWhiteSpace(text))
+        {
+            return -1;
+        }
+
+        var trimmed = text.Trim();
+        if (!trimmed.EndsWith('%'))
+        {
+            return -1;
+        }
+
+        var number = trimmed[..^1].Trim().Replace(" ", string.Empty);
+        if (number.Length == 0)
+        {
+            return -1;
+        }
+
+        // 只认纯数字（不接受 "1,234" 这类千分位：进度不会到千）
+        foreach (var ch in number)
+        {
+            if (!char.IsAsciiDigit(ch))
+            {
+                return -1;
+            }
+        }
+
+        return int.TryParse(number, out var percent) ? Clamp(percent / 100.0) : -1;
+    }
+
+    /// <summary>
     /// 不确定态相位（0..1，循环）：<paramref name="elapsedMs"/> 每 <paramref name="periodMs"/> 走一整圈。
     /// 非正值周期按 1 处理，避免除零。
     /// </summary>

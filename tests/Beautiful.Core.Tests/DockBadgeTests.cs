@@ -78,4 +78,20 @@ public class DockBadgeTests
         Assert.Equal(0, DockProgressBar.IndeterminatePhase(double.NaN));
         Assert.Equal(0, DockProgressBar.IndeterminatePhase(5, 0));   // 周期非正按 1ms 处理
     }
+
+    [Theory]
+    [InlineData("56%", 0.56)]
+    [InlineData(" 56 % ", 0.56)]
+    [InlineData("0%", 0.0)]
+    [InlineData("100%", 1.0)]
+    [InlineData("105%", 1.0)]
+    [InlineData("56", -1.0)]
+    [InlineData("abc%", -1.0)]
+    [InlineData("", -1.0)]
+    [InlineData(null, -1.0)]
+    public void 进度文本只认带百分号的纯数字(string? text, double expected)
+    {
+        var value = DockProgressBar.ParsePercentText(text);
+        Assert.Equal(expected, value, precision: 6);
+    }
 }
