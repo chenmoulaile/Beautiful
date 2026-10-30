@@ -35,12 +35,14 @@ public partial class LaunchpadWindow : Window
     private List<LaunchpadTile> _pageTiles = new();
     private int _page;
 
-    private sealed record LaunchpadTile(LauncherApp App, string Name, BitmapSource? Icon);
+    private sealed record LaunchpadTile(
+        LauncherApp? App, string Name, BitmapSource? Icon, Services.LaunchpadFolderRecord? Folder = null);
 
     private LaunchpadWindow(LauncherService service)
     {
         _service = service;
         InitializeComponent();
+        InitLaunchpadFolders();
         _service.IndexChanged += OnIndexChanged;
         Loaded += OnLoaded;
         Closed += OnClosed;
@@ -133,14 +135,12 @@ public partial class LaunchpadWindow : Window
             ? _service.AllApps
             : _service.Search(query, 200).Select(m => m.App).ToList();
 
-        var pageCount = LaunchpadPagination.PageCount(_apps.Count, PageSize);
+        // 文件夹只在"无搜索"时参与排版：搜索是"找应用"，把文件夹塞进结果只会让人多点一次。
+        var allTiles = BuildTiles(query.Length == 0);
+        var pageCount = LaunchpadPagination.PageCount(allTiles.Count, PageSize);
         _page = Math.Clamp(_page, 0, Math.Max(0, pageCount - 1));
-        var (first, count) = LaunchpadPagination.SpanOf(_page, _apps.Count, PageSize);
-        _pageTiles = new List<LaunchpadTile>(count);
-        foreach (var app in _apps.Skip(first).Take(count))
-        {
-            _pageTiles.Add(new LaunchpadTile(app, app.Name, _service.IconOf(app)));
-        }
+        var (first, count) = LaunchpadPagination.SpanOf(_page, allTiles.Count, PageSize);
+        _pageTiles = allTiles.Skip(first).Take(count).ToList();
         Tiles.ItemsSource = _pageTiles;
         if (_pageTiles.Count > 0) Tiles.SelectedIndex = 0;
 
@@ -179,7 +179,7 @@ public partial class LaunchpadWindow : Window
     {
         if (e.Key == Key.Escape) { Close(); e.Handled = true; return; }
         if (e.Key == Key.Enter) { LaunchSelected(); e.Handled = true; return; }
-        if (e.Key == Key.Right && _page < LaunchpadPagination.PageCount(_apps.Count, PageSize) - 1)
+        if (e.Key == Key.Right && _page < LaunchpadPagination.PageCount(Tiles.Items.Count + (_page * PageSize), PageSize) - 1)
         { _page++; Refresh(); e.Handled = true; }
         if (e.Key == Key.Left && _page > 0)
         { _page--; Refresh(); e.Handled = true; }
@@ -209,6 +209,17 @@ public partial class LaunchpadWindow : Window
 
     private void Launch(LaunchpadTile tile)
     {
+        if (tile.Folder is not null)
+        {
+            OpenFolder(tile.Folder);
+            return;
+        }
+
+        if (tile.App is null)
+        {
+            return;
+        }
+
         if (_service.Launch(tile.App, out var error))
         {
             Close();

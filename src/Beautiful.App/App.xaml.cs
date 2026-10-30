@@ -253,6 +253,37 @@ public partial class App : Application
             // 7.2 --launchpad：启动台（验证/截图入口；与 F4 同一窗口）
             if (e.Args.Contains("--launchpad", StringComparer.OrdinalIgnoreCase))
                 Launcher.LaunchpadWindow.ShowOrToggle(_launcher);
+
+            // 文件夹诊断入口要等启动台 Loaded + 索引就绪，延后一拍再开（否则窗口还没载入，调了也没用）。
+            var launchpadFolder = ParseArgValue(e.Args, "--launchpad-folder");
+            var wantDemoFolder = e.Args.Contains("--launchpad-folder-demo", StringComparer.OrdinalIgnoreCase);
+            if (wantDemoFolder || !string.IsNullOrWhiteSpace(launchpadFolder))
+            {
+                var attempts = 0;
+                var timer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(700) };
+                timer.Tick += (_, _) =>
+                {
+                    attempts++;
+                    var done = wantDemoFolder
+                        ? Launcher.LaunchpadWindow.ShowDemoFolderForDiagnostics()
+                        : true;
+                    if (!wantDemoFolder)
+                    {
+                        Launcher.LaunchpadWindow.OpenFolderForDiagnostics(launchpadFolder!);
+                    }
+
+                    // 索引可能还没扫完：最多重试 8 次（约 5.6s），之后放弃并记一行日志
+                    if (done || attempts >= 8)
+                    {
+                        timer.Stop();
+                        if (!done)
+                        {
+                            Logger.Warn("启动台文件夹诊断入口：索引未就绪，放弃打开覆盖层");
+                        }
+                    }
+                };
+                timer.Start();
+            }
             // 7.3 --finder：访达窗口（Phase 6-a 骨架；单例，关闭后可再次打开）
             //     --view list|columns|icons|gallery：直接以指定视图打开（截图/验收入口，不写回该文件夹的持久化选项）
             //     --path <dir>：直接打开指定目录（截图/验收入口；正常启动始终用该标签记住的目录）
