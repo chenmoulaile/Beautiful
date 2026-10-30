@@ -730,6 +730,17 @@ public partial class FinderWindow : Window
             return;
         }
 
+        // 空格 = Quick Look（Phase 6-b 起步）：搜索框里打字时空格必须原样输入；按钮/文本框上的空格
+        // 保留原生语义（按钮激活、输入），只有列表选中了行才打开预览。
+        if (e.Key == Key.Space && !SearchBox.IsKeyboardFocusWithin && !_isLoading
+            && FileList.SelectedItem is FinderRow row
+            && e.OriginalSource is not TextBox && Keyboard.FocusedElement is not Button)
+        {
+            e.Handled = true;
+            QuickLookWindow.ShowFor(row.FullPath);
+            return;
+        }
+
         if (e.Key == Key.F5)
         {
             e.Handled = true;

@@ -164,6 +164,16 @@ public partial class App : Application
             // 7.3 --finder：访达窗口（Phase 6-a 骨架；单例，关闭后可再次打开）
             if (e.Args.Contains("--finder", StringComparer.OrdinalIgnoreCase))
                 Finder.FinderWindow.ShowSingleton();
+            // 7.4 --quicklook <path>：Quick Look 预览（Phase 6-b 起步；验证/截图入口，单例）
+            var quickLookIndex = Array.FindIndex(e.Args,
+                arg => string.Equals(arg, "--quicklook", StringComparison.OrdinalIgnoreCase));
+            if (quickLookIndex >= 0)
+            {
+                if (quickLookIndex + 1 < e.Args.Length)
+                    Finder.QuickLookWindow.ShowFor(e.Args[quickLookIndex + 1]);
+                else
+                    Logger.Warn("--quicklook 缺少路径参数，已忽略");
+            }
 
             // 8. 托盘最后就位（SMTC 已随 Dock 构造期异步初始化，失败仅记日志）
             _tray = new TrayIconManager(

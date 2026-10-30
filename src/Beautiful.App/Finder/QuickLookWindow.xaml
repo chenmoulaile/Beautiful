@@ -1,0 +1,169 @@
+<Window x:Class="Beautiful.App.Finder.QuickLookWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:chrome="clr-namespace:System.Windows.Shell;assembly=PresentationFramework"
+        Title="快速查看" Width="720" Height="540"
+        WindowStartupLocation="CenterScreen"
+        WindowStyle="None" ResizeMode="NoResize"
+        ShowInTaskbar="False" ShowActivated="True" Topmost="True"
+        Background="{DynamicResource MacWindowBackground}"
+        Foreground="{DynamicResource MacTextPrimary}"
+        FontFamily="{DynamicResource MacFont}"
+        UseLayoutRounding="True" TextOptions.TextFormattingMode="Display">
+    <!-- Quick Look 预览卡（Phase 6-b 起步）。与设置/访达同一套窗口纪律：非分层（AllowsTransparency 保持
+         false）+ WindowChrome + DWM 圆角，字体保留 ClearType。CaptionHeight=0：标题条完全自绘，
+         拖动由 Header_MouseLeftButtonDown 承担；空格 / Esc 关闭（见代码后置 OnPreviewKeyDown）。
+         内容区一次只显示一种：文本 / 图片 / 媒体 / 信息卡；读取失败一律回退信息卡并在页脚写明原因。 -->
+    <chrome:WindowChrome.WindowChrome>
+        <chrome:WindowChrome CaptionHeight="0" ResizeBorderThickness="0"
+                             GlassFrameThickness="0" CornerRadius="0"
+                             UseAeroCaptionButtons="False"/>
+    </chrome:WindowChrome.WindowChrome>
+
+    <Window.Resources>
+        <!-- 与访达/设置相同的交通灯：常态只有色点，悬停浮出 × 刻痕；失焦退灰。 -->
+        <Style x:Key="TrafficDot" TargetType="Button">
+            <Setter Property="Width" Value="14"/>
+            <Setter Property="Height" Value="14"/>
+            <Setter Property="Padding" Value="0"/>
+            <Setter Property="Background" Value="#FF5F57"/>
+            <Setter Property="SnapsToDevicePixels" Value="True"/>
+            <Setter Property="FocusVisualStyle" Value="{x:Null}"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Button">
+                        <Grid Width="14" Height="14" Background="Transparent">
+                            <Ellipse x:Name="Dot" Fill="{TemplateBinding Background}"
+                                     Stroke="#26000000" StrokeThickness="0.5"/>
+                            <ContentPresenter x:Name="Glyph" Opacity="0"
+                                              HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                        </Grid>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="Glyph" Property="Opacity" Value="1"/>
+                            </Trigger>
+                            <DataTrigger Binding="{Binding IsActive, RelativeSource={RelativeSource AncestorType=Window}}" Value="False">
+                                <Setter TargetName="Dot" Property="Fill" Value="#FFB0B0B0"/>
+                            </DataTrigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+    </Window.Resources>
+
+    <Grid>
+        <Grid.RowDefinitions>
+            <RowDefinition Height="36"/>
+            <RowDefinition Height="*"/>
+            <RowDefinition Height="Auto"/>
+        </Grid.RowDefinitions>
+
+        <!-- ============ 标题条（36px，左红点 + 居中文件名） ============ -->
+        <Border x:Name="HeaderBar" Grid.Row="0" Background="#12808080"
+                BorderBrush="{DynamicResource MacSeparator}" BorderThickness="0,0,0,1"
+                MouseLeftButtonDown="Header_MouseLeftButtonDown">
+            <Grid Margin="13,0,13,0">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="100"/>
+                    <ColumnDefinition Width="*"/>
+                    <ColumnDefinition Width="100"/>
+                </Grid.ColumnDefinitions>
+
+                <Button x:Name="CloseDot" Style="{StaticResource TrafficDot}"
+                        Background="#FFFF5F57" ToolTip="关闭 (空格 / Esc)"
+                        HorizontalAlignment="Left" VerticalAlignment="Center" Click="Close_Click">
+                    <Path Stroke="#8A000000" StrokeThickness="1.2"
+                          StrokeStartLineCap="Round" StrokeEndLineCap="Round"
+                          Data="M3,3 L11,11 M11,3 L3,11"/>
+                </Button>
+
+                <TextBlock x:Name="FileNameText" Grid.Column="1" FontSize="13" FontWeight="SemiBold"
+                           HorizontalAlignment="Center" VerticalAlignment="Center"
+                           TextTrimming="CharacterEllipsis" Margin="8,0"/>
+
+                <TextBlock Grid.Column="2" Text="空格 / Esc 关闭" FontSize="11"
+                           HorizontalAlignment="Right" VerticalAlignment="Center"
+                           Foreground="{DynamicResource MacTextTertiary}"/>
+            </Grid>
+        </Border>
+
+        <!-- ============ 内容区：四选一 ============ -->
+        <Grid Grid.Row="1" Background="Transparent">
+            <!-- 文本：只读、等宽、双向滚动、不折行（代码/日志保持原样）。 -->
+            <TextBox x:Name="TextView" Visibility="Collapsed"
+                     IsReadOnly="True" AcceptsReturn="True" TextWrapping="NoWrap"
+                     FontFamily="{DynamicResource MacFontMono}" FontSize="12"
+                     Background="Transparent" BorderThickness="0" Padding="14,10"
+                     VerticalContentAlignment="Top" HorizontalContentAlignment="Left"
+                     VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Auto"/>
+
+            <!-- 图片：等比缩放，窄图不放大到模糊，宽图不裁切。 -->
+            <Grid x:Name="ImageHost" Visibility="Collapsed" Background="#08000000">
+                <Image x:Name="ImageView" Stretch="Uniform" Margin="16"/>
+            </Grid>
+
+            <!-- 媒体：黑底播放器；关闭窗口时 Stop + Close（见代码后置 OnClosed）。 -->
+            <Grid x:Name="MediaHost" Visibility="Collapsed" Background="#FF000000">
+                <MediaElement x:Name="MediaPlayer" Stretch="Uniform"
+                              LoadedBehavior="Play" UnloadedBehavior="Manual" Volume="0.8"
+                              MediaFailed="MediaPlayer_MediaFailed"/>
+            </Grid>
+
+            <!-- 信息卡：PDF / 未知类型 / 读取失败共用（图标 + 名称 + 大小 + 种类 + 修改日期 + 说明）。 -->
+            <Grid x:Name="InfoHost" Visibility="Collapsed">
+                <StackPanel VerticalAlignment="Center" HorizontalAlignment="Center" MaxWidth="560">
+                    <Grid Width="72" Height="72" HorizontalAlignment="Center">
+                        <TextBlock x:Name="InfoGlyph" Text="▣" FontSize="46"
+                                   HorizontalAlignment="Center" VerticalAlignment="Center"
+                                   Foreground="{DynamicResource MacTextSecondary}"/>
+                        <Image x:Name="InfoIcon" Stretch="Uniform"/>
+                    </Grid>
+
+                    <TextBlock x:Name="InfoNameText" FontSize="16" FontWeight="SemiBold"
+                               HorizontalAlignment="Center" TextTrimming="CharacterEllipsis"
+                               Margin="0,12,0,0"/>
+
+                    <Grid Margin="0,18,0,0" HorizontalAlignment="Center">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="Auto"/>
+                            <ColumnDefinition Width="190"/>
+                            <ColumnDefinition Width="Auto"/>
+                            <ColumnDefinition Width="Auto"/>
+                        </Grid.ColumnDefinitions>
+                        <Grid.RowDefinitions>
+                            <RowDefinition Height="Auto"/>
+                            <RowDefinition Height="Auto"/>
+                        </Grid.RowDefinitions>
+
+                        <TextBlock Text="大小" FontSize="12"
+                                   Foreground="{DynamicResource MacTextSecondary}"/>
+                        <TextBlock x:Name="InfoSizeText" Grid.Column="1" Margin="10,0,24,0" FontSize="12"/>
+                        <TextBlock Grid.Column="2" Text="种类" FontSize="12"
+                                   Foreground="{DynamicResource MacTextSecondary}"/>
+                        <TextBlock x:Name="InfoKindText" Grid.Column="3" Margin="10,0,0,0" FontSize="12"/>
+
+                        <TextBlock Grid.Row="1" Text="修改日期" Margin="0,6,0,0" FontSize="12"
+                                   Foreground="{DynamicResource MacTextSecondary}"/>
+                        <TextBlock x:Name="InfoModifiedText" Grid.Row="1" Grid.Column="1"
+                                   Margin="10,6,24,0" FontSize="12"/>
+                    </Grid>
+
+                    <Border Margin="0,20,0,0" Padding="12,7" CornerRadius="8"
+                            Background="#0F808080" HorizontalAlignment="Center">
+                        <TextBlock x:Name="InfoNoteText" FontSize="12"
+                                   Foreground="{DynamicResource MacTextSecondary}"/>
+                    </Border>
+                </StackPanel>
+            </Grid>
+        </Grid>
+
+        <!-- ============ 页脚：截断/读取失败原因（正常预览时不占位） ============ -->
+        <Border x:Name="FooterBar" Grid.Row="2" Visibility="Collapsed"
+                Background="#0A808080" BorderBrush="{DynamicResource MacSeparator}"
+                BorderThickness="0,1,0,0" Padding="14,7">
+            <TextBlock x:Name="FooterText" FontSize="11" TextWrapping="Wrap"
+                       Foreground="{DynamicResource MacTextSecondary}"/>
+        </Border>
+    </Grid>
+</Window>
