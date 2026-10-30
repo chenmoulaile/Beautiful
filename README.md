@@ -435,7 +435,11 @@ dotnet publish src/Beautiful.App -c Release -r win-x64 --self-contained true -p:
 | logo 菜单系统动作（P4-T2 起步） | 新增：系统设置… / Microsoft Store… / 任务管理器… / 睡眠 / 重新启动…（二次确认）/ 关机…（二次确认）/ 锁定屏幕 / 注销…（二次确认）；重启/关机会先走 Beautiful 完整退出链路；「关于本机」改为 Big Sur 风格非分层信息卡（壁纸缩略/机器名/型号/CPU/内存/Windows/字体，`--about` 可验） | 代码/XAML 编译；真实 Win11 `--about` 截图验证；**关机/重启/注销只做了二次确认，未在真机实际触发**（避免误操作） |
 | 前台应用真菜单（P4-T3 起步） | 点顶栏前台应用名 → `GetMenu` 递归镜像真实 Win32 菜单，点击按命令 ID `PostMessage(WM_COMMAND)` 回发；自绘菜单应用（Chrome/msedge/Office/UWP）GetMenu 为空时给置灰说明，不伪造 | `MenuMirrorTextTests`；真实 Win11 smoke 用 msedge 验证了“无菜单”降级路径；**经典 Win32 应用（记事本等）的真菜单回发未逐项验证** |
 
-> Phase 4 已完成"24px + logo 菜单真实系统动作 + 关于本机信息卡 + 前台应用真菜单镜像（含自绘菜单降级）"；控制中心/通知中心/托盘像素/蓝牙电池等仍待后续。
+| 控制中心 Big Sur 瓦片（P4-T4） | 连接组 2×2（Wi-Fi 真开关 / 蓝牙打开系统页 / 隔空投送置灰写明"Windows 无对应能力" / 专注模式打开专注助手）；显示与声音各收进整块瓦片；外观分段限宽；Dock 开关砖块与任务栏策略保留 | 真机截图 `logs/4-t4-control-center2.png`；`--control-center` 截图入口；**正在播放瓦片未做**（需复用 Dock 的 SMTC 实例） |
+| 逐应用混音（P7-T5） | `IAudioSessionManager2` 互操作 + `AudioSessionService`（按进程聚合、读/写会话音量与静音）；控制中心「逐应用音量」分组（图标/名称/静音/滑杆/读数 + 刷新） | 真机截图 `logs/7-t5-mixer.png`：枚举到"系统声音"会话可调；**会话列表是快照**（不订阅会话通知）；其它应用需有音频会话才出现 |
+
+> Phase 4 已完成"24px + logo 菜单真实系统动作 + 关于本机信息卡 + 前台应用真菜单镜像（含自绘菜单降级）+ 控制中心 Big Sur 瓦片"；
+> **通知中心、托盘真实像素（注入）、蓝牙/输入法/显示器状态项仍待后续**。
 
 ## v4.0-alpha Phase 5 变更（Launchpad/系统级，进行中）
 
