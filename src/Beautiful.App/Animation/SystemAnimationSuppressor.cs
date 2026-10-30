@@ -61,7 +61,28 @@ public sealed class SystemAnimationSuppressor : IDisposable
             var info = new AnimationInfo { Size = (uint)Marshal.SizeOf<AnimationInfo>(), MinAnimate = 0 };
             if (!SystemParametersInfo(SpiGetAnimation, info.Size, ref info, 0))
             {
-                Logger.Warn($"系统动画接管：读取 SPI_GETANIMATION 失败（Win32={Marshal.GetLastWin32Error()}），本次不接管");
+                // 本机实测（Win11 24H2）：SPI_GETANIMATION 与 SPI_SETANIMATION 都返回 FALSE 且不写值
+                // （哨兵值原样带回、GetLastWin32Error=0）——老式 SPI 在新系统上被限制。
+                // 诚实的降级是：盲试一次 SET(0) 并用 GET 复核，两者都不响应就把结论写进日志，
+                // 绝不假装"已接管"。
+                var blind = new AnimationInfo { Size = info.Size, MinAnimate = 0 };
+                var okSet = SystemParametersInfo(SpiSetAnimation, blind.Size, ref blind, 0);
+                var verify = new AnimationInfo { Size = info.Size, MinAnimate = 42 };   // 哨兵：分辨"没写"与"写成0"
+                var okVerify = SystemParametersInfo(SpiGetAnimation, verify.Size, ref verify, 0);
+                if (okSet && okVerify && verify.MinAnimate == 0)
+                {
+                    // GET 被限制但 SET 生效了：系统动画已关，但我们拿不到原值。
+                    // 还原时按"系统默认值 1"处理（Windows 出厂该项默认开），并把这个假设写进日志。
+                    _original = 1;
+                    _active = true;
+                    Logger.Warn("系统动画接管：SPI_GETANIMATION 被系统限制，盲写 SET(0) 成功；"
+                                + "退出时按出厂默认值 1 还原（如用户此前手动关过系统动画，退出后会回到开）");
+                    return true;
+                }
+
+                Logger.Warn("系统动画接管：本机系统不响应 SPI_GETANIMATION/SPI_SETANIMATION"
+                            + "（新系统限制，探针 tools/spi-probe 可复现），本次不接管——"
+                            + "系统「缩向任务栏」动画可能与 genie 同时播放，属已知限制");
                 return false;
             }
 

@@ -266,6 +266,37 @@ Show-Section -Label '策略（原生任务栏）' `
     -Pattern '任务栏策略|ReclaimBottomStrip|EnableAutoHide|DisableAutoHide|HideAll|Restore\(' -Take 8 `
     -Empty '(无策略行)'
 
+# 动画子系统（v3.0 冲刺）：挂载自检 / 触发行 / 未播行按"因"分组 / 几何对账
+Write-Output ''
+Write-Output '[动画]'
+Show-Section -Label '动画 挂载自检' `
+    -Pattern '动画子系统|系统动画接管|前台帧采样|动画参数' -Take 6 `
+    -Empty '(无动画挂载行——动画未装配或本版未含动画子系统)'
+Show-Section -Label '动画 触发（成功）' `
+    -Pattern '动画触发：' -Take 10 `
+    -Empty '(无动画触发行——没有成功播放过任何一次)'
+$skips = @($lines | Where-Object { $_ -match '动画未播：' })
+if ($skips.Count -gt 0) {
+    Write-Output '  动画未播（按"因"分组）：'
+    $groups = $skips | ForEach-Object { if ($_ -match '因=([^ ]+)') { $Matches[1] } else { '(格式旧)' } } |
+        Group-Object | Sort-Object Count -Descending
+    foreach ($g in $groups) { Write-Output ('    ' + $g.Name + ' × ' + $g.Count) }
+    Write-Output '  最近 6 条未播行：'
+    foreach ($h in @($skips | Select-Object -Last 6)) { Write-Output ('    ' + $h) }
+} else {
+    Write-Output '  动画未播：0 行（没有出现过"该播没播"）'
+}
+Show-Section -Label '动画 几何对账' `
+    -Pattern '几何对账：' -Take 6 `
+    -Empty '(无几何对账行——本版或未跑过动画)'
+$triggers = @($lines | Where-Object { $_ -match '动画触发：' }).Count
+$totalAnim = $triggers + $skips.Count
+if ($totalAnim -gt 0) {
+    $pct = [math]::Round(100.0 * $triggers / $totalAnim, 1)
+    Write-Output ('  触发率：' + $triggers + '/' + $totalAnim + ' = ' + $pct + '%（判废与拒播见上方"因"分布）')
+}
+
+
 # Native 模块（v4 Phase 2）：DLL 存在性 + native.log 最近 20 行（含探针/降级原因）
 Write-Output ''
 Write-Output '[Native 模块]'
