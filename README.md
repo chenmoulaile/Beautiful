@@ -452,6 +452,7 @@ dotnet publish src/Beautiful.App -c Release -r win-x64 --self-contained true -p:
 | 目标 | 现在 | 证据/边界 |
 |---|---|---|
 | Finder Core 地基（P6-a 起步） | `Core/Finder`：`NavigationHistory`（后退/前进栈、去重、容量裁剪）、`FinderPaths`（父目录/根/显示名/组合，含 UNC）、`NaturalStringComparer`（数字感知排序）、`FinderKeyMap`（Ctrl 充当 ⌘ 的键位映射）、`FinderSorting`（目录优先/名称/大小/时间/种类，稳定排序） | `NaturalStringComparerTests` 等 5 个新测试文件；**924 测试通过**；纯 Core，无 App/WPF 接入 |
+| Finder 窗口骨架（P6-a 起步） | 非分层 WindowChrome + DWM 圆角；52px 工具栏（红绿灯/前进后退/路径标题/搜索/视图占位）；190px 侧栏（最近使用/应用程序/桌面/文稿/下载/这台电脑）；ListView 四列（名称/修改日期/大小/种类）；异步枚举+取消、1500 截断、状态栏项目数/可用空间；双击/Enter 打开、Ctrl+[ ]、F5、Esc | 真实 Win11 `--finder` 截图验证（79 条目、状态 27.9 GB）；924 测试通过；**文件操作/分栏/图标/画廊/Quick Look 未做；图标 32px 懒加载（可感知滚动风险见 review）** |
 | Finder 窗口/列表/分栏/Quick Look/文件操作 | **未开始**（Next） | Phase 6-a/b/c 的 UI 与 Shell 操作尚未开始 |
 
 > Phase 6 仅完成可单测的导航/排序/键位纯函数地基；窗口、列表视图、Quick Look、IFileOperation 等仍需后续。
