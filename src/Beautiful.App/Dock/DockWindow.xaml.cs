@@ -940,7 +940,8 @@ public partial class DockWindow : AcrylicWindow
     {
         var views = new List<MenuItemView>
         {
-            new() { Id = "stack:open", Label = "在访达中打开", Glyph = "\uE8B7", Invoke = () => OpenPath(item.LaunchPath) },
+            // Phase 6-c 互通：目录交给自家访达（与 macOS"在访达中显示"一致），文件仍走系统关联打开
+            new() { Id = "stack:open", Label = "在访达中打开", Glyph = "\uE8B7", Invoke = () => OpenInFinder(item.LaunchPath) },
             new() { Id = "stack:sep", IsSeparator = true },
         };
         var count = 0;
@@ -976,6 +977,40 @@ public partial class DockWindow : AcrylicWindow
         Logger.Info($"堆栈打开：'{item.Label}' 条目={count}（列表形态）");
         var p = Surface.PointToScreen(Mouse.GetPosition(Surface));
         FluentMenu.Show(new FluentPopupHost(), new Point(p.X, p.Y), views);
+    }
+
+    /// <summary>
+    /// 在自家访达里打开（Phase 6-c 互通）：目录直接导航；文件则打开其所在文件夹。
+    /// 拿不到路径时退回系统关联打开，绝不让菜单项变成"点了没反应"。
+    /// </summary>
+    private static void OpenInFinder(string? path)
+    {
+        if (string.IsNullOrWhiteSpace(path))
+        {
+            return;
+        }
+
+        try
+        {
+            if (Directory.Exists(path))
+            {
+                Finder.FinderWindow.ShowSingleton(path);
+                return;
+            }
+
+            var directory = Path.GetDirectoryName(path);
+            if (!string.IsNullOrEmpty(directory) && Directory.Exists(directory))
+            {
+                Finder.FinderWindow.ShowSingleton(directory);
+                return;
+            }
+        }
+        catch (Exception ex) when (ex is ArgumentException or NotSupportedException or IOException)
+        {
+            Logger.Warn($"在访达中打开失败：{path} {ex.GetType().Name} {ex.Message}");
+        }
+
+        OpenPath(path);
     }
 
     private static void OpenPath(string path)

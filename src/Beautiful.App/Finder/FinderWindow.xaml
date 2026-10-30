@@ -275,6 +275,7 @@
     <Grid Background="{DynamicResource MacWindowBackground}">
         <Grid.RowDefinitions>
             <RowDefinition Height="52"/>
+            <RowDefinition Height="Auto"/>
             <RowDefinition Height="*"/>
             <RowDefinition Height="24"/>
         </Grid.RowDefinitions>
@@ -330,6 +331,10 @@
                                    Foreground="{DynamicResource MacTextTertiary}"
                                    IsHitTestVisible="False"/>
                     </Grid>
+                    <!-- 搜索范围：默认"当前文件夹"（实时过滤），点一下升级为"这台 Mac"递归搜索 -->
+                    <Button x:Name="ScopeButton" Style="{StaticResource ToolButton}" Width="Auto"
+                            Padding="7,0" Margin="0,0,6,0" FontSize="11" Content="这台 Mac"
+                            ToolTip="在整台电脑上搜索（Enter 同义）" Click="Scope_Click"/>
                     <!-- 图标尺寸：只在图标视图出现（⇧⌘[ / ] 也能调） -->
                     <Slider x:Name="IconSizeSlider" Width="72" Height="20" Margin="0,0,6,0"
                             Minimum="48" Maximum="128" Value="64"
@@ -348,8 +353,16 @@
             </Grid>
         </Border>
 
+        <!-- ============ 标签条（Phase 6-c）：只在多于一个标签时出现，Big Sur 样式 ============ -->
+        <Border x:Name="TabBar" Grid.Row="1" Visibility="Collapsed"
+                Background="#0A808080" BorderBrush="#22808080" BorderThickness="0,0,0,1">
+            <ScrollViewer HorizontalScrollBarVisibility="Hidden" VerticalScrollBarVisibility="Disabled">
+                <StackPanel x:Name="TabStack" Orientation="Horizontal" Margin="10,4,10,4"/>
+            </ScrollViewer>
+        </Border>
+
         <!-- ============ 侧栏 + 内容区（列表 / 分栏 / 图标 三视图） ============ -->
-        <Grid Grid.Row="1">
+        <Grid Grid.Row="2">
             <Grid.ColumnDefinitions>
                 <ColumnDefinition Width="190"/>
                 <ColumnDefinition Width="*"/>
@@ -413,6 +426,9 @@
                                             DisplayMemberBinding="{Binding SizeText}"/>
                             <GridViewColumn Header="种类" x:Name="KindColumn" Width="110"
                                             DisplayMemberBinding="{Binding KindText}"/>
+                            <!-- 位置列：只在搜索结果里展开（宽度 0 = 隐藏），macOS 搜索结果同样带位置 -->
+                            <GridViewColumn Header="位置" x:Name="LocationColumn" Width="0"
+                                            DisplayMemberBinding="{Binding LocationText}"/>
                         </GridView>
                     </ListView.View>
                 </ListView>
@@ -471,7 +487,7 @@
         </Grid>
 
         <!-- ============ 状态栏 ============ -->
-        <Border Grid.Row="2" Background="#0A808080"
+        <Border Grid.Row="3" Background="#0A808080"
                 BorderBrush="#22808080" BorderThickness="0,1,0,0">
             <TextBlock x:Name="StatusText" Margin="12,0" VerticalAlignment="Center"
                        FontSize="11" Foreground="{DynamicResource MacTextSecondary}"

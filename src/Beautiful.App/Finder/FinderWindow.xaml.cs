@@ -55,7 +55,6 @@ public partial class FinderWindow : Window
 
     private static FinderWindow? _current;
 
-    private readonly NavigationHistory _history = new();
     private readonly DispatcherTimer _statusHintTimer;
     private readonly FinderViewOptionsStore _viewStore = new();
 
@@ -160,7 +159,7 @@ public partial class FinderWindow : Window
 
         var path = string.IsNullOrWhiteSpace(initialPath) ? DefaultDirectory() : initialPath!;
         _currentPath = path;
-        _history.Visit(path);
+        _tabs = new FinderTabSet(path);   // 首个标签自带一条历史栈（构造时已 Visit）
         ApplyViewOptionsFor(path);
         if (view is not null)
         {
@@ -189,6 +188,7 @@ public partial class FinderWindow : Window
             CancelPendingWork();
         };
 
+        AttachContextMenus();
         StartLoad(path);
     }
 
@@ -292,8 +292,9 @@ public partial class FinderWindow : Window
             return;
         }
 
-        // 150(修改日期) + 90(大小) + 110(种类) + 24(纵向滚动条/边距余量)
-        NameColumn.Width = Math.Max(180, FileList.ActualWidth - 374);
+        // 150(修改日期) + 90(大小) + 110(种类) + 24(纵向滚动条/边距余量) + 搜索时的 240(位置列)
+        var reserved = 374 + (LocationColumn?.Width > 0 ? 240 : 0);
+        NameColumn.Width = Math.Max(180, FileList.ActualWidth - reserved);
     }
 
     // ---------- 视图选项 ----------
@@ -408,7 +409,7 @@ public partial class FinderWindow : Window
 
         try
         {
-            _history.Visit(path);
+            _tabs.Visit(path);   // 历史 + 当前标签路径一起更新
         }
         catch (ArgumentException)
         {
@@ -426,7 +427,7 @@ public partial class FinderWindow : Window
             return;
         }
 
-        var path = _history.Back();
+        var path = _tabs.Back();
         if (path is null)
         {
             return;
@@ -437,7 +438,7 @@ public partial class FinderWindow : Window
 
     private void GoForward()
     {
-        var path = _history.Forward();
+        var path = _tabs.Forward();
         if (path is null)
         {
             return;
@@ -472,8 +473,10 @@ public partial class FinderWindow : Window
         UpdateNavButtons();
         ApplyViewOptionsFor(path);
         SyncViewChrome();
+        ExitSearch();
         StartLoad(path);
         ResetSearch();
+        RefreshTabBar();
     }
 
     private void Back_Click(object sender, RoutedEventArgs e) => GoBack();
@@ -771,6 +774,13 @@ public partial class FinderWindow : Window
         }
 
         SearchPlaceholder.Visibility = SearchBox.Text.Length == 0 ? Visibility.Visible : Visibility.Collapsed;
+
+        // 搜索结果是一份独立快照：用户一改查询就退回"当前文件夹过滤"，避免结果与输入对不上。
+        if (_searchActive)
+        {
+            ExitSearch();
+        }
+
         ApplyFilter();
         UpdateStatus();
     }
@@ -799,20 +809,32 @@ public partial class FinderWindow : Window
         }
 
         var query = SearchBox.Text.Trim();
-        IEnumerable<FinderRow> source = _allRows;
+        // 搜索激活时结果集取代目录内容；查询串本身已由搜索流程用掉了，这里不再二次过滤。
+        IEnumerable<FinderRow> source = _searchActive ? _searchResults : _allRows;
         if (!_showHidden)
         {
             source = source.Where(row => !row.IsHidden);
         }
 
-        if (query.Length > 0)
+        if (!_searchActive && query.Length > 0)
         {
-            source = source.Where(row => row.Name.Contains(query, StringComparison.OrdinalIgnoreCase));
+            source = source.Where(row => FinderSearchMatcher.IsMatch(row.Name, query));
         }
 
         _visibleRows = source.ToList();
         FileList.ItemsSource = _visibleRows;
         IconList.ItemsSource = _visibleRows;
+
+        // 搜索结果必须显示"在哪个文件夹"：同名文件散落各处时，没有位置列等于没法用。
+        if (LocationColumn is not null)
+        {
+            var target = _searchActive ? 240 : 0;
+            if (Math.Abs(LocationColumn.Width - target) > 0.5)
+            {
+                LocationColumn.Width = target;
+                UpdateNameColumnWidth();
+            }
+        }
 
         // 分栏视图的每一列也吃同一套过滤条件（搜索词/隐藏项），载入完成后必须重画一次，
         // 否则列里会一直停在 StartLoad 时清空的空集合。
@@ -838,6 +860,12 @@ public partial class FinderWindow : Window
         if (_loadError is not null)
         {
             StatusText.Text = $"无法读取：{_loadError}";
+            return;
+        }
+
+        if (SearchStatusText() is { } searchText)
+        {
+            StatusText.Text = searchText;
             return;
         }
 
@@ -1033,6 +1061,101 @@ public partial class FinderWindow : Window
             return;
         }
 
+        // 文本编辑场景（搜索框/重命名框）：剪贴板与删除键保持原生语义，不抢文件操作
+        var editingText = SearchBox.IsKeyboardFocusWithin
+                          || e.OriginalSource is TextBox
+                          || Keyboard.FocusedElement is TextBox;
+
+        if (!editingText)
+        {
+            if (ctrl && !shift && e.Key == Key.C)
+            {
+                e.Handled = true;
+                CopySelection(cut: false);
+                return;
+            }
+
+            if (ctrl && !shift && e.Key == Key.X)
+            {
+                e.Handled = true;
+                CopySelection(cut: true);
+                return;
+            }
+
+            if (ctrl && !shift && e.Key == Key.V)
+            {
+                e.Handled = true;
+                PasteIntoCurrent();
+                return;
+            }
+
+            if (ctrl && !shift && e.Key == Key.A)
+            {
+                e.Handled = true;
+                SelectAllRows();
+                return;
+            }
+
+            // ⌘T 新标签
+        if (ctrl && !shift && e.Key == Key.T)
+        {
+            e.Handled = true;
+            NewTab();
+            return;
+        }
+
+        // ⌘W 关标签（没有标签可关时才关窗口）
+        if (ctrl && !shift && e.Key == Key.W)
+        {
+            e.Handled = true;
+            if (!CloseActiveTab())
+            {
+                Close();
+            }
+
+            return;
+        }
+
+        // ⇧⌘N 新建文件夹
+            if (ctrl && shift && e.Key == Key.N)
+            {
+                e.Handled = true;
+                CreateFolder();
+                return;
+            }
+
+            if (e.Key == Key.F2)
+            {
+                e.Handled = true;
+                BeginRename();
+                return;
+            }
+
+            // ⌫ 移到废纸篓（macOS ⌘⌫ 语义，Windows 上 Delete 更顺手，两者都收）；
+            // ⇧⌫ 立即删除，走二次确认。
+            if (e.Key == Key.Delete && shift)
+            {
+                e.Handled = true;
+                DeleteSelectionPermanent();
+                return;
+            }
+
+            if (e.Key == Key.Delete || (ctrl && e.Key == Key.Back))
+            {
+                e.Handled = true;
+                RecycleSelection();
+                return;
+            }
+
+            // ⌘↓ 打开选中项（Enter 在 macOS 是重命名，见下）
+            if (ctrl && e.Key == Key.Down)
+            {
+                e.Handled = true;
+                OpenSelected();
+                return;
+            }
+        }
+
         // 空格 = Quick Look：搜索框里打字时空格必须原样输入；按钮/文本框上的空格保留原生语义。
         if (e.Key == Key.Space && !SearchBox.IsKeyboardFocusWithin && !_isLoading
             && e.OriginalSource is not TextBox && Keyboard.FocusedElement is not Button)
@@ -1072,9 +1195,25 @@ public partial class FinderWindow : Window
             }
         }
 
-        // Enter 只在内容区获得焦点时打开选中项：搜索框/按钮里的 Enter 保持原生语义。
+        // 搜索框里的 Enter = 升级为"这台 Mac"递归搜索
+        if (e.Key == Key.Enter && SearchBox.IsKeyboardFocusWithin)
+        {
+            e.Handled = true;
+            StartDeepSearch();
+            return;
+        }
+
+        // Enter = 重命名（macOS 语义；打开用双击 / ⌘↓ / ⌘O），F2 同义。
         if (e.Key == Key.Enter && e.OriginalSource is not TextBox && Keyboard.FocusedElement is not Button
             && (FileList.IsKeyboardFocusWithin || IconList.IsKeyboardFocusWithin || IsColumnFocusWithin()))
+        {
+            e.Handled = true;
+            BeginRename();
+            return;
+        }
+
+        // ⌘O 打开选中项
+        if (ctrl && e.Key == Key.O && !editingText)
         {
             e.Handled = true;
             OpenSelected();
@@ -1102,9 +1241,24 @@ public partial class FinderWindow : Window
                 GoForward();
                 break;
             case FinderCommand.CloseTab:
+                e.Handled = true;
+                if (!CloseActiveTab())
+                {
+                    Close();
+                }
+
+                break;
             case FinderCommand.Cancel:
                 e.Handled = true;
-                Close();
+                if (_searchActive)
+                {
+                    ExitSearch();
+                }
+                else
+                {
+                    Close();
+                }
+
                 break;
         }
     }
@@ -1205,6 +1359,7 @@ public partial class FinderWindow : Window
                 .ToString("yyyy-MM-dd HH:mm", CultureInfo.InvariantCulture);
             SizeText = entry.IsDirectory ? "—" : FormatSize(entry.Size);
             KindText = string.IsNullOrEmpty(entry.Kind) ? "文件" : entry.Kind;
+            LocationText = directory;
         }
 
         public string Name => _entry.Name;
@@ -1220,6 +1375,9 @@ public partial class FinderWindow : Window
         public string SizeText { get; }
 
         public string KindText { get; }
+
+        /// <summary>所在文件夹（搜索结果里用来区分同名文件；普通列表不显示）。</summary>
+        public string LocationText { get; }
 
         public string Glyph
         {

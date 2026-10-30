@@ -179,6 +179,21 @@ public partial class App : Application
                     Logger.Warn("--quicklook 缺少路径参数，已忽略");
             }
 
+            // 7.45 --tabs a,b,c：为已打开的访达窗口追加标签（验证/截图入口）
+            var tabsArg = ParseArgValue(e.Args, "--tabs");
+            if (!string.IsNullOrWhiteSpace(tabsArg))
+            {
+                Finder.FinderWindow.OpenTabs(tabsArg!
+                    .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries));
+            }
+
+            // 7.46 --search <query>：在已打开的访达窗口里跑一次"这台 Mac"搜索（验证/截图入口）
+            var searchArg = ParseArgValue(e.Args, "--search");
+            if (!string.IsNullOrWhiteSpace(searchArg))
+            {
+                Finder.FinderWindow.RunSearchForDiagnostics(searchArg);
+            }
+
             // 7.5 --info <path>：显示简介卡（验证/截图入口；与 ⌘I 同一单例）
             var infoPath = ParseArgValue(e.Args, "--info");
             if (!string.IsNullOrWhiteSpace(infoPath))
@@ -197,6 +212,13 @@ public partial class App : Application
 
             // 9. 诊断证据：--shot <file> [--shot-delay <ms>]（截图后自动退出；不参与产品逻辑）
             ScheduleDiagnosticShot(e.Args);
+
+            // 9.1 文件操作自检：--fileop-smoke <dir>（跑完打印结果并退出）
+            var smokeDir = ParseArgValue(e.Args, "--fileop-smoke");
+            if (!string.IsNullOrWhiteSpace(smokeDir))
+            {
+                _ = RunFileOperationSmokeAsync(smokeDir!);
+            }
         }
         catch (Exception ex)
         {
@@ -865,6 +887,27 @@ public partial class App : Application
         };
         timer.Start();
         Logger.Info($"诊断截图已排期：{delay}ms 后写入 {file}");
+    }
+
+    /// <summary>
+    /// <c>--fileop-smoke &lt;dir&gt;</c>：在真实目录上跑一遍 IFileOperation 链路（建/拷/改名/回收站），
+    /// 结果进日志后退出。互操作层的 vtable 错误只有真跑才会暴露，因此这一步不能省。
+    /// </summary>
+    private async Task RunFileOperationSmokeAsync(string directory)
+    {
+        try
+        {
+            var ok = await Finder.FileOperationSmoke.RunAsync(directory);
+            Logger.Info($"文件操作自检结果：{(ok ? "PASS" : "FAIL")}");
+        }
+        catch (Exception ex)
+        {
+            Logger.Error("文件操作自检未完成", ex);
+        }
+        finally
+        {
+            ExitApp();
+        }
     }
 
     /// <summary>执行一次截图并退出（<c>--shot</c> 的最后一步）。</summary>
