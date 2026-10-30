@@ -93,7 +93,7 @@ public class DockContextMenuPlanTests
     {
         var plan = DockContextMenuPlan.Build(Pinned());
         Assert.Equal(new[] { "打开", "打开新窗口", "─", "取消固定", "─",
-                             "以管理员身份运行", "打开文件位置", "属性…" }, Labels(plan));
+                             "以管理员身份运行", "打开文件位置", "属性…", "更换图标…" }, Labels(plan));
         Assert.DoesNotContain(plan, e => e.Action == DockContextAction.ForceKill);
         Assert.DoesNotContain(plan, e => e.Action == DockContextAction.WindowList);
     }
@@ -151,7 +151,8 @@ public class DockContextMenuPlanTests
     {
         var plan = DockContextMenuPlan.Build(Pinned(new[] { Win(H1, "a.txt — 记事本"), Win(H2, "b.txt — 记事本") }));
         Assert.Equal(new[] { "打开", "打开新窗口", "─", "窗口", "显示所有窗口", "关闭窗口", "退出", "─",
-                             "取消固定", "─", "以管理员身份运行", "打开文件位置", "属性…", "─", "结束任务" },
+                             "取消固定", "─", "以管理员身份运行", "打开文件位置", "属性…", "更换图标…",
+                             "─", "结束任务" },
                      Labels(plan));
         Assert.True(plan.Single(e => e.Action == DockContextAction.ForceKill).RequiresConfirmation);
     }
