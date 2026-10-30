@@ -15,8 +15,10 @@
                 <RowDefinition Height="Auto"/>
             </Grid.RowDefinitions>
 
-            <Border Width="300" Height="40" CornerRadius="10" Background="#33FFFFFF"
-                    HorizontalAlignment="Center" VerticalAlignment="Top" Margin="0,6,0,20">
+            <!-- 搜索条尺寸取自 MacDock 的 launchpad_search.h：480×40、圆角 20、水平居中 -->
+            <Border x:Name="SearchField" Width="480" MaxWidth="720" Height="40" CornerRadius="20"
+                    Background="#2EFFFFFF" BorderBrush="#1FFFFFFF" BorderThickness="1"
+                    HorizontalAlignment="Center" VerticalAlignment="Top" Margin="0,4,0,10">
                 <Grid>
                     <TextBlock x:Name="SearchPlaceholder" Text="搜索" FontSize="13" Opacity="0.55"
                                VerticalAlignment="Center" Margin="42,0,0,0" IsHitTestVisible="False"/>
@@ -30,13 +32,21 @@
                 </Grid>
             </Border>
 
+            <!-- 文件夹 chip 条：没有文件夹时整行不占位（MacDock 同样是"有夹才出现"，不推开网格） -->
+            <StackPanel x:Name="FolderStrip" Grid.Row="1" Orientation="Horizontal"
+                        HorizontalAlignment="Center" VerticalAlignment="Top"
+                        Margin="0,0,0,10" Visibility="Collapsed"/>
+
             <ListBox x:Name="Tiles" Grid.Row="1" Background="Transparent" BorderThickness="0"
                      ScrollViewer.HorizontalScrollBarVisibility="Disabled"
                      ScrollViewer.VerticalScrollBarVisibility="Disabled"
                      KeyDown="Tiles_KeyDown">
                 <ListBox.ItemsPanel>
                     <ItemsPanelTemplate>
-                        <UniformGrid Columns="7" Rows="5"/>
+                        <!-- 列/行由 LaunchpadGridRules 按窗口尺寸算出（MacDock 同规则）：
+                             宽屏多列、窄屏缩图标，一页容量随之变化 -->
+                        <UniformGrid Columns="{Binding TileColumns, RelativeSource={RelativeSource AncestorType={x:Type Window}}}"
+                                     Rows="{Binding TileRows, RelativeSource={RelativeSource AncestorType={x:Type Window}}}"/>
                     </ItemsPanelTemplate>
                 </ListBox.ItemsPanel>
                 <ListBox.ItemContainerStyle>
@@ -68,9 +78,17 @@
                 <ListBox.ItemTemplate>
                     <DataTemplate>
                         <Button Background="Transparent" BorderThickness="0" Padding="0"
-                                HorizontalContentAlignment="Center" Click="Tile_Click" Tag="{Binding}">
+                                HorizontalContentAlignment="Center" Click="Tile_Click" Tag="{Binding}"
+                                MouseEnter="Tile_MouseEnter" MouseLeave="Tile_MouseLeave">
                             <StackPanel Width="112" Margin="2,4">
-                                <Image Source="{Binding Icon}" Width="76" Height="76" Stretch="Uniform"/>
+                                <Image Source="{Binding Icon}" Stretch="Uniform"
+                                       Width="{Binding TileIconSize, RelativeSource={RelativeSource AncestorType={x:Type Window}}}"
+                                       Height="{Binding TileIconSize, RelativeSource={RelativeSource AncestorType={x:Type Window}}}"
+                                       RenderTransformOrigin="0.5,0.5">
+                                    <Image.RenderTransform>
+                                        <ScaleTransform ScaleX="1" ScaleY="1"/>
+                                    </Image.RenderTransform>
+                                </Image>
                                 <TextBlock Text="{Binding Name}" FontSize="12" Margin="0,6,0,0"
                                            HorizontalAlignment="Center" TextTrimming="CharacterEllipsis"
                                            MaxWidth="104" Foreground="#FFFFFFFF"/>

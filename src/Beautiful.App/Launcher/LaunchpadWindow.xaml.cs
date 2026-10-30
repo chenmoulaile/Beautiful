@@ -15,6 +15,9 @@ using Beautiful.Core.Launchpad;
 using Button = System.Windows.Controls.Button;
 using Color = System.Windows.Media.Color;
 using KeyEventArgs = System.Windows.Input.KeyEventArgs;
+using MouseEventArgs = System.Windows.Input.MouseEventArgs;
+using Point = System.Windows.Point;
+using Image = System.Windows.Controls.Image;
 
 namespace Beautiful.App.Launcher;
 
@@ -22,11 +25,31 @@ namespace Beautiful.App.Launcher;
 /// Launchpad（v4 Phase 5-T1 起步）：全屏、壁纸底、7×5 网格、搜索、翻页、点击/Enter 启动。
 /// 复用 LauncherService 的索引与图标管线；文件夹、拖拽、自定义排序、Dock 图标入口仍待后续。
 /// </summary>
-public partial class LaunchpadWindow : Window
+public partial class LaunchpadWindow : Window, System.ComponentModel.INotifyPropertyChanged
 {
-    private const int Columns = 7;
-    private const int Rows = 5;
-    private const int PageSize = Columns * Rows;
+    /// <summary>当前页列数（由 <see cref="LaunchpadGridRules.Fit"/> 算出；XAML 绑定它）。</summary>
+    public int TileColumns { get; private set; } = 7;
+
+    /// <summary>当前页行数。</summary>
+    public int TileRows { get; private set; } = 5;
+
+    /// <summary>当前图标边长（DIP）；窄屏时会小于 76。</summary>
+    public double TileIconSize { get; private set; } = 76;
+
+    /// <summary>每页容量 = 列 × 行；分页与翻页都读它，不再有写死的 35。</summary>
+    private int PageSize => Math.Max(1, TileColumns * TileRows);
+
+    /// <summary>关闭动画进行中（防止 Closing 递归拦截）。</summary>
+    private bool _closing;
+
+    public event System.ComponentModel.PropertyChangedEventHandler? PropertyChanged;
+
+    private void RaiseTileGeometryChanged()
+    {
+        PropertyChanged?.Invoke(this, new System.ComponentModel.PropertyChangedEventArgs(nameof(TileColumns)));
+        PropertyChanged?.Invoke(this, new System.ComponentModel.PropertyChangedEventArgs(nameof(TileRows)));
+        PropertyChanged?.Invoke(this, new System.ComponentModel.PropertyChangedEventArgs(nameof(TileIconSize)));
+    }
 
     private static LaunchpadWindow? _current;
 
@@ -102,10 +125,129 @@ public partial class LaunchpadWindow : Window
             catch (Exception ex) { Logger.Warn($"启动台壁纸加载失败（用纯色底）: {ex.Message}"); }
         }
 
+        ApplyGridFit();
+        SizeChanged += (_, _) => ApplyGridFit();
+
         _service.PrewarmIndex();
         Refresh();
+        PlayOpenAnimation();
         SearchBox.Focus();
         Keyboard.Focus(SearchBox);
+    }
+
+    /// <summary>
+    /// 按当前窗口尺寸重算列/行/图标边长。搜索条与页点占的是行外空间，所以从可用高度里先扣掉。
+    /// 尺寸变化（含跨屏 DPI 变化后的重排）都要重算 —— 否则 4K 屏上会一直用笔记本的列数。
+    /// </summary>
+    private void ApplyGridFit()
+    {
+        // 70/46/70/32 是外层 Grid 的留白（见 XAML），顶部再扣搜索条 + 文件夹 chip 条、底部扣页点。
+        var width = Math.Max(0, ActualWidth - 140);
+        var height = Math.Max(0, ActualHeight - 78 - 96);
+
+        var fit = LaunchpadGridRules.Fit(width, height, iconDip: 76, gapDip: 26);
+        if (fit.Columns == TileColumns && fit.Rows == TileRows
+            && Math.Abs(fit.IconSize - TileIconSize) < 0.5)
+        {
+            return;
+        }
+
+        TileColumns = fit.Columns;
+        TileRows = fit.Rows;
+        TileIconSize = fit.IconSize;
+        RaiseTileGeometryChanged();
+    }
+
+    /// <summary>开场：0.96 → 1 缩放 + 淡入，180ms（MacDock 的 kLaunchpadOpenMs）。</summary>
+    private void PlayOpenAnimation()
+    {
+        var scale = new ScaleTransform(0.96, 0.96);
+        Root.RenderTransformOrigin = new Point(0.5, 0.5);
+        Root.RenderTransform = scale;
+        Root.Opacity = 0;
+
+        var ease = new System.Windows.Media.Animation.QuadraticEase
+        {
+            EasingMode = System.Windows.Media.Animation.EasingMode.EaseOut
+        };
+        var zoom = new System.Windows.Media.Animation.DoubleAnimation(1, TimeSpan.FromMilliseconds(180))
+        {
+            EasingFunction = ease
+        };
+        var fade = new System.Windows.Media.Animation.DoubleAnimation(1, TimeSpan.FromMilliseconds(180));
+        scale.BeginAnimation(ScaleTransform.ScaleXProperty, zoom);
+        scale.BeginAnimation(ScaleTransform.ScaleYProperty, zoom);
+        Root.BeginAnimation(OpacityProperty, fade);
+        // 动画结束后清掉变换：留着会让命中测试与文字渲染都走 GPU 合成路径，滚动时发虚。
+        zoom.Completed += (_, _) =>
+        {
+            scale.BeginAnimation(ScaleTransform.ScaleXProperty, null);
+            scale.BeginAnimation(ScaleTransform.ScaleYProperty, null);
+            Root.RenderTransform = Transform.Identity;
+        };
+    }
+
+    /// <summary>退场：140ms 缩放 + 淡出后再真正关闭（MacDock 的 kLaunchpadCloseMs）。</summary>
+    protected override void OnClosing(System.ComponentModel.CancelEventArgs e)
+    {
+        if (!_closing)
+        {
+            e.Cancel = true;
+            _closing = true;
+
+            var scale = Root.RenderTransform as ScaleTransform ?? new ScaleTransform(1, 1);
+            Root.RenderTransformOrigin = new Point(0.5, 0.5);
+            Root.RenderTransform = scale;
+
+            var zoom = new System.Windows.Media.Animation.DoubleAnimation(0.97, TimeSpan.FromMilliseconds(140));
+            var fade = new System.Windows.Media.Animation.DoubleAnimation(0, TimeSpan.FromMilliseconds(140));
+            fade.Completed += (_, _) => Close();
+            scale.BeginAnimation(ScaleTransform.ScaleXProperty, zoom);
+            scale.BeginAnimation(ScaleTransform.ScaleYProperty, zoom);
+            Root.BeginAnimation(OpacityProperty, fade);
+            return;
+        }
+
+        base.OnClosing(e);
+    }
+
+    /// <summary>悬停：图标放大到 1.10（MacDock 的 kLaunchpadHoverScale），90ms 起、120ms 回。</summary>
+    private void Tile_MouseEnter(object sender, MouseEventArgs e) => AnimateTileIcon(sender, 1.10, 90);
+
+    private void Tile_MouseLeave(object sender, MouseEventArgs e) => AnimateTileIcon(sender, 1.0, 120);
+
+    private static void AnimateTileIcon(object sender, double target, int milliseconds)
+    {
+        if (sender is not Button { Content: StackPanel stack })
+        {
+            return;
+        }
+
+        var image = stack.Children.OfType<Image>().FirstOrDefault();
+        if (image is null)
+        {
+            return;
+        }
+
+        // DataTemplate 里的 Transform 在加载后会被 WPF 冻结（模板可共享），对冻结对象
+        // BeginAnimation 会抛 "因为该对象已密封或已冻结" —— 真机上表现为一悬停就弹异常框。
+        // 因此每个格子第一次需要动画时换成自己的可变实例。
+        if (image.RenderTransform is not ScaleTransform { IsFrozen: false } scale)
+        {
+            scale = new ScaleTransform(1, 1);
+            image.RenderTransform = scale;
+        }
+
+        var animation = new System.Windows.Media.Animation.DoubleAnimation(target,
+            TimeSpan.FromMilliseconds(milliseconds))
+        {
+            EasingFunction = new System.Windows.Media.Animation.QuadraticEase
+            {
+                EasingMode = System.Windows.Media.Animation.EasingMode.EaseOut
+            }
+        };
+        scale.BeginAnimation(ScaleTransform.ScaleXProperty, animation);
+        scale.BeginAnimation(ScaleTransform.ScaleYProperty, animation);
     }
 
     private void OnClosed(object? sender, EventArgs e)
@@ -137,6 +279,7 @@ public partial class LaunchpadWindow : Window
 
         // 文件夹只在"无搜索"时参与排版：搜索是"找应用"，把文件夹塞进结果只会让人多点一次。
         var allTiles = BuildTiles(query.Length == 0);
+        BuildFolderStrip(query.Length == 0);
         var pageCount = LaunchpadPagination.PageCount(allTiles.Count, PageSize);
         _page = Math.Clamp(_page, 0, Math.Max(0, pageCount - 1));
         var (first, count) = LaunchpadPagination.SpanOf(_page, allTiles.Count, PageSize);
@@ -187,7 +330,7 @@ public partial class LaunchpadWindow : Window
 
     private void Root_MouseWheel(object sender, MouseWheelEventArgs e)
     {
-        var pageCount = LaunchpadPagination.PageCount(_apps.Count, PageSize);
+        var pageCount = LaunchpadPagination.PageCount(Tiles.Items.Count + (_page * PageSize), PageSize);
         if (pageCount <= 1) return;
         if (e.Delta < 0 && _page < pageCount - 1) _page++;
         else if (e.Delta > 0 && _page > 0) _page--;

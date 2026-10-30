@@ -56,7 +56,16 @@ public sealed class LaunchpadLayoutStore
 
     /// <summary>应用身份键：启动路径 + 参数（与启动器索引同一口径）。</summary>
     public static string KeyOf(LauncherApp app)
-        => string.IsNullOrEmpty(app.Arguments) ? app.LaunchPath : $"{app.LaunchPath}|{app.Arguments}";
+    {
+        var path = NormalizePath(app.LaunchPath);
+        return string.IsNullOrEmpty(app.Arguments) ? path : $"{path}|{app.Arguments}";
+    }
+
+    /// <summary>
+    /// 键里的路径统一成正斜杠：Windows 两种分隔符混用（拖拽给的 <c>\</c>、手写配置可能给 <c>/</c>），
+    /// 不做归一就会出现"文件夹明明有成员却一个都解析不到"——真机上门踩到过一次。
+    /// </summary>
+    public static string NormalizePath(string path) => path.Replace('\\', '/');
 
     /// <summary>某应用所属的文件夹（不在任何文件夹返回 null）。</summary>
     public LaunchpadFolderRecord? FolderOf(string appKey)
@@ -164,7 +173,11 @@ public sealed class LaunchpadLayoutStore
     public IReadOnlyList<LauncherApp> MembersOf(
         LaunchpadFolderRecord folder, IReadOnlyList<LauncherApp> apps)
     {
-        var byKey = new Dictionary<string, LauncherApp>(StringComparer.Ordinal);
+        // 忽略大小写：Windows 路径本身不区分大小写，而索引来源（.lnk 解析 / MSIX 清单）
+        // 给出的盘符大小写不一定与用户拖拽时记下的那条一致。用 Ordinal 会表现为
+        // "文件夹里的应用突然全部消失"——这正是真机上踩到过的一次。
+        var byKey = new Dictionary<string, LauncherApp>(StringComparer.OrdinalIgnoreCase);
+        // 键在 <see cref="KeyOf"/> 里已归一成正斜杠；这里再对存储值归一，兼容手写/旧版本配置
         foreach (var app in apps)
         {
             byKey[KeyOf(app)] = app;
@@ -173,7 +186,7 @@ public sealed class LaunchpadLayoutStore
         var result = new List<LauncherApp>(folder.MemberIds.Count);
         foreach (var id in folder.MemberIds)
         {
-            if (byKey.TryGetValue(id, out var app))
+            if (byKey.TryGetValue(NormalizePath(id), out var app))
             {
                 result.Add(app);
             }

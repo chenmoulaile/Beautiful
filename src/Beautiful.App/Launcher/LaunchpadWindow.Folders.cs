@@ -70,6 +70,14 @@ public partial class LaunchpadWindow
             foreach (var folder in _layout.Folders)
             {
                 var members = _layout.MembersOf(folder, _service.AllApps);
+
+                // 成员一个都解析不出来（应用已卸载、或键口径变化）时不画这个文件夹：
+                // 画一个空白圆角块比"文件夹消失"更让人困惑，也会让 chip 条里留一个点不开的项。
+                if (members.Count == 0)
+                {
+                    continue;
+                }
+
                 foreach (var member in members)
                 {
                     inFolder.Add(LaunchpadLayoutStore.KeyOf(member));
@@ -279,6 +287,83 @@ public partial class LaunchpadWindow
             .ToList();
         window.FolderOverlay.Visibility = Visibility.Visible;
         return true;
+    }
+
+    /// <summary>
+    /// 文件夹 chip 条（MacDock 的 folder strip）：搜索条下方一排等宽胶囊，点开覆盖层。
+    /// <para>
+    /// 只在"没有搜索且有文件夹"时占位——空功能不该推开网格；搜索时也不显示，
+    /// 因为搜索结果本身就是一份扁平列表，混进文件夹会让"找应用"变成"先点两下"。
+    /// </para>
+    /// </summary>
+    private void BuildFolderStrip(bool includeFolders)
+    {
+        if (FolderStrip is null || Tiles is null || _layout is null)
+        {
+            return;
+        }
+
+        FolderStrip.Children.Clear();
+        if (!includeFolders || _layout.Folders.Count == 0)
+        {
+            FolderStrip.Visibility = Visibility.Collapsed;
+            Tiles.Margin = new Thickness(0);
+            return;
+        }
+
+        FolderStrip.Visibility = Visibility.Visible;
+        Tiles.Margin = new Thickness(0, 44, 0, 0);   // 给 chip 条让出一行高度
+
+        foreach (var folder in _layout.Folders)
+        {
+            // 与网格同一条判据：成员全解析不到就不给 chip（点开只会是一个空面板）
+            if (_layout.MembersOf(folder, _service.AllApps).Count == 0)
+            {
+                continue;
+            }
+
+            var button = new Button
+            {
+                Content = folder.Name,
+                Height = 32,
+                MinWidth = 120,
+                MaxWidth = 200,
+                Padding = new Thickness(16, 0, 16, 0),
+                Margin = new Thickness(5, 0, 5, 0),
+                FontSize = 12,
+                Foreground = System.Windows.Media.Brushes.White,
+                Cursor = System.Windows.Input.Cursors.Hand,
+                Background = new SolidColorBrush(Color.FromArgb(0x2E, 0xFF, 0xFF, 0xFF)),
+                BorderThickness = new Thickness(0),
+                ToolTip = $"{folder.MemberIds.Count} 个应用",
+                Template = ChipTemplate()
+            };
+
+            var captured = folder;
+            button.Click += (_, _) => OpenFolder(captured);
+            FolderStrip.Children.Add(button);
+        }
+    }
+
+    /// <summary>胶囊按钮模板：圆角 16、内容居中、悬停加深（默认 Button 模板会画方角灰底）。</summary>
+    private static ControlTemplate ChipTemplate()
+    {
+        var border = new FrameworkElementFactory(typeof(Border));
+        border.SetValue(Border.CornerRadiusProperty, new CornerRadius(16));
+        border.SetValue(Border.BackgroundProperty, new TemplateBindingExtension(BackgroundProperty));
+        border.SetValue(Border.PaddingProperty, new TemplateBindingExtension(PaddingProperty));
+
+        var presenter = new FrameworkElementFactory(typeof(ContentPresenter));
+        presenter.SetValue(FrameworkElement.HorizontalAlignmentProperty, System.Windows.HorizontalAlignment.Center);
+        presenter.SetValue(FrameworkElement.VerticalAlignmentProperty, System.Windows.VerticalAlignment.Center);
+        border.AppendChild(presenter);
+
+        var template = new ControlTemplate(typeof(Button)) { VisualTree = border };
+        var hover = new Trigger { Property = IsMouseOverProperty, Value = true };
+        hover.Setters.Add(new Setter(BackgroundProperty,
+            new SolidColorBrush(Color.FromArgb(0x4A, 0xFF, 0xFF, 0xFF))));
+        template.Triggers.Add(hover);
+        return template;
     }
 
     private void OpenFolder(Services.LaunchpadFolderRecord folder)

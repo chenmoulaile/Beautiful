@@ -100,6 +100,17 @@ public sealed class LauncherService : IDisposable
         {
             _index = LauncherIndex.Build(scan.Result);
             Logger.Info($"启动器：索引就绪，{_index.Count} 条可启动项");
+
+            // --launchpad-index-dump：把前 15 条的 显示名|启动路径 写进日志。
+            // 用途：文件夹成员键 = 启动路径，手写/排查 config/launchpad.json 时得知道真实口径。
+            if (Environment.GetCommandLineArgs()
+                .Any(a => string.Equals(a, "--launchpad-index-dump", StringComparison.OrdinalIgnoreCase)))
+            {
+                foreach (var app in _index.All.Take(15))
+                {
+                    Logger.Info($"启动器索引：{app.Name} | {app.LaunchPath}");
+                }
+            }
         }
         _indexReady = true;
         IndexChanged?.Invoke();

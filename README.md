@@ -451,6 +451,7 @@ dotnet publish src/Beautiful.App -c Release -r win-x64 --self-contained true -p:
 
 | 目标 | 现在 | 证据/边界 |
 |---|---|---|
+| 启动台几何优化（移植 MacDock） | 列/行不再写死 7×5：`LaunchpadGridRules` 由可用宽高反推（3–9 列、图标优先不缩、窄屏才缩到 48 DIP），图标尺寸随列宽自适应；搜索条按 MacDock 的 480×40/圆角 20；文件夹 chip 条（有夹才占位，点开覆盖层）；悬停图标放大 1.10（90ms/120ms 双程缓动）；开合动画 0.96↔1 + 淡入（180ms 开 / 140ms 关） | `LaunchpadGridRulesTests`（8：宽屏更多列/上限 9/窄屏仍 3 列/图标优先/退化输入不炸）；真机截图 `logs/launchpad-grid.png`（9 列×6 行、4 页点、文件夹合成图标 + chip）；**悬停放大与开合动画属交互类，UNVERIFIED(owner)**；启动台内拖拽建夹仍需手拖验证 |
 | Launchpad 文件夹（P5 收尾） | 文件夹在启动台里排在最前（2×2 成员缩略图合成图标）；把应用拖到另一个应用上 → 建文件夹（Core `LaunchpadFolders.Create`），拖到文件夹上 → 加入；点文件夹开覆盖层（成员网格 + 完成按钮），右键成员 → 移出（剩 1 个时按 Core 解散判据整个文件夹消失）；布局落 `config/launchpad.json`（损坏自愈、成员少于 2 的文件夹读时丢弃、卸载过的应用不渲染空框） | `--launchpad-folder-demo` 真机截图 `logs/launchpad-overlay.png`（覆盖层 + 两个真实成员）；`--launchpad-folder <名>` 可直开指定文件夹；**拖拽建文件夹/加入需手拖验证（UNVERIFIED(owner)）**；文件夹重命名与"从覆盖层拖出"未做（移出走右键）；搜索时不显示文件夹（只搜应用） |
 | 触发角（P5-T2 起步） | Core `HotCornerPlan` 四角命中 + `HotCornerDwellState` 驻留状态机（300ms、触发后须离开再武装）；`HotCornerService` 100ms GetCursorPos（不装鼠标钩子），真全屏时抑制；设置页新增「触发角」四角下拉：禁用/显示桌面/锁定屏幕/睡眠（默认全禁用） | `HotCornerPlanTests` + 1058 测试通过；**Launchpad/屏保动作未提供**（依赖 Phase 5 Launchpad 与屏保接线，不放假选项）；真机四角触发 UNVERIFIED(owner) |
 | Launchpad（P5-T1 起步） | F4 全局热键（RegisterHotKey，失败只记日志）；全屏 7×5 网格、壁纸模糊底、搜索过滤、翻页/滚轮、Enter/点击启动；复用 LauncherService 索引（171 条真实应用 smoke） | 真实 Win11 `--launchpad` 截图验证；**文件夹、拖拽排序、自定义图标/持久化、Dock 启动台图标、壁纸幻灯片降级仍待后续**；搜索占位已修 |
