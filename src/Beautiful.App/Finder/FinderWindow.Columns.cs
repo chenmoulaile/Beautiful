@@ -32,8 +32,11 @@ namespace Beautiful.App.Finder;
 /// </summary>
 public partial class FinderWindow
 {
-    /// <summary>列视图缓存上限（目录数）：够覆盖一条深层路径的浏览历史，又不会长期占内存。</summary>
-    private const int MaxCachedDirectories = 32;
+    /// <summary>
+    /// 列视图缓存上限（目录数）。内存账：每目录最多 <see cref="MaxIconRows"/> 个图标 × 约 16KB（64px BGRA）
+    /// ≈ 5MB，12 个目录 ≈ 60MB 上限；再大就不像一个常驻 24h 的桌面壳了。
+    /// </summary>
+    private const int MaxCachedDirectories = 12;
 
     /// <summary>预览列宽度（macOS 列视图最右预览约 240 DIP）。</summary>
     private const double PreviewColumnWidth = 240;
@@ -460,7 +463,13 @@ public partial class FinderWindow
         {
             if (selectedName is not null)
             {
-                list.SelectedItem = rows.FirstOrDefault(r => r.Name == selectedName);
+                var selected = rows.FirstOrDefault(r => r.Name == selectedName);
+                list.SelectedItem = selected;
+                if (selected is not null)
+                {
+                    // 重建后父列的选中项常常在视口外：滚过去，否则"当前目录在父列高亮"看不见。
+                    list.ScrollIntoView(selected);
+                }
             }
         }
         finally

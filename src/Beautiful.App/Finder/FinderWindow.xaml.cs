@@ -86,6 +86,9 @@ public partial class FinderWindow : Window
     /// <summary>诊断用（<c>--select &lt;name&gt;</c>）：载入完成后自动选中该条目，截图/验收时省掉鼠标。</summary>
     private string? _pendingSelection;
 
+    /// <summary>是否已经应用过一次视图选项（首次不继承，之后未记录的目录继承当前视图）。</summary>
+    private bool _viewApplied;
+
     /// <summary>
     /// 单例入口（--finder / Dock 入口共用）。关闭后自动重置，可再次打开。
     /// </summary>
@@ -295,10 +298,32 @@ public partial class FinderWindow : Window
 
     // ---------- 视图选项 ----------
 
-    /// <summary>从整表里取出本文件夹的选项并应用到当前状态（导航时调用）。</summary>
+    /// <summary>
+    /// 从整表里取出本文件夹的选项并应用到当前状态（导航时调用）。
+    /// <para>
+    /// 未记录过的文件夹**继承当前视图**（模式/排序/图标尺寸/隐藏开关），而不是跳回出厂默认：
+    /// macOS 上新开一个从未浏览过的文件夹不会突然从分栏变回列表，用户的心智是"我选过的显示方式继续用"。
+    /// 继承只在内存里生效，不写盘——否则一次浏览就会给每个目录留一条默认记录。
+    /// </para>
+    /// </summary>
     private void ApplyViewOptionsFor(string path)
     {
+        var key = FinderViewOptionRules.KeyOf(path);
+        var stored = key.Length > 0 && _viewMap.ContainsKey(key);
         var options = FinderViewOptionRules.For(_viewMap, path);
+        if (!stored && _viewApplied)
+        {
+            options = options with
+            {
+                Mode = _viewMode,
+                SortKey = _sortKey,
+                Descending = _descending,
+                ShowHidden = _showHidden,
+                IconSize = _iconSize
+            };
+        }
+
+        _viewApplied = true;
         _viewMode = options.Mode;
         _sortKey = options.SortKey;
         _descending = options.Descending;
@@ -992,8 +1017,8 @@ public partial class FinderWindow : Window
             return;
         }
 
-        // ⌘I 显示简介：有选中项看选中项，没有就看当前文件夹
-        if (ctrl && !shift && e.Key == Key.I)
+        // ⌘I 显示简介：有选中项看选中项，没有就看当前文件夹（搜索框里不抢 Ctrl+I）
+        if (ctrl && !shift && e.Key == Key.I && !SearchBox.IsKeyboardFocusWithin)
         {
             e.Handled = true;
             FinderInfoWindow.ShowFor(SelectedRow()?.FullPath ?? _currentPath);

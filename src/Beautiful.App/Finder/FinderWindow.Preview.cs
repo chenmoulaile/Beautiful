@@ -25,7 +25,11 @@ public partial class FinderWindow
     /// <summary>表头点击：同列翻转方向，换列则按该列升序重排。</summary>
     private void Header_Click(object sender, RoutedEventArgs e)
     {
-        if (e.OriginalSource is not GridViewColumnHeader header || header.Column?.Header is not string text)
+        // EventSetter 的 sender 是表头本身；OriginalSource 可能是表头里的 ContentPresenter，
+        // 两者都试一次，避免"点了没反应"这种最难查的空操作。
+        var header = sender as GridViewColumnHeader
+                     ?? FindAncestor<GridViewColumnHeader>(e.OriginalSource as DependencyObject);
+        if (header?.Column?.Header is not string text)
         {
             return;
         }
@@ -123,7 +127,15 @@ public partial class FinderWindow
 
         if (_viewMode == FinderViewMode.Columns && _columnState is not null)
         {
-            _columnState.Select(_columnState.Count - 1, row.Name, row.IsDirectory);
+            // 与鼠标点击同一语义：选中文件夹 = 导航（列栈由祖先链重建，新目录成为最右列）；
+            // 选中文件 = 只开预览列，不动当前目录。
+            if (row.IsDirectory)
+            {
+                NavigateTo(row.FullPath);
+                return;
+            }
+
+            _columnState.Select(_columnState.Count - 1, row.Name, isDirectory: false);
             RefreshColumns();
             return;
         }

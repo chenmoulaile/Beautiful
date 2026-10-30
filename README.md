@@ -452,8 +452,16 @@ dotnet publish src/Beautiful.App -c Release -r win-x64 --self-contained true -p:
 | 目标 | 现在 | 证据/边界 |
 |---|---|---|
 | Finder Core 地基（P6-a 起步） | `Core/Finder`：`NavigationHistory`（后退/前进栈、去重、容量裁剪）、`FinderPaths`（父目录/根/显示名/组合，含 UNC）、`NaturalStringComparer`（数字感知排序）、`FinderKeyMap`（Ctrl 充当 ⌘ 的键位映射）、`FinderSorting`（目录优先/名称/大小/时间/种类，稳定排序） | `NaturalStringComparerTests` 等 5 个新测试文件；**1058 测试通过**；纯 Core，无 App/WPF 接入 |
-| Finder 窗口骨架（P6-a 起步） | 非分层 WindowChrome + DWM 圆角；52px 工具栏（红绿灯/前进后退/路径标题/搜索/视图占位）；190px 侧栏（最近使用/应用程序/桌面/文稿/下载/这台电脑）；ListView 四列（名称/修改日期/大小/种类）；异步枚举+取消、1500 截断、状态栏项目数/可用空间；双击/Enter 打开、Ctrl+[ ]、F5、Esc | 真实 Win11 `--finder` 截图验证（79 条目、状态 27.9 GB）；随后 hardening：载入态清空旧行/CTS 生命周期/空间缓存/后台图标（前 300 项）/导航清搜索；1058 测试通过；**文件操作 UI/分栏/画廊/Quick Look 未做** |
+| Finder 窗口骨架（P6-a 起步） | 非分层 WindowChrome + DWM 圆角；52px 工具栏（红绿灯/前进后退/路径标题/搜索/视图占位）；190px 侧栏（最近使用/应用程序/桌面/文稿/下载/这台电脑）；ListView 四列（名称/修改日期/大小/种类）；异步枚举+取消、1500 截断、状态栏项目数/可用空间；双击/Enter 打开、Ctrl+[ ]、F5、Esc | 真实 Win11 `--finder` 截图验证（79 条目、状态 27.9 GB）；随后 hardening：载入态清空旧行/CTS 生命周期/空间缓存/后台图标（前 300 项）/导航清搜索；6-b 起表头可点击排序、⇧⌘. 显示隐藏项；**文件操作 UI/画廊仍未做** |
 | Finder 文件操作规划 Core（P6-a 起步） | `FinderNameRules`（非法/保留名、尾空格点、255 限制、唯一名 `(n)`、复制名 copy）、`FinderPathSafety`（同/后代路径、目录不能移进自身）、`FinderDropPlanner`（去重/顺序/冲突改名/目标组合） | `FinderNameRulesTests`/`FinderPathSafetyTests`/`FinderDropPlannerTests`；**1058 测试通过**；纯 Core，尚未接 IFileOperation 与 UI |
-| Finder 窗口/列表/分栏/Quick Look/文件操作 | **UI 接线未开始**（Next） | Phase 6-a/b/c 的 IFileOperation、分栏、Quick Look 等尚未开始 |
+| Finder 分栏视图（P6-b） | `FinderColumnState`（列栈/每列选中/焦点列；选择即截断右侧、选中文件夹才开新列、列数上限 8）、`FinderColumnChain`（任意目录 → 祖先链，相对路径不伪造绝对路径）、`FinderColumnMetrics`（中间列 260 固定、最右列吃剩余宽度）；窗口侧整列重建 + 父列高亮展开的子目录 + 最右预览列（图片缩略/文本头 12 行/图标 + 种类/大小/时间）；←/→ 列间移动、后退优先退一列 | `FinderColumnViewTests`（21）；真机 `--finder --view columns --select package-lock.json` 截图：C:\ → Users → Chenkx 三列 + 预览列显示 JSON 头 4 行与元数据；**列宽拖拽、水平滚动定位未做** |
+| Finder 图标视图（P6-b） | `FinderIconGrid`（度量/命中/框选/方向键/尺寸档位 48-64-96-128）+ `FinderIconPanel`（自绘面板，布局与命中同一套公式）；框选（空白起手、Ctrl/Shift 并集）、方向键网格移动（左右不换行）、尺寸滑杆 + ⇧⌘[ / ]、双击打开 | `FinderIconGridTests`（10）；真机 `--view icons` 截图：8 列网格、真实系统图标、两行标签；**非虚拟化（目录已截断 1500 项）、标签换行未做逐行省略** |
+| 每文件夹视图选项（P6-b） | `FinderViewOptionRules`（值域钳制/路径键归一/容量上限 200/枚举字符串往返）+ `FinderViewOptionsStore`（`config/finder-view-options.json`，损坏自愈不删文件）；视图/排序列/图标尺寸/隐藏项按文件夹记忆；列表表头点击排序（同列翻转，▲/▼） | `FinderViewOptionsTests`（11）；真机截图确认列表表头「名称 ▲」与图标尺寸滑杆随视图显隐 |
+| Quick Look（P6-b） | `QuickLookRouter`（扩展名 → 文本/图片/媒体/PDF/信息卡）+ `QuickLookPager`（多选循环翻页）；窗口：文本 64KB BOM 感知、图片 OnLoad 解码、MediaElement 播放、**PDF 走 `Windows.Data.Pdf` 渲染首页**（StorageFile 失败自动退内存流）、失败一律信息卡并写明原因；多选空格 ←/→ 翻页、空格/Esc 关闭 | `QuickLookRouterTests` + `QuickLookPagerTests`（5）；真机 `--quicklook logs/pdf-smoke.pdf` 截图渲染出页面与「PDF 共 1 页」；**加密/系统 PDF 引擎不接受的文件回退信息卡（`logs/task05-sample.pdf` 实测 0x80048014）**；HEIC/IPreviewHandler 探针未做 |
+| 显示简介（P6-b） | `FinderInfoWindow`（⌘I / `--info`）：通用（种类/大小/占用磁盘/创建/修改）+ 打开方式（AssocQueryString 友好名）+ 位置（可选中路径）+ 权限与属性（只读/隐藏/系统，只读展示） | 真机截图：PDF 卡显示 595 字节、占用磁盘 595 字节、默认程序 Microsoft Edge；**改权限/改打开方式不提供**（系统写入，按 §16.8 留给所有者） |
+| 文件操作 UI（复制/移动/删除/重命名） | **未开始**（Next） | `IFileOperation` + macOS 风格进度浮窗 + 就地重命名尚未接线；Core 规划函数已就绪 |
+| 标签页 / 搜索 / 画廊 / Dock 互通 | **未开始**（P6-c） | 标签条、⌘F 全局搜索、画廊视图、Dock 堆栈"在访达中打开"仍未做 |
 
-> Phase 6 已完成导航/排序/键位/文件操作规划纯函数与列表窗口骨架；IFileOperation UI、分栏、Quick Look、标签页/搜索等仍需后续。
+> Phase 6-b 已完成分栏/图标两视图、Quick Look（含 PDF 首页渲染）、显示简介与每文件夹视图选项；
+> **IFileOperation 文件操作 UI、标签页/搜索/画廊、Dock 互通仍待 P6-c**。
+> 真机截图证据存于 `logs/6b-*.png`（不入库，`logs/` 已 gitignore）；注入类/拖拽类交互仍为 `UNVERIFIED(owner)`。
