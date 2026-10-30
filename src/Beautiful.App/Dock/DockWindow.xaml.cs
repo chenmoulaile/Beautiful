@@ -120,6 +120,21 @@ public partial class DockWindow : AcrylicWindow
     private double? _monitorScale;
     private bool _appbarRegistered;
     private bool _closing; // OnClosing 起置位：阻止关闭前挂起的 BeginInvoke 重注册在 ABM_REMOVE 后复活 AppBar
+
+    /// <summary>自动隐藏开关（设置项 DockAutoHide）。</summary>
+    private bool _autoHide;
+
+    /// <summary>当前是否处于"已滑下去"的状态（true 时 AssertWindowRect 不得把窗口拉回来）。</summary>
+    private bool _autoHideHidden;
+
+    /// <summary>自动隐藏轮询（80ms：够跟手，又不会让 CPU 有感知）。</summary>
+    private System.Windows.Threading.DispatcherTimer? _autoHideTimer;
+
+    /// <summary>光标离开 Dock 的时刻（UTC）；未离开为 null。</summary>
+    private DateTime? _cursorLeftAt;
+
+    /// <summary>滑下去后仍露在屏幕内的像素高度。</summary>
+    private const int AutoHideSliverPixels = 4;
     private HwndSource? _source;
     private NativeMaterialHost? _nativeMaterial;
 
@@ -354,6 +369,107 @@ public partial class DockWindow : AcrylicWindow
         _badges = new DockBadgeService(_vm, Surface, Dispatcher);
         _progress = new TaskbarProgressService(Surface, Dispatcher);
         InitWidget();
+        ApplyAutoHide(SettingsService.Current.DockAutoHide, persist: false);
+    }
+
+    /// <summary>
+    /// 自动隐藏（P3-T5 隐藏模式之一）：光标不在 Dock 上 500ms 就滑下去只留 4px，触底立即滑回。
+    /// <para>
+    /// 【为什么保留 AppBar 预留带】释放预留带要 ABM_REMOVE + 重注册，会触发 shell 重排；
+    /// 本机还叠着任务栏策略（隐藏/自动隐藏）与顶栏，反复注册最容易把布局搞乱。
+    /// 因此这一版是"视觉隐藏、空间保留"，代价与边界写进设置项注释，不假装是 macOS 的完整语义。
+    /// </para>
+    /// </summary>
+    public void ApplyAutoHide(bool enabled, bool persist = true)
+    {
+        _autoHide = enabled;
+        if (persist)
+        {
+            SettingsService.UpdateAndSave(SettingsService.Current with { DockAutoHide = enabled });
+        }
+
+        if (!enabled)
+        {
+            _autoHideTimer?.Stop();
+            _autoHideTimer = null;
+            _autoHideHidden = false;
+            AssertWindowRect();
+            Logger.Info("Dock 自动隐藏已关闭");
+            return;
+        }
+
+        _autoHideTimer ??= new System.Windows.Threading.DispatcherTimer(
+            TimeSpan.FromMilliseconds(80), System.Windows.Threading.DispatcherPriority.Background,
+            (_, _) => TickAutoHide(), Dispatcher);
+        _autoHideTimer.Start();
+        Logger.Info("Dock 自动隐藏已开启（光标离开 500ms 后滑下，触底滑回）");
+    }
+
+    private void TickAutoHide()
+    {
+        if (_closing || !_autoHide || !NativeMethods.GetCursorPos(out var cursor))
+        {
+            return;
+        }
+
+        // 命中判据用窗口矩形（含顶部放大余量）：光标在放大后的图标上也算"在 Dock 上"。
+        var inside = cursor.X >= _screenRect.Left && cursor.X <= _screenRect.Right
+                     && cursor.Y >= _screenRect.Top && cursor.Y <= _screenRect.Bottom;
+
+        if (_autoHideHidden)
+        {
+            // 触底（或已滑出的那条缝）立即滑回：留 2px 容差，鼠标贴边的手感不需要精确到像素
+            if (cursor.Y >= _screenRect.Bottom - AutoHideSliverPixels - 2 || inside)
+            {
+                ShowFromAutoHide();
+            }
+
+            return;
+        }
+
+        if (inside)
+        {
+            _cursorLeftAt = null;
+            return;
+        }
+
+        _cursorLeftAt ??= DateTime.UtcNow;
+        if ((DateTime.UtcNow - _cursorLeftAt.Value).TotalMilliseconds >= 500)
+        {
+            HideToAutoHide();
+        }
+    }
+
+    /// <summary>诊断入口：不等 500ms 计时，直接滑下去（截图验收用）。</summary>
+    public void ForceAutoHideForDiagnostics() => HideToAutoHide();
+
+    private void HideToAutoHide()
+    {
+        if (_autoHideHidden || _windowTarget.Width <= 0)
+        {
+            return;
+        }
+
+        _autoHideHidden = true;
+        _cursorLeftAt = null;
+        var top = _windowTarget.Bottom - AutoHideSliverPixels;
+        NativeMethods.SetWindowPos(_hwnd, IntPtr.Zero, _windowTarget.Left, top,
+            _windowTarget.Width, _windowTarget.Height,
+            NativeMethods.SwpNozorder | NativeMethods.SwpNoactivate);
+        Logger.Info($"Dock 自动隐藏：滑下（露 {AutoHideSliverPixels}px）");
+    }
+
+    private void ShowFromAutoHide()
+    {
+        if (!_autoHideHidden)
+        {
+            return;
+        }
+
+        _autoHideHidden = false;
+        _cursorLeftAt = null;
+        AssertWindowRect();
+        Logger.Info("Dock 自动隐藏：滑回");
     }
 
     /// <summary>
@@ -699,6 +815,8 @@ public partial class DockWindow : AcrylicWindow
         _badges = null;
         _progress?.Dispose();
         _progress = null;
+        _autoHideTimer?.Stop();
+        _autoHideTimer = null;
         _widgetTimer?.Stop();
         _widgetTimer = null;
         _weather?.Dispose();
@@ -876,6 +994,7 @@ public partial class DockWindow : AcrylicWindow
     private void AssertWindowRect()
     {
         if (_closing || !_appbarRegistered) return;
+        if (_autoHideHidden) return;   // 自动隐藏中：shell 的重排不该把 Dock 拽回屏幕内
         if (_windowTarget.Width <= 0 || _windowTarget.Height <= 0) return;   // 尚未定位过（首帧前）
         if (!NativeMethods.GetWindowRect(_hwnd, out var now)) return;
         if (now.Left == _windowTarget.Left && now.Top == _windowTarget.Top &&

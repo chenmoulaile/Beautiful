@@ -152,6 +152,7 @@ public partial class SettingsWindow : Window
         BounceCheck.IsChecked = s.BounceEnabled;
         CapsuleCheck.IsChecked = s.ShowMediaCapsule;
         DockWidgetCheck.IsChecked = s.DockWidgetEnabled;
+        DockAutoHideCheck.IsChecked = s.DockAutoHide;
         HidePanelCheck.IsChecked = s.HidePanelOnDeactivate;
         PreviewCheck.IsChecked = s.PreviewEnabled;
 
@@ -668,6 +669,13 @@ public partial class SettingsWindow : Window
     }
 
     // ---------- 媒体 ----------
+
+    /// <summary>Dock 自动隐藏（P3-T5 隐藏模式）：立即生效，不需要重启 Dock。</summary>
+    private void DockAutoHide_Changed(object sender, RoutedEventArgs e)
+    {
+        if (_loading) return;
+        App.ApplyDockAutoHide(DockAutoHideCheck.IsChecked == true);
+    }
 
     /// <summary>Dock 小组件开关（Phase 7-T3）：立即重排行尾，不需要重启 Dock。</summary>
     private void DockWidget_Changed(object sender, RoutedEventArgs e)

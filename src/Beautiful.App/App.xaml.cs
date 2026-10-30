@@ -192,6 +192,20 @@ public partial class App : Application
                 _topBar?.ShowControlCenterForDiagnostics();
             }
 
+            // 7.03 --dock-autohide：开启自动隐藏并在 1.2s 后强制滑下（截图/验收"隐藏态"用）
+            if (e.Args.Contains("--dock-autohide", StringComparer.OrdinalIgnoreCase))
+            {
+                _shotDock = true;
+                _dock?.ApplyAutoHide(true, persist: false);   // 诊断不改用户设置
+                var hideTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(1200) };
+                hideTimer.Tick += (_, _) =>
+                {
+                    hideTimer.Stop();
+                    _dock?.ForceAutoHideForDiagnostics();
+                };
+                hideTimer.Start();
+            }
+
             // 7.04 --dock-shot：把 --shot 的目标固定为 Dock 窗口（验图标/角标/进度用）
             if (e.Args.Contains("--dock-shot", StringComparer.OrdinalIgnoreCase))
             {
@@ -938,6 +952,15 @@ public partial class App : Application
 
     /// <summary>外部请求打开设置窗口。<see cref="OpenSettings"/> 自己是单例的，重复请求只会激活。</summary>
     internal static void OpenSettingsFromExternal() => (Current as App)?.OpenSettings();
+
+    /// <summary>设置页切换 Dock 自动隐藏：立即生效（只动窗口滑入滑出，不重注册 AppBar）。</summary>
+    internal static void ApplyDockAutoHide(bool enabled)
+    {
+        if (Current is App { _dock: { } dock })
+        {
+            dock.ApplyAutoHide(enabled);
+        }
+    }
 
     /// <summary>设置页切换 Dock 小组件：直接让 Dock 重排行尾（不需要重启，也不重建窗口）。</summary>
     internal static void ApplyDockWidget(bool enabled)

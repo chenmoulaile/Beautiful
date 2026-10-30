@@ -32,6 +32,16 @@ public sealed record AppSettings
     /// </summary>
     public bool DockWidgetEnabled { get; init; } = true;
 
+    /// <summary>
+    /// Dock 自动隐藏（P3-T5 的隐藏模式之一）。开启后光标不在 Dock 上超过 500ms 就滑到屏幕下沿
+    /// 只留 4px，光标触底立即滑回。
+    /// <para>
+    /// 【已知差异】仍保留 AppBar 预留带（工作区不被最大化窗口占满），与本机其他 AppBar 共存最稳；
+    /// 真正"隐藏时把空间还给桌面"要改 AppBar 注册时机，属于后续项。
+    /// </para>
+    /// </summary>
+    public bool DockAutoHide { get; init; }
+
     /// <summary>媒体面板失焦是否自动收起。</summary>
     public bool HidePanelOnDeactivate { get; init; } = true;
 
