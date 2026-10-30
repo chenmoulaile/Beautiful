@@ -153,6 +153,7 @@ public partial class SettingsWindow : Window
         CapsuleCheck.IsChecked = s.ShowMediaCapsule;
         DockWidgetCheck.IsChecked = s.DockWidgetEnabled;
         DockAutoHideCheck.IsChecked = s.DockAutoHide;
+        DockEdgeCombo.SelectedIndex = s.DockEdge switch { "left" => 1, "right" => 2, _ => 0 };
         HidePanelCheck.IsChecked = s.HidePanelOnDeactivate;
         PreviewCheck.IsChecked = s.PreviewEnabled;
 
@@ -669,6 +670,14 @@ public partial class SettingsWindow : Window
     }
 
     // ---------- 媒体 ----------
+
+    /// <summary>Dock 停靠边（实验）：底部走标准 AppBar；左右走竖排面板。</summary>
+    private void DockEdge_Changed(object sender, SelectionChangedEventArgs e)
+    {
+        if (_loading) return;
+        var edge = DockEdgeCombo.SelectedIndex switch { 1 => "left", 2 => "right", _ => "bottom" };
+        App.ApplyDockEdge(edge);
+    }
 
     /// <summary>Dock 自动隐藏（P3-T5 隐藏模式）：立即生效，不需要重启 Dock。</summary>
     private void DockAutoHide_Changed(object sender, RoutedEventArgs e)

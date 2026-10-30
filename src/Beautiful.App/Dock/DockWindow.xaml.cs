@@ -370,6 +370,106 @@ public partial class DockWindow : AcrylicWindow
         _progress = new TaskbarProgressService(Surface, Dispatcher);
         InitWidget();
         ApplyAutoHide(SettingsService.Current.DockAutoHide, persist: false);
+        ApplyEdge(SettingsService.Current.DockEdge, persist: false);
+    }
+
+    // ---------- 左右停靠（实验） ----------
+
+    /// <summary>当前停靠边：bottom / left / right（实验功能，默认 bottom）。</summary>
+    public string DockEdge { get; private set; } = "bottom";
+
+    /// <summary>
+    /// 切换停靠边（实验）。左右边用竖排面板，并释放底部 AppBar 预留带（浮在桌面上，不占工作区）。
+    /// <para>
+    /// 【为什么另起一块面板】DockSurface 的放大场、倒影、拖放槽位全按水平轴写死；
+    /// 在同一控件里加一个"垂直模式"要同时改布局/命中/缩放原点，风险是把默认底部停靠一起弄坏。
+    /// 实验版先给"能停到左右边且点击可用"，放大与倒影明确不做。
+    /// </para>
+    /// </summary>
+    public void ApplyEdge(string edge, bool persist = true)
+    {
+        var normalized = edge?.Trim().ToLowerInvariant() switch
+        {
+            "left" => "left",
+            "right" => "right",
+            _ => "bottom"
+        };
+
+        DockEdge = normalized;
+        if (persist)
+        {
+            SettingsService.UpdateAndSave(SettingsService.Current with { DockEdge = normalized });
+        }
+
+        var vertical = normalized != "bottom";
+        Surface.Visibility = vertical ? Visibility.Collapsed : Visibility.Visible;
+        VerticalList.Visibility = vertical ? Visibility.Visible : Visibility.Collapsed;
+
+        if (!vertical)
+        {
+            RegisterAndPositionAppBar();   // 回到底部：恢复 AppBar 预留带
+            Logger.Info("Dock 停靠边：底部（标准模式）");
+            return;
+        }
+
+        UnregisterAppBar();                // 左右边不占工作区：先释放底部条带
+        PositionAsVerticalEdge(normalized);
+        Logger.Info($"Dock 停靠边：{(normalized == "left" ? "左侧" : "右侧")}（实验：无放大/无倒影）");
+    }
+
+    /// <summary>把竖排面板贴到工作区左/右缘并垂直居中；尺寸按条目数算，超出时截到工作区高度。</summary>
+    private void PositionAsVerticalEdge(string edge)
+    {
+        if (!NativeMethods.GetCursorPos(out var cursor)) return;
+        var area = MonitorGeometry.AreaForPoint(cursor.X, cursor.Y);
+        if (area is null) return;
+
+        var monitor = area.Value;
+        var scale = monitor.DpiScale > 0 ? monitor.DpiScale : 1.0;
+
+        // 尺寸自己算，不等测量：刚把 Surface 收起来时 ItemsControl 的 ActualHeight 还是旧值（0），
+        // 用它定窗口高度会得到"只有第一个图标"的窄条（真机截图踩到过）。
+        var icon = Surface.IconSize > 0 ? Surface.IconSize : 44;
+        var itemHeight = icon + 30;                     // 图标 + 标签 + 间距
+        var count = Math.Max(1, _vm.Items.Count);
+        // 宽度要容下模板里的 112 DIP 内容（图标 + 名字）：窄了名字会被裁掉，只剩一排图标。
+        var widthDip = Math.Max(112, icon + 68);
+        var heightDip = Math.Min(count * itemHeight + 20, (monitor.Work.Height / scale) - 24);
+
+        VerticalList.Width = widthDip;
+        VerticalList.Height = heightDip;
+        Width = widthDip;
+        Height = heightDip;
+        UpdateLayout();
+
+        var heightPx = (int)Math.Round(heightDip * scale);
+        var widthPx = (int)Math.Round(widthDip * scale);
+        var topPx = monitor.Work.Top + Math.Max(0, (monitor.Work.Height - heightPx) / 2);
+        var leftPx = edge == "left"
+            ? monitor.Work.Left + 6
+            : monitor.Work.Right - widthPx - 6;
+
+        NativeMethods.SetWindowPos(_hwnd, IntPtr.Zero, leftPx, topPx, widthPx, heightPx,
+            NativeMethods.SwpNozorder | NativeMethods.SwpNoactivate);
+    }
+
+    /// <summary>竖排面板左键：直接用 DataContext 找到条目（不经过 DockSurface 的命中表）。</summary>
+    private void VerticalList_Click(object sender, System.Windows.Input.MouseButtonEventArgs e)
+    {
+        if ((e.OriginalSource as FrameworkElement)?.DataContext is DockItem item)
+        {
+            ActivateItem(item);
+            e.Handled = true;
+        }
+    }
+
+    private void VerticalList_RightUp(object sender, System.Windows.Input.MouseButtonEventArgs e)
+    {
+        if ((e.OriginalSource as FrameworkElement)?.DataContext is DockItem item)
+        {
+            OpenItemContextMenu(item, e.GetPosition(Surface));
+            e.Handled = true;
+        }
     }
 
     /// <summary>

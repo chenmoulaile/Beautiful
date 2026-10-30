@@ -42,6 +42,16 @@ public sealed record AppSettings
     /// </summary>
     public bool DockAutoHide { get; init; }
 
+    /// <summary>
+    /// Dock 停靠边（实验功能）：<c>bottom</c>（默认）/ <c>left</c> / <c>right</c>。
+    /// <para>
+    /// 左右停靠走一块独立的竖排面板，**不参与** DockSurface 的放大场、倒影与拖放排序——
+    /// 那套几何是按水平行写的（1500 行），改成垂直轴属于重写；实验版先把"能停到左右边"给出来，
+    /// 代价是没有放大效果，且不向 shell 申请工作区预留（窗口浮在桌面上）。
+    /// </para>
+    /// </summary>
+    public string DockEdge { get; init; } = "bottom";
+
     /// <summary>媒体面板失焦是否自动收起。</summary>
     public bool HidePanelOnDeactivate { get; init; } = true;
 

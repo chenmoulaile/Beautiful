@@ -641,6 +641,18 @@
                     <StackPanel>
                         <TextBlock Text="媒体" Style="{StaticResource SectionTitle}"/>
 
+                        <StackPanel Orientation="Horizontal" Margin="0,8,0,0">
+                            <TextBlock Text="Dock 停靠边（实验）" VerticalAlignment="Center"/>
+                            <ComboBox x:Name="DockEdgeCombo" Width="120" Margin="10,0,0,0"
+                                      SelectionChanged="DockEdge_Changed">
+                                <ComboBoxItem Content="底部"/>
+                                <ComboBoxItem Content="左侧"/>
+                                <ComboBoxItem Content="右侧"/>
+                            </ComboBox>
+                            <TextBlock Text="左右停靠没有放大与倒影，且不占用工作区"
+                                       Opacity="0.6" FontSize="11" Margin="10,0,0,0"
+                                       VerticalAlignment="Center"/>
+                        </StackPanel>
                         <CheckBox x:Name="DockAutoHideCheck" Content="自动隐藏 Dock（光标离开 0.5 秒后滑下，触底滑回）"
                                   Margin="0,8,0,0" Checked="DockAutoHide_Changed" Unchecked="DockAutoHide_Changed"/>
                         <CheckBox x:Name="DockWidgetCheck" Content="在 Dock 行尾显示时钟 / 天气小组件"

@@ -206,6 +206,14 @@ public partial class App : Application
                 hideTimer.Start();
             }
 
+            // 7.02 --dock-edge left|right|bottom：停靠边实验入口（截图/验收用，不写设置）
+            var dockEdge = ParseArgValue(e.Args, "--dock-edge");
+            if (!string.IsNullOrWhiteSpace(dockEdge))
+            {
+                _shotDock = true;
+                _dock?.ApplyEdge(dockEdge!, persist: false);
+            }
+
             // 7.04 --dock-shot：把 --shot 的目标固定为 Dock 窗口（验图标/角标/进度用）
             if (e.Args.Contains("--dock-shot", StringComparer.OrdinalIgnoreCase))
             {
@@ -952,6 +960,15 @@ public partial class App : Application
 
     /// <summary>外部请求打开设置窗口。<see cref="OpenSettings"/> 自己是单例的，重复请求只会激活。</summary>
     internal static void OpenSettingsFromExternal() => (Current as App)?.OpenSettings();
+
+    /// <summary>设置页切换 Dock 停靠边（实验）：左右边走竖排面板并释放底部 AppBar。</summary>
+    internal static void ApplyDockEdge(string edge)
+    {
+        if (Current is App { _dock: { } dock })
+        {
+            dock.ApplyEdge(edge);
+        }
+    }
 
     /// <summary>设置页切换 Dock 自动隐藏：立即生效（只动窗口滑入滑出，不重注册 AppBar）。</summary>
     internal static void ApplyDockAutoHide(bool enabled)

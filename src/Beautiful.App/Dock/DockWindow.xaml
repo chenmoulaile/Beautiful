@@ -199,6 +199,21 @@
                 CornerRadius="{DynamicResource ThemePanelCornerRadius}"
                 Background="{DynamicResource ThemeDockBackground}"
                 BorderBrush="{DynamicResource MacDockBorder}" BorderThickness="1"/>
+        <!-- 左右停靠（实验）：竖排面板。复用条目模板，但不参与放大场/倒影/拖放排序——
+             那套几何是水平轴写的，强行复用会把 Dock 主路径一起改坏。 -->
+        <ItemsControl x:Name="VerticalList" Visibility="Collapsed" Width="112"
+                      ItemsSource="{Binding Items}"
+                      ItemTemplateSelector="{StaticResource ItemSelector}"
+                      Margin="0,8,0,8"
+                      PreviewMouseLeftButtonUp="VerticalList_Click"
+                      PreviewMouseRightButtonUp="VerticalList_RightUp">
+            <ItemsControl.ItemsPanel>
+                <ItemsPanelTemplate>
+                    <StackPanel/>
+                </ItemsPanelTemplate>
+            </ItemsControl.ItemsPanel>
+        </ItemsControl>
+
         <dock:DockSurface x:Name="Surface" Margin="10,6"
                           ItemsSource="{Binding Items}"
                           TemplateSelector="{StaticResource ItemSelector}"/>
