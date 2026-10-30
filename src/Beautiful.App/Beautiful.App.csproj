@@ -18,4 +18,13 @@
     <Resource Include="Assets\Fonts\*.otf" />
     <Resource Include="Assets\Fonts\*.ttf" />
   </ItemGroup>
+  <!-- Native 产物随 publish 落到 exe 旁（Phase 2）；未构建 native 时条件为假，纯 C# 形态仍可发布。 -->
+  <ItemGroup>
+    <Content Include="..\Beautiful.Native\bin\$(Configuration)\Beautiful.Native.dll"
+             Condition="Exists('..\Beautiful.Native\bin\$(Configuration)\Beautiful.Native.dll')"
+             Link="Beautiful.Native.dll" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+    <Content Include="..\Beautiful.TrayBridge\bin\$(Configuration)\Beautiful.TrayBridge.dll"
+             Condition="Exists('..\Beautiful.TrayBridge\bin\$(Configuration)\Beautiful.TrayBridge.dll')"
+             Link="Beautiful.TrayBridge.dll" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+  </ItemGroup>
 </Project>

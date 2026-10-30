@@ -254,6 +254,12 @@
                             <TextBlock Text="动画" VerticalAlignment="Center"/>
                         </StackPanel>
                     </ListBoxItem>
+                    <ListBoxItem Tag="NativeSection">
+                        <StackPanel Orientation="Horizontal">
+                            <Path Data="{DynamicResource SymbolSystem}" Style="{StaticResource MacSymbol}" Margin="0,0,8,0"/>
+                            <TextBlock Text="底层增强" VerticalAlignment="Center"/>
+                        </StackPanel>
+                    </ListBoxItem>
                     <ListBoxItem Tag="PinnedSection">
                         <StackPanel Orientation="Horizontal">
                             <Path Data="{DynamicResource SymbolPinned}" Style="{StaticResource MacSymbol}" Margin="0,0,8,0"/>
@@ -340,6 +346,40 @@
                                   Checked="Reflection_Changed" Unchecked="Reflection_Changed"/>
                         <CheckBox x:Name="BounceCheck" Content="启动固定应用时播放弹跳动画"
                                   Margin="0,8,0,0" Checked="Bounce_Changed" Unchecked="Bounce_Changed"/>
+                    </StackPanel>
+                </Border>
+
+                <!-- ============ 底层增强（Phase 2 native） ============ -->
+                <Border x:Name="NativeSection" Style="{StaticResource SectionCard}">
+                    <StackPanel>
+                        <TextBlock Text="底层增强" Style="{StaticResource SectionTitle}"/>
+                        <CheckBox x:Name="NativeModulesCheck" Content="启用底层增强模块（总开关）"
+                                  Checked="Native_Changed" Unchecked="Native_Changed"/>
+                        <CheckBox x:Name="NativeBlurCheck" Content="材质引擎（DirectComposition HostBackdrop 实时模糊）"
+                                  Margin="0,8,0,0" Checked="Native_Changed" Unchecked="Native_Changed"/>
+                        <CheckBox x:Name="NativeCaptureCheck" Content="捕获服务（WGC/DXGI 优先，GDI 兜底）"
+                                  Margin="0,8,0,0" Checked="Native_Changed" Unchecked="Native_Changed"/>
+                        <CheckBox x:Name="NativeSceneCheck" Content="场景渲染器（genie/打开动画的 D3D11 地基）"
+                                  Margin="0,8,0,0" Checked="Native_Changed" Unchecked="Native_Changed"/>
+                        <CheckBox x:Name="NativeTrayBridgeCheck" Content="TrayBridge 注入（仅 explorer，只读；Phase 2 仅演练）"
+                                  Margin="0,8,0,0" Checked="Native_Changed" Unchecked="Native_Changed"/>
+
+                        <StackPanel Orientation="Horizontal" Margin="0,12,0,0">
+                            <TextBlock Text="材质质量" Style="{StaticResource RowLabel}" Width="72"/>
+                            <ComboBox x:Name="MaterialQualityBox" Width="220" VerticalAlignment="Center"
+                                      SelectionChanged="MaterialQuality_Changed">
+                                <ComboBoxItem Content="auto（按探针结果降级）" Tag="auto"/>
+                                <ComboBoxItem Content="live（强制 native 背板）" Tag="live"/>
+                                <ComboBoxItem Content="static（强制静态 tint）" Tag="static"/>
+                            </ComboBox>
+                        </StackPanel>
+
+                        <TextBlock x:Name="NativeHealthText" Style="{StaticResource HintText}" TextWrapping="Wrap"/>
+                        <StackPanel Orientation="Horizontal" Margin="0,10,0,0">
+                            <Button x:Name="InjectDrillButton" Content="注入演练…" Width="96" Height="28" Click="InjectDrill_Click"/>
+                        </StackPanel>
+                        <TextBlock Style="{StaticResource HintText}"
+                                   Text="注入演练只允许所有者真机执行：把 Beautiful.TrayBridge.dll 注入 explorer.exe，等心跳后立即卸载并确认 explorer 存活。失败只记日志，不重试、不连坐主程序。Phase 2 尚未做托盘像素读取。"/>
                     </StackPanel>
                 </Border>
 

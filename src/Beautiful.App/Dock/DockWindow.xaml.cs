@@ -15,6 +15,7 @@ using Beautiful.App.MediaWidget;
 using Beautiful.App.Preview;
 using Beautiful.App.Services;
 using Beautiful.App.Themes;
+using Beautiful.Core.Design;
 using Beautiful.Core.Dock;
 using Beautiful.Core.Layout;
 using Beautiful.Core.Themes;
@@ -108,6 +109,7 @@ public partial class DockWindow : AcrylicWindow
     private bool _appbarRegistered;
     private bool _closing; // OnClosing 起置位：阻止关闭前挂起的 BeginInvoke 重注册在 ABM_REMOVE 后复活 AppBar
     private HwndSource? _source;
+    private NativeMaterialHost? _nativeMaterial;
 
     public DockWindow(TaskbarManager? taskbar = null, Animation.MinimizeAnimator? animator = null)
     {
@@ -329,6 +331,7 @@ public partial class DockWindow : AcrylicWindow
         RegisterAndPositionAppBar();
         // 主题初值显式落地 + 静态订阅放最后（终审 I-6，与 OnClosed 解绑对称）：构造期 ThemeManager.Apply
         // 只更新全局资源字典，本窗口的亚克力/间距/放大参数从这里开始由 ThemeChanged 驱动，不再硬编码。
+        EnsureNativeMaterial();
         ApplyTheme(ThemeManager.Current);
         ThemeManager.ThemeChanged += OnThemeChanged;
         // 策略重放订阅与上面的 ThemeChanged 同一条时序纪律：句柄已生成、构造已完成，
@@ -363,6 +366,7 @@ public partial class DockWindow : AcrylicWindow
     private void ApplyTheme(ThemeDefinition theme)
     {
         ClearLegacyAccent("Dock");
+        UpdateNativeMaterial();
         // 排布参数：底色/圆角/字体走 DynamicResource，尺寸/间距/放大写入 DockSurface。
         // IconSize/MaxScale 由设置项驱动（DockIconSize / MagnificationStrength），主题只提供"是否放大"与间距，
         // 见 ApplySurfaceLayoutParams。尺寸变化会改条带高度 → 顺带重排 AppBar（若尚未注册则 no-op，
@@ -373,6 +377,27 @@ public partial class DockWindow : AcrylicWindow
         _vm.ApplySeparatorPolicy(theme.DockSeparatorsEnabled);
         Surface.Refresh();
         ScheduleReposition();
+    }
+
+    /// <summary>native 背板（Phase 2 T3）：探针可用才建；不可用保留 XAML 静态面板底。</summary>
+    private void EnsureNativeMaterial()
+    {
+        if (_nativeMaterial is not null || _hwnd == IntPtr.Zero) return;
+        var tokens = MacTokens.For(ThemeManager.IsDark);
+        var dpi = VisualTreeHelper.GetDpi(this).DpiScaleX;
+        _nativeMaterial = new NativeMaterialHost(
+            this, MacTokenDictionary.ParseArgb(tokens.DockBackground), 1f,
+            (float)(18.0 * dpi), ThemeManager.IsDark, "dock");
+    }
+
+    private void UpdateNativeMaterial()
+    {
+        EnsureNativeMaterial();
+        if (_nativeMaterial is null) return;
+        var tokens = MacTokens.For(ThemeManager.IsDark);
+        _nativeMaterial.SetTheme(MacTokenDictionary.ParseArgb(tokens.DockBackground), 1f, ThemeManager.IsDark);
+        // 背板胜出时只让出 DockPanelRoot 的底色/描边；DockSurface（图标/指示点）保持可见。
+        DockPanelRoot.Opacity = _nativeMaterial.IsActive ? 0 : 1;
     }
 
     /// <summary>
@@ -577,7 +602,9 @@ public partial class DockWindow : AcrylicWindow
 
     protected override void OnClosed(EventArgs e)
     {
-        ThemeManager.ThemeChanged -= OnThemeChanged; // 解除主题订阅，防止闭包引用已关闭窗口
+        ThemeManager.ThemeChanged -= OnThemeChanged;
+        _nativeMaterial?.Dispose();
+        _nativeMaterial = null; // 解除主题订阅，防止闭包引用已关闭窗口
         if (_taskbar is not null) _taskbar.PolicyApplied -= OnTaskbarPolicyApplied;
         _vm.Detach();
         _tracker.Dispose();

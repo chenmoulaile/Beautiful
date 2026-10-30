@@ -47,6 +47,12 @@ $dirty = git status --porcelain -- . ':!Directory.Build.props'
 if ($dirty) { throw "工作树有未提交改动，先提交后再发布：`n$dirty" }
 
 # 3) 测试门禁：不绿就不发布
+Step 'native 构建 + 冒烟门禁（Phase 2）'
+& cmd.exe /c "scripts\build-native.cmd Release"
+if ($LASTEXITCODE -ne 0) { throw 'native 构建失败' }
+& "tools\NativeSmoke\bin\Release\NativeSmoke.exe" "src\Beautiful.Native\bin\Release\Beautiful.Native.dll"
+if ($LASTEXITCODE -ne 0) { throw 'native 冒烟失败' }
+
 Step '构建 + 测试门禁'
 dotnet build Beautiful.sln -c Release | Out-Host
 if ($LASTEXITCODE -ne 0) { throw '构建失败' }

@@ -12,6 +12,7 @@ using Beautiful.App.Interop;
 using Beautiful.App.MediaWidget;
 using Beautiful.App.Services;
 using Beautiful.App.Themes;
+using Beautiful.Core.Design;
 using Beautiful.Core.Layout;
 using Beautiful.Core.Themes;
 using Beautiful.Core.TopBar;
@@ -76,6 +77,7 @@ public partial class TopBarWindow : AcrylicWindow
     private bool _appbarRegistered;
     private bool _closing;
     private HwndSource? _source;
+    private NativeMaterialHost? _nativeMaterial;
     // 最近一次协商出的**目标窗口矩形**（物理 px）。shell 在条带重排时会把顶栏窗口摆到"当前工作区顶边"
     // ——也就是我们自己预留带的下方一个条带高（本机实测漂到 (0,30)-(1024,60)），这就是用户投诉的
     // "顶栏不在最上方、上方露一截壁纸"。收到通知后按这个值重申一次，见 AssertWindowRect。
@@ -163,6 +165,7 @@ public partial class TopBarWindow : AcrylicWindow
         _appbarMsg = NativeMethods.RegisterWindowMessage("AppBarMessage");
         _taskbarCreatedMsg = NativeMethods.RegisterWindowMessage("TaskbarCreated");
         RegisterAndPositionAppBar();
+        EnsureNativeMaterial();
         ApplyTheme(ThemeManager.Current);
         StartForegroundTracking();
         StartStatusTracking();
@@ -181,6 +184,8 @@ public partial class TopBarWindow : AcrylicWindow
     protected override void OnClosed(EventArgs e)
     {
         ThemeManager.ThemeChanged -= OnThemeChanged;
+        _nativeMaterial?.Dispose();
+        _nativeMaterial = null;
         if (_subscribedMedia is not null) _subscribedMedia.PropertyChanged -= OnMediaChanged;
         _trayStripTimer?.Stop();
         _trayStripTimer = null;
@@ -374,6 +379,27 @@ public partial class TopBarWindow : AcrylicWindow
         // 整个窗口矩形）。theme 参数仍是本方法的语义入口（换主题即重落底色），底色值本身走 XAML 的
         // DynamicResource，不需要在这里搬运。
         ClearLegacyAccent("顶栏");
+        UpdateNativeMaterial();
+    }
+
+    /// <summary>native 背板（Phase 2 T3）：探针可用才建；不可用保留 XAML 静态三层底。</summary>
+    private void EnsureNativeMaterial()
+    {
+        if (_nativeMaterial is not null || _hwnd == IntPtr.Zero) return;
+        var tokens = MacTokens.For(ThemeManager.IsDark);
+        _nativeMaterial = new NativeMaterialHost(
+            this, MacTokenDictionary.ParseArgb(tokens.MenuBarBackground), 1f, 0f,
+            ThemeManager.IsDark, "menubar");
+    }
+
+    private void UpdateNativeMaterial()
+    {
+        EnsureNativeMaterial();
+        if (_nativeMaterial is null) return;
+        var tokens = MacTokens.For(ThemeManager.IsDark);
+        _nativeMaterial.SetTheme(MacTokenDictionary.ParseArgb(tokens.MenuBarBackground), 1f, ThemeManager.IsDark);
+        // 背板胜出时把 WPF 的静态底色让出来（保留 Glow/Edge 等细线层）；失败则恢复实心底。
+        BarBackground.Opacity = _nativeMaterial.IsActive ? 0 : 1;
     }
 
     // ---------- 前台应用名（Task 8） ----------

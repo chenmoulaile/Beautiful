@@ -23,17 +23,21 @@ set "DOTNET_NOLOGO=1"
 where dotnet >nul 2>nul
 if errorlevel 1 goto nodotnet
 
-echo [1/3] 清理旧目录：%OUT%
+echo [1/4] 清理旧目录：%OUT%
 if exist "%OUT%" rmdir /s /q "%OUT%"
 if not exist "%REPO_ROOT%\dist" mkdir "%REPO_ROOT%\dist"
 
-echo [2/3] 正在发布（自包含 win-x64，约 1-3 分钟）...
+echo [2/4] 编译 native（VC BuildTools v143；缺失则继续纯 C# 形态）...
+call "%REPO_ROOT%\scripts\build-native.cmd" Release
+if errorlevel 1 echo [warn] native 编译失败：继续发布纯 C# 产物（BEAUTIFUL_NONATIVE 形态）
+
+echo [3/4] 正在发布（自包含 win-x64，约 1-3 分钟）...
 dotnet publish "src\Beautiful.App" -c Release -r win-x64 --self-contained true -p:PublishSingleFile=false -p:UseAppHost=true -o "%OUT%"
 if errorlevel 1 goto fail
 
 if not exist "%OUT%\Beautiful.exe" goto missing
 for %%F in ("%OUT%\Beautiful.exe") do set "EXE_SIZE=%%~zF"
-echo [3/3] 发布完成。
+echo [4/4] 发布完成。
 echo.
 echo 真正可运行的软件目录：%OUT%
 echo 入口程序：           %OUT%\Beautiful.exe

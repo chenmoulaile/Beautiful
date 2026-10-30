@@ -24,6 +24,14 @@ jobs:
         with:
           dotnet-version: '8.0.x'
 
+      - name: 编译 native（v4 Phase 2，/W4 /WX）
+        shell: cmd
+        run: scripts\build-native.cmd Release
+
+      - name: NativeSmoke（无桌面部分进 CI）
+        shell: cmd
+        run: tools\NativeSmoke\bin\Release\NativeSmoke.exe src\Beautiful.Native\bin\Release\Beautiful.Native.dll
+
       - name: 还原与构建
         run: dotnet build Beautiful.sln -c Release
 

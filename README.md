@@ -7,7 +7,8 @@ Windows 11 桌面美化套件：悬浮 Dock（macOS 风格）+ macOS 顶栏 + Al
 Beautiful 接管日常桌面三件套：屏幕底部是悬浮 Dock（应用固定与启动、连续高斯放大、媒体胶囊、悬停 DWM 实时缩略图预览），屏幕顶部是 macOS 风格菜单栏（logo 菜单、前台应用名、真实"窗口"菜单、时钟/日历、音量/网络/电量、媒体迷你项），Alt+Tab 被替换为 macOS Cmd+Tab 风格的应用切换器。原生任务栏可选择完全隐藏、自动隐藏或保留。
 
 > **v4.0-alpha 进行中（2026-10-30）**：正在把 v3 的"Windows 桌面美化套件"收敛为 macOS Big Sur/Monterey 还原壳。
-> 本仓库的完成度声称一律以实测为准；当前 Phase 1（收敛与基底）已完成 T1-T5，T6/T7 与真机目视项仍在进行。
+> Phase 1（收敛与基底）已完成；Phase 2（C++ native 层脚手架/材质/捕获/场景/注入）已落地骨架，真机目视项待所有者回执。
+> 本仓库的完成度声称一律以实测为准。
 
 ## v4.0-alpha 变更（Phase 1 已完成部分，反馈→现在→证据）
 
@@ -22,8 +23,23 @@ Beautiful 接管日常桌面三件套：屏幕底部是悬浮 Dock（应用固�
 | SF Symbols 图标集（T6 起步） | `Assets/Symbols/Symbols.xaml`：60 个 24×24 自绘 Path + `MacSymbol` 单色描边样式（首批清单全覆盖：WiFi/音量/电池四档、蓝牙、亮度、输入法、账户、USB、锁屏/睡眠/重启/关机、播放控制、视图/边栏/Quick Look 等）；设置侧栏已实际使用；**不新增 Segoe Fluent Icons 码点** | XAML 实际解析通过（60 键）；菜单栏/托盘既有图标仍为 Segoe，按后续 Phase 逐步替换（**目视 UNVERIFIED(owner)**） |
 | 设置页 macOS 侧栏（T7） | 左侧 11 组导航（外观/Dock 语义/菜单栏/显示器/切换器/媒体/启动台与搜索/动画/固定应用/系统/关于）+ 右侧卡片滚动；补齐启动器开关与热键 UI、动画引擎选择、关于卡 | 代码/XAML 编译；**目视 UNVERIFIED(owner)**。Dock/菜单栏/触发角/底层增强等分组在对应 Phase 落地后继续细化 |
 
-> 门禁现状：`dotnet build -c Release` **0 警告 / 0 错误**；`dotnet test` **774 通过 / 0 失败**（基线 828，差额全部来自删除功能的测试）。
-> Phase 1 收尾项：SF Symbols 全量替换（本批 60 个覆盖首批清单；菜单栏/托盘/弹层仍用 Segoe）、设置页完整 IA（Dock/菜单栏/触发角/底层增强分组随 Phase 3/4 细化）、真机亮暗/SF Pro/侧栏目视回执。Phase 2 native 层尚未开始。
+> 门禁现状：`dotnet build -c Release` **0 警告 / 0 错误**；`dotnet test` **777 通过 / 0 失败**（基线 828，差额全部来自删除功能的测试）。
+> Phase 1 收尾项：SF Symbols 全量替换（本批 60 个覆盖首批清单；菜单栏/托盘/弹层仍用 Segoe）、设置页完整 IA（Dock/菜单栏/触发角/底层增强分组随 Phase 3/4 细化）、真机亮暗/SF Pro/侧栏目视回执。Phase 2 native 层已开始（见下节）。
+
+## v4.0-alpha Phase 2 变更（Native 层，进行中）
+
+| 目标 | 现在 | 证据/边界 |
+|---|---|---|
+| C++ 进程内层 + 注入 payload | `src/Beautiful.Native/`（C ABI、材质/捕获/场景/注入）、`src/Beautiful.TrayBridge/`（空 payload：心跳/卸载/宿主 Mutex 自卸载）、`tools/NativeSmoke/`；`scripts/build-native.cmd` 用 VS2022 v143 /W4 + /WX 编译 | native 构建 **0 警告 0 错误**；`NativeSmoke`：ABI/health/scene/screen capture/inject gate **5 PASS / 1 SKIP / 0 FAIL** |
+| 协议固定布局 | `Core/Native/NativeProtocol`（BnRect/BnHealth/BnMaterialDesc/BnCaptureResult）+ 尺寸/偏移单测；NativeSmoke 打印同一组 `sizeof` | `NativeProtocolTests`；C# 777 通过 |
+| 材质引擎（D-BLUR 一级路） | DComp + `Windows.UI.Composition` HostBackdrop 背板窗口；`NativeMaterialHost` 按 `GetWindowRect` 物理像素同步菜单栏/Dock，探针可用时让出 WPF 静态底 | **本 VM HostBackdrop 探针失败（code=-2）→ 自动回落静态 tint**；真机实时模糊 **UNVERIFIED(owner)** |
+| 捕获服务 | WGC（Graphics Capture）优先 → native PrintWindow → 屏幕 BitBlt；5×4 纯色判废；`WindowCapture` 在开关开启时优先走 native | `NativeSmoke` 屏幕捕获 PASS；WGC 真窗口路径 **UNVERIFIED(owner)**（本 VM 无控制台窗口可抓） |
+| 场景渲染骨架 | D3D11 离屏纹理/回读基准图（渐变+网格），为 Phase 3-T7 genie 铺路 | `NativeSmoke scene offscreen render` PASS |
+| 注入框架 | 仅 explorer、OS build 闸门、心跳、卸载闭环、宿主 Mutex 自卸载兜底；设置页「底层增强」总/分开关 + 注入演练二次确认 | **默认关闭 `NativeTrayBridge`**；注入演练 **UNVERIFIED(owner)**，核对清单 `scripts/verify/native-inject-checklist.md` |
+| 纯 C# 形态 | `BEAUTIFUL_NONATIVE=1`/DLL 缺失/坏镜像/探针失败全部只记日志并降级；`BEAUTIFUL_NONATIVE=1` 仍是 CI/无桌面形态 | 所有 native 调用过 `NativeLoader` Guard；失败不抛给 UI |
+| 发布/诊断 | `install-local.cmd` 先编译 native 再 publish；CI 增 native 构建 + NativeSmoke；`diag.ps1` 增 `[Native 模块]` 段 | 本机 `dist\Beautiful\Beautiful.exe` 已重新发布；版本 `4.0.0-alpha.1` |
+
+> Phase 2 未完成/待回执：HostBackdrop 真机实拍、WGC 对 Chrome/Electron 窗口的实测、注入演练 explorer 健康回执、看门狗"explorer 异常重启 ≥2 次/10min 自动禁用"（当前只有手动开关与 payload 自卸载兜底）。
 
 ## 本地运行（真正能跑的那份在哪）
 

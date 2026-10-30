@@ -266,6 +266,30 @@ Show-Section -Label '策略（原生任务栏）' `
     -Pattern '任务栏策略|ReclaimBottomStrip|EnableAutoHide|DisableAutoHide|HideAll|Restore\(' -Take 8 `
     -Empty '(无策略行)'
 
+# Native 模块（v4 Phase 2）：DLL 存在性 + native.log 最近 20 行（含探针/降级原因）
+Write-Output ''
+Write-Output '[Native 模块]'
+Show-Section -Label 'Native 层（主日志）' `
+    -Pattern 'Native 层|native 材质|WGC|TrayBridge' -Take 12 `
+    -Empty '(无 native 主日志行——native 未加载或本版未启用)'
+$appDir = Split-Path -Parent $log.Directory
+foreach ($name in @('Beautiful.Native.dll', 'Beautiful.TrayBridge.dll')) {
+    $p = Join-Path $appDir $name
+    if (Test-Path $p) {
+        $f = Get-Item $p
+        Write-Output ('  ' + $name + ' 存在 ' + $f.Length + ' B  ' + $f.LastWriteTime.ToString('yyyy-MM-dd HH:mm'))
+    } else {
+        Write-Output ('  ' + $name + ' 缺失（纯 C# 形态）')
+    }
+}
+$nativeLog = Join-Path $log.Directory 'native.log'
+if (Test-Path $nativeLog) {
+    Write-Output '  native.log 最近 20 行：'
+    foreach ($h in @(Get-Content -Path $nativeLog -Encoding UTF8 -Tail 20)) { Write-Output ('    ' + $h) }
+} else {
+    Write-Output '  (无 native.log——native 层未加载或未产生日志)'
+}
+
 # 掉帧：帧间隔分布（口径与 scripts/frametime.ps1 一致：MAX 只含 0<Δ<500ms，RAW_MAX 含全部正间隔）
 Write-Output ''
 Write-Output '[掉帧 / 帧间隔统计（BEAUTIFUL_FRAME）]'

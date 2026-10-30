@@ -11,6 +11,10 @@ public class AppSettingsTests
         Assert.Equal("macos", s.Theme);
         Assert.Equal("dark", s.Appearance);
         Assert.Equal("blue", s.AccentColor);
+        Assert.True(s.NativeModules);
+        Assert.True(s.NativeBlur);
+        Assert.False(s.NativeTrayBridge);   // Phase 2 注入默认关：真机演练回执后才允许默认开
+        Assert.Equal("auto", s.MaterialQuality);
         Assert.Equal("hide", s.TaskbarPolicy);
         Assert.False(s.Autostart);
         Assert.True(s.ShowMediaCapsule);
@@ -28,6 +32,8 @@ public class AppSettingsTests
         Assert.Equal("dark", new AppSettings { Appearance = "sepia" }.Normalized().Appearance);
         Assert.Equal("purple", new AppSettings { AccentColor = " PURPLE " }.Normalized().AccentColor);
         Assert.Equal("blue", new AppSettings { AccentColor = "chartreuse" }.Normalized().AccentColor);
+        Assert.Equal("live", new AppSettings { MaterialQuality = "LIVE" }.Normalized().MaterialQuality);
+        Assert.Equal("auto", new AppSettings { MaterialQuality = "turbo" }.Normalized().MaterialQuality);
         Assert.Equal("hide", new AppSettings { TaskbarPolicy = "always" }.Normalized().TaskbarPolicy);
         Assert.Equal("autohide", new AppSettings { TaskbarPolicy = "AutoHide" }.Normalized().TaskbarPolicy);
         Assert.Equal("keep", new AppSettings { TaskbarPolicy = "keep" }.Normalized().TaskbarPolicy);

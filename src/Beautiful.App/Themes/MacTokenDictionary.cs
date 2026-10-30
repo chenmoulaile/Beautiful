@@ -107,4 +107,18 @@ public static class MacTokenDictionary
             return fallback;
         }
     }
+
+    /// <summary>#RRGGBB / #AARRGGBB → 0xAARRGGBB（native 背板 tint 用；解析失败回透明）。</summary>
+    public static uint ParseArgb(string hex)
+    {
+        try
+        {
+            var c = (Color)ColorConverter.ConvertFromString(hex);
+            return ((uint)c.A << 24) | ((uint)c.R << 16) | ((uint)c.G << 8) | c.B;
+        }
+        catch (FormatException)
+        {
+            return 0;
+        }
+    }
 }

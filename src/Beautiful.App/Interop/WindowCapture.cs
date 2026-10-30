@@ -1,5 +1,6 @@
 using System.Runtime.InteropServices;
 using System.Windows.Interop;
+using System.Windows.Media;
 using System.Windows.Media.Imaging;
 using Beautiful.App.Services;
 using Beautiful.Core.Imaging;
@@ -68,9 +69,47 @@ internal static class WindowCapture
         // 最小化中的窗口矩形是 (-32000,-32000) 那套哨兵值；负/零尺寸直接判不可用
         if (width <= 0 || height <= 0 || width > 16384 || height > 16384) return null;
 
+        var viaNative = CaptureViaNative(hwnd, width, height);
+        if (viaNative is not null) return viaNative;
         var viaPrintWindow = CaptureViaPrintWindow(hwnd, width, height);
         if (viaPrintWindow is not null) return viaPrintWindow;
         return CaptureViaScreen(rect, width, height);
+    }
+
+    /// <summary>
+    /// native 捕获服务（Phase 2）：开启时作为 PrintWindow 之外的又一条路；返回 null 继续走既有 C# 退路。
+    /// 当前 native 实现为 PrintWindow→BitBlt（WGC/DXGI 是后续增强），判废逻辑在 native 内完成。
+    /// </summary>
+    private static BitmapSource? CaptureViaNative(IntPtr hwnd, int width, int height)
+    {
+        var settings = SettingsService.Current;
+        if (!settings.NativeModules || !settings.NativeCapture || !NativeLoader.Available) return null;
+        var handle = NativeLoader.CaptureCreate();
+        if (handle == IntPtr.Zero) return null;
+        try
+        {
+            var pixels = new byte[width * height * 4];
+            var status = NativeLoader.CaptureWindow(handle, hwnd, pixels, out var result);
+            if (status == 0 && result.Rejected == 0 && result.Width > 0 && result.Height > 0)
+            {
+                var source = BitmapSource.Create(result.Width, result.Height, 96, 96,
+                    PixelFormats.Bgra32, null, pixels, result.Stride);
+                source.Freeze();
+                Logger.Info($"窗口抓取：层=native(mode={result.Mode}) 位图={result.Width}×{result.Height}");
+                return source;
+            }
+            Logger.Info($"窗口抓取：native 未命中（code={status}, rejected={result.Rejected}），继续 C# 退路");
+            return null;
+        }
+        catch (Exception ex)
+        {
+            Logger.Warn($"窗口抓取失败(native): {ex.GetType().Name} {ex.Message}");
+            return null;
+        }
+        finally
+        {
+            NativeLoader.CaptureDestroy(handle);
+        }
     }
 
     /// <summary>

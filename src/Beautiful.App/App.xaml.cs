@@ -95,6 +95,9 @@ public partial class App : Application
         // 4. 设置加载：先于任何 VM 构造（DockWindow/MediaViewModel 构造期读设置）
         SettingsService.Load();
 
+        // 4.1 native 健康（v4 Phase 2）：缺失/BEAUTIFUL_NONATIVE 都只记日志，纯 C# 形态继续启动。
+        Logger.Info($"Native 层健康：{NativeLoader.Status}（modules=0x{NativeLoader.Modules:X}）");
+
         // 4.5 系统亮暗监听（v4 Phase 1 T4）：外观=auto 时由 WM_SETTINGCHANGE 驱动换 token。
         // 监听失败只影响实时性，启动时取样仍然有效（见 SystemAppearance.Start 的降级日志）。
         SystemAppearance.Start();

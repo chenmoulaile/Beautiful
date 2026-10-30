@@ -162,6 +162,13 @@ public partial class SettingsWindow : Window
         LauncherEnabledCheck.IsChecked = s.LauncherEnabled;
         LauncherHotkeyBox.Text = s.LauncherHotkey;
         MinimizeAnimationCheck.IsChecked = s.MinimizeAnimation;
+        NativeModulesCheck.IsChecked = s.NativeModules;
+        NativeBlurCheck.IsChecked = s.NativeBlur;
+        NativeCaptureCheck.IsChecked = s.NativeCapture;
+        NativeSceneCheck.IsChecked = s.NativeScene;
+        NativeTrayBridgeCheck.IsChecked = s.NativeTrayBridge;
+        SelectByTag(MaterialQualityBox, s.MaterialQuality, "auto");
+        UpdateNativeControls();
 
         LoadMonitorSelectors();
 
@@ -359,6 +366,99 @@ public partial class SettingsWindow : Window
         if (_loading) return;
         var value = TagOf(GenieEngineBox.SelectedItem) ?? "mesh";
         SettingsService.UpdateAndSave(SettingsService.Current with { GenieEngine = value });
+    }
+
+    // ---------- 底层增强（Phase 2） ----------
+
+    private void Native_Changed(object sender, RoutedEventArgs e)
+    {
+        if (_loading) return;
+        SettingsService.UpdateAndSave(SettingsService.Current with
+        {
+            NativeModules = NativeModulesCheck.IsChecked == true,
+            NativeBlur = NativeBlurCheck.IsChecked == true,
+            NativeCapture = NativeCaptureCheck.IsChecked == true,
+            NativeScene = NativeSceneCheck.IsChecked == true,
+            NativeTrayBridge = NativeTrayBridgeCheck.IsChecked == true
+        });
+        UpdateNativeControls();
+    }
+
+    private void MaterialQuality_Changed(object sender, SelectionChangedEventArgs e)
+    {
+        if (_loading) return;
+        SettingsService.UpdateAndSave(SettingsService.Current with
+        {
+            MaterialQuality = TagOf(MaterialQualityBox.SelectedItem) ?? "auto"
+        });
+    }
+
+    /// <summary>native 不可用时把子项置灰并写明原因；总开关关闭时同理（不制造亮着却无效的勾选框）。</summary>
+    private void UpdateNativeControls()
+    {
+        var available = NativeLoader.Available;
+        var total = NativeModulesCheck.IsChecked == true;
+        var enabled = available && total;
+        NativeBlurCheck.IsEnabled = enabled;
+        NativeCaptureCheck.IsEnabled = enabled;
+        NativeSceneCheck.IsEnabled = enabled;
+        NativeTrayBridgeCheck.IsEnabled = enabled;
+        MaterialQualityBox.IsEnabled = enabled;
+        InjectDrillButton.IsEnabled = enabled && NativeTrayBridgeCheck.IsChecked == true;
+
+        var reason = !available
+            ? NativeLoader.Status
+            : !total ? "总开关已关闭（纯 C# 形态）" : "";
+        NativeHealthText.Text = available
+            ? $"Native {NativeLoader.Version} · modules=0x{NativeLoader.Modules:X}"
+            : $"不可用：{reason}";
+        NativeHealthText.ToolTip = string.IsNullOrEmpty(reason) ? null : reason;
+    }
+
+    /// <summary>
+    /// 注入演练：只有所有者点击 + 二次确认才执行；注入后立即卸载并提示检查 explorer。
+    /// 绝不自动执行（注入 explorer 失败的代价是桌面重启）。
+    /// </summary>
+    private void InjectDrill_Click(object sender, RoutedEventArgs e)
+    {
+        if (!NativeLoader.Available)
+        {
+            MessageBox.Show(this, $"Native 层不可用：{NativeLoader.Status}", "注入演练",
+                MessageBoxButton.OK, MessageBoxImage.Information);
+            return;
+        }
+        if (NativeTrayBridgeCheck.IsChecked != true)
+        {
+            MessageBox.Show(this, "请先勾选“TrayBridge 注入”。", "注入演练",
+                MessageBoxButton.OK, MessageBoxImage.Information);
+            return;
+        }
+        var probe = NativeLoader.InjectProbe();
+        if (probe != 0)
+        {
+            MessageBox.Show(this, $"OS build 不在白名单：code={probe}\n{NativeLoader.LastError()}", "注入演练",
+                MessageBoxButton.OK, MessageBoxImage.Warning);
+            return;
+        }
+        if (MessageBox.Show(this,
+                "将把 Beautiful.TrayBridge.dll 注入 explorer.exe（空 payload：只做心跳/卸载）。\n\n" +
+                "这是高风险演练：失败可能导致桌面重启。确认现在执行？",
+                "注入演练", MessageBoxButton.YesNo, MessageBoxImage.Warning) != MessageBoxResult.Yes)
+            return;
+
+        var dll = System.IO.Path.Combine(AppContext.BaseDirectory, "Beautiful.TrayBridge.dll");
+        var injected = NativeLoader.InjectExplorer(dll);
+        if (injected != 0)
+        {
+            MessageBox.Show(this, $"注入失败 code={injected}\n{NativeLoader.LastError()}", "注入演练",
+                MessageBoxButton.OK, MessageBoxImage.Error);
+            return;
+        }
+        var unload = NativeLoader.InjectUnload();
+        MessageBox.Show(this,
+            $"注入成功；卸载命令={unload}。\n请确认 explorer 未重启、桌面无异常，并把 logs/native.log 与 %TEMP%\\Beautiful.TrayBridge.log 发回。",
+            "注入演练", MessageBoxButton.OK, MessageBoxImage.Information);
+        UpdateNativeControls();
     }
 
     private void Bounce_Changed(object sender, RoutedEventArgs e)

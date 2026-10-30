@@ -170,6 +170,31 @@ public sealed record AppSettings
     /// </summary>
     public static IReadOnlyList<string> KnownIconTreatments { get; } = Imaging.IconTreatment.Known;
 
+    // ---------- Native 层开关（v4 Phase 2） ----------
+
+    /// <summary>底层增强模块总开关；false = 等价 BEAUTIFUL_NONATIVE=1（纯 C# 形态）。</summary>
+    public bool NativeModules { get; init; } = true;
+
+    /// <summary>材质引擎（DComp HostBackdrop 实时模糊）。</summary>
+    public bool NativeBlur { get; init; } = true;
+
+    /// <summary>捕获服务（WGC/DXGI 优先，GDI 兜底）。</summary>
+    public bool NativeCapture { get; init; } = true;
+
+    /// <summary>场景渲染器（genie/打开动画的 D3D11 地基）。</summary>
+    public bool NativeScene { get; init; } = true;
+
+    /// <summary>
+    /// TrayBridge 注入开关。<b>默认 false</b>：Phase 2 只做"注入→心跳→干净卸载"演练，
+    /// 所有者真机回执通过前不默认开启（注入 explorer 的代价是桌面重启，见总纲 §4.4）。
+    /// </summary>
+    public bool NativeTrayBridge { get; init; }
+
+    /// <summary>材质质量："auto"（按探针结果）/ "live"（强制 native）/ "static"（强制静态 tint）。</summary>
+    public string MaterialQuality { get; init; } = "auto";
+
+    public static IReadOnlyList<string> KnownMaterialQualities { get; } = ["auto", "live", "static"];
+
     /// <summary>Dock 图标尺寸下限（供设置面板滑杆复用）。</summary>
     public const int MinDockIconSize = 32;
 
@@ -226,7 +251,8 @@ public sealed record AppSettings
         DockMonitor = MonitorSelectorOrDefault(DockMonitor),
         TopBarMonitor = MonitorSelectorOrDefault(TopBarMonitor),
         IconTreatment = Canonical(IconTreatment, "auto", KnownIconTreatments),
-        GenieEngine = Canonical(GenieEngine, "mesh", KnownGenieEngines)
+        GenieEngine = Canonical(GenieEngine, "mesh", KnownGenieEngines),
+        MaterialQuality = Canonical(MaterialQuality, "auto", KnownMaterialQualities)
     };
 
     /// <summary>枚举串规范化：null/空白/大小写与首尾空白差异都归一为小写标识；不在白名单内取兜底。</summary>
