@@ -11,12 +11,14 @@ namespace Beautiful.Core.Finder;
 /// <param name="Size">字节数（文件夹通常为 0）。</param>
 /// <param name="ModifiedUtc">修改时间（UTC）。</param>
 /// <param name="Kind">类型描述，例如 Folder/Document/Image。</param>
+/// <param name="IsHidden">是否隐藏/系统项（⇧⌘. 控制是否显示，显示时半透明——macOS 语义）。</param>
 public readonly record struct FinderEntry(
     string Name,
     bool IsDirectory,
     long Size,
     DateTime ModifiedUtc,
-    string Kind);
+    string Kind,
+    bool IsHidden = false);
 
 /// <summary>Finder 列表可排序的列。</summary>
 public enum FinderSortKey

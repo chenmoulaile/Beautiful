@@ -17,7 +17,7 @@ public enum QuickLookKind
     /// <summary>音视频：MediaElement 播放。</summary>
     Media,
 
-    /// <summary>PDF：Phase 6-b 尚未接入渲染器，当前显示信息卡 + 明确说明。</summary>
+    /// <summary>PDF：Windows.Data.Pdf 渲染首页（Phase 6-b）；引擎拒绝该文件时回退信息卡并写明原因。</summary>
     Pdf,
 
     /// <summary>信息卡：图标/名称/大小/种类/修改日期；也是所有未知类型与读取失败的兜底。</summary>

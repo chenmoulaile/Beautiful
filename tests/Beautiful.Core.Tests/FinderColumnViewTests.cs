@@ -177,6 +177,21 @@ public class FinderColumnViewTests
     }
 
     [Fact]
+    public void 按祖先链重建时父列高亮展开的子目录()
+    {
+        var state = new FinderColumnState(@"C:\");
+
+        Assert.True(state.SetChainWithSelections(
+            new[] { @"C:\", @"C:\Users", @"C:\Users\me", @"C:\Users\me\Docs" }));
+
+        Assert.Equal("Users", state.SelectionAt(0));
+        Assert.Equal("me", state.SelectionAt(1));
+        Assert.Equal("Docs", state.SelectionAt(2));
+        Assert.Null(state.SelectionAt(3));       // 末列（当前目录）自身没有选中项
+        Assert.Equal(3, state.FocusIndex);
+    }
+
+    [Fact]
     public void 空链或含空路径的链被整条拒绝()
     {
         var state = new FinderColumnState(Root);

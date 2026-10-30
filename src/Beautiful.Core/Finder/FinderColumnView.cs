@@ -111,6 +111,30 @@ public sealed class FinderColumnState
     }
 
     /// <summary>
+    /// 用祖先链替换列栈，并按链推出每列选中项：列 <c>i</c> 的选中项 = 链中 <c>i+1</c> 的显示名。
+    /// <para>
+    /// 这是列视图导航后的视觉恢复逻辑：从 <c>C:\Users\me\Docs</c> 重建时，三列分别是
+    /// <c>C:\</c>（选中 Users）、<c>C:\Users</c>（选中 me）、<c>C:\Users\me</c>（选中 Docs），
+    /// 于是"当前目录"在父列里也是高亮的——正是 macOS 列视图的样子。
+    /// </para>
+    /// </summary>
+    /// <param name="chain">至少含一项的路径链；空集合或含空路径返回 false 且不改状态。</param>
+    public bool SetChainWithSelections(IReadOnlyList<string>? chain)
+    {
+        if (!SetChain(chain))
+        {
+            return false;
+        }
+
+        for (var i = 0; i + 1 < _columns.Count; i++)
+        {
+            _selections[i] = FinderPaths.DisplayName(_columns[i + 1]);
+        }
+
+        return true;
+    }
+
+    /// <summary>
     /// 在某列上选中一项（点击/键盘选择都走这里）。
     /// </summary>
     /// <param name="index">列索引，越界返回 false。</param>
