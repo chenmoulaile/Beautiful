@@ -254,6 +254,12 @@
                             <TextBlock Text="动画" VerticalAlignment="Center"/>
                         </StackPanel>
                     </ListBoxItem>
+                    <ListBoxItem Tag="HotCornerSection">
+                        <StackPanel Orientation="Horizontal">
+                            <Path Data="{DynamicResource SymbolArrows}" Style="{StaticResource MacSymbol}" Margin="0,0,8,0"/>
+                            <TextBlock Text="触发角" VerticalAlignment="Center"/>
+                        </StackPanel>
+                    </ListBoxItem>
                     <ListBoxItem Tag="NativeSection">
                         <StackPanel Orientation="Horizontal">
                             <Path Data="{DynamicResource SymbolSystem}" Style="{StaticResource MacSymbol}" Margin="0,0,8,0"/>
@@ -354,6 +360,66 @@
                                   Checked="Reflection_Changed" Unchecked="Reflection_Changed"/>
                         <CheckBox x:Name="BounceCheck" Content="启动固定应用时播放弹跳动画"
                                   Margin="0,8,0,0" Checked="Bounce_Changed" Unchecked="Bounce_Changed"/>
+                    </StackPanel>
+                </Border>
+
+                <!-- ============ 触发角（P5-T2） ============ -->
+                <Border x:Name="HotCornerSection" Style="{StaticResource SectionCard}">
+                    <StackPanel>
+                        <TextBlock Text="触发角" Style="{StaticResource SectionTitle}"/>
+                        <TextBlock Text="光标在屏幕角落驻留 300ms 触发；全屏应用时抑制。默认全部禁用。" Style="{StaticResource HintText}"/>
+                        <Grid Margin="0,10,0,0">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*"/>
+                                <ColumnDefinition Width="*"/>
+                            </Grid.ColumnDefinitions>
+                            <Grid.RowDefinitions>
+                                <RowDefinition Height="Auto"/>
+                                <RowDefinition Height="Auto"/>
+                            </Grid.RowDefinitions>
+                            <StackPanel Grid.Row="0" Grid.Column="0" Margin="0,0,8,8">
+                                <TextBlock Text="左上" FontSize="11" Opacity="0.72"/>
+                                <ComboBox x:Name="HotCornerTopLeftBox" Width="180" HorizontalAlignment="Left"
+                                          SelectionChanged="HotCorner_Changed">
+                                    <ComboBoxItem Content="禁用" Tag="disabled"/>
+                                    <ComboBoxItem Content="显示桌面" Tag="showdesktop"/>
+                                    <ComboBoxItem Content="锁定屏幕" Tag="lock"/>
+                                    <ComboBoxItem Content="睡眠" Tag="sleep"/>
+                                </ComboBox>
+                            </StackPanel>
+                            <StackPanel Grid.Row="0" Grid.Column="1" Margin="0,0,0,8">
+                                <TextBlock Text="右上" FontSize="11" Opacity="0.72"/>
+                                <ComboBox x:Name="HotCornerTopRightBox" Width="180" HorizontalAlignment="Left"
+                                          SelectionChanged="HotCorner_Changed">
+                                    <ComboBoxItem Content="禁用" Tag="disabled"/>
+                                    <ComboBoxItem Content="显示桌面" Tag="showdesktop"/>
+                                    <ComboBoxItem Content="锁定屏幕" Tag="lock"/>
+                                    <ComboBoxItem Content="睡眠" Tag="sleep"/>
+                                </ComboBox>
+                            </StackPanel>
+                            <StackPanel Grid.Row="1" Grid.Column="0" Margin="0,0,8,0">
+                                <TextBlock Text="左下" FontSize="11" Opacity="0.72"/>
+                                <ComboBox x:Name="HotCornerBottomLeftBox" Width="180" HorizontalAlignment="Left"
+                                          SelectionChanged="HotCorner_Changed">
+                                    <ComboBoxItem Content="禁用" Tag="disabled"/>
+                                    <ComboBoxItem Content="显示桌面" Tag="showdesktop"/>
+                                    <ComboBoxItem Content="锁定屏幕" Tag="lock"/>
+                                    <ComboBoxItem Content="睡眠" Tag="sleep"/>
+                                </ComboBox>
+                            </StackPanel>
+                            <StackPanel Grid.Row="1" Grid.Column="1">
+                                <TextBlock Text="右下" FontSize="11" Opacity="0.72"/>
+                                <ComboBox x:Name="HotCornerBottomRightBox" Width="180" HorizontalAlignment="Left"
+                                          SelectionChanged="HotCorner_Changed">
+                                    <ComboBoxItem Content="禁用" Tag="disabled"/>
+                                    <ComboBoxItem Content="显示桌面" Tag="showdesktop"/>
+                                    <ComboBoxItem Content="锁定屏幕" Tag="lock"/>
+                                    <ComboBoxItem Content="睡眠" Tag="sleep"/>
+                                </ComboBox>
+                            </StackPanel>
+                        </Grid>
+                        <TextBlock Style="{StaticResource HintText}"
+                                   Text="Launchpad / 屏保动作依赖 Phase 5 的 Launchpad 与屏保接线，本版不提供假选项；触发角只读光标位置，不装鼠标钩子。"/>
                     </StackPanel>
                 </Border>
 

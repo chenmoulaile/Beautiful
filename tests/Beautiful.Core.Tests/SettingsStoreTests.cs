@@ -19,6 +19,8 @@ public class AppSettingsTests
         Assert.Equal("genie", s.MinimizeEffect);
         Assert.Equal(1.0, s.AnimationSpeed);
         Assert.Equal("", s.MinimizeExcludes);
+        Assert.Equal("disabled", s.HotCornerTopLeft);
+        Assert.Equal("disabled", s.HotCornerBottomRight);
         Assert.Equal("hide", s.TaskbarPolicy);
         Assert.False(s.Autostart);
         Assert.True(s.ShowMediaCapsule);
@@ -42,6 +44,8 @@ public class AppSettingsTests
         Assert.Equal("genie", new AppSettings { MinimizeEffect = "bounce" }.Normalized().MinimizeEffect);
         Assert.Equal(2.0, new AppSettings { AnimationSpeed = 9 }.Normalized().AnimationSpeed);
         Assert.Equal(0.5, new AppSettings { AnimationSpeed = 0.1 }.Normalized().AnimationSpeed);
+        Assert.Equal("showdesktop", new AppSettings { HotCornerTopLeft = "SHOWDESKTOP" }.Normalized().HotCornerTopLeft);
+        Assert.Equal("disabled", new AppSettings { HotCornerBottomRight = "nuke" }.Normalized().HotCornerBottomRight);
         Assert.Equal("hide", new AppSettings { TaskbarPolicy = "always" }.Normalized().TaskbarPolicy);
         Assert.Equal("autohide", new AppSettings { TaskbarPolicy = "AutoHide" }.Normalized().TaskbarPolicy);
         Assert.Equal("keep", new AppSettings { TaskbarPolicy = "keep" }.Normalized().TaskbarPolicy);

@@ -44,6 +44,7 @@ public partial class App : Application
 
     private TopBarWindow? _topBar;
     private FullscreenAvoidanceService? _fullscreenAvoidance;
+    private HotCornerService? _hotCorners;
     private Switcher.SwitcherService? _switcher;
     private Switcher.SwitcherWindow? _switcherWindow;
     private Launcher.LauncherService? _launcher;
@@ -188,6 +189,8 @@ public partial class App : Application
         SystemAppearance.Stop();
         _fullscreenAvoidance?.Dispose();
         _fullscreenAvoidance = null;
+        _hotCorners?.Dispose();
+        _hotCorners = null;
         _tray?.Dispose();
         _tray = null;
         _animator?.Dispose();   // WinEvent 钩子必须卸载（幂等）
@@ -397,8 +400,13 @@ public partial class App : Application
     {
         _fullscreenAvoidance?.Dispose();
         _fullscreenAvoidance = null;
+        _hotCorners?.Dispose();
+        _hotCorners = null;
         if (_dock is not null && !_exiting)
+        {
             _fullscreenAvoidance = new FullscreenAvoidanceService(_dock, _topBar);
+            _hotCorners = new HotCornerService(_dock.Tracker);
+        }
     }
 
     /// <summary>设置页开关的即时生效入口（Task 16 设置 UI 接线用）：落盘 + 显示/隐藏，无需重启。</summary>

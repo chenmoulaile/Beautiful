@@ -23,7 +23,7 @@ Beautiful 接管日常桌面三件套：屏幕底部是悬浮 Dock（应用固�
 | SF Symbols 图标集（T6 起步） | `Assets/Symbols/Symbols.xaml`：60 个 24×24 自绘 Path + `MacSymbol` 单色描边样式（首批清单全覆盖：WiFi/音量/电池四档、蓝牙、亮度、输入法、账户、USB、锁屏/睡眠/重启/关机、播放控制、视图/边栏/Quick Look 等）；设置侧栏已实际使用；**不新增 Segoe Fluent Icons 码点** | XAML 实际解析通过（60 键）；菜单栏/托盘既有图标仍为 Segoe，按后续 Phase 逐步替换（**目视 UNVERIFIED(owner)**） |
 | 设置页 macOS 侧栏（T7） | 左侧 11 组导航（外观/Dock 语义/菜单栏/显示器/切换器/媒体/启动台与搜索/动画/固定应用/系统/关于）+ 右侧卡片滚动；补齐启动器开关与热键 UI、动画引擎选择、关于卡 | 代码/XAML 编译；**目视 UNVERIFIED(owner)**。Dock/菜单栏/触发角/底层增强等分组在对应 Phase 落地后继续细化 |
 
-> 门禁现状：`dotnet build -c Release` **0 警告 / 0 错误**；`dotnet test` **785 通过 / 0 失败**（基线 828，差额全部来自删除功能的测试）。
+> 门禁现状：`dotnet build -c Release` **0 警告 / 0 错误**；`dotnet test` **797 通过 / 0 失败**（基线 828，差额全部来自删除功能的测试）。
 > Phase 1 收尾项：SF Symbols 全量替换（本批 60 个覆盖首批清单；菜单栏/托盘/弹层仍用 Segoe）、设置页完整 IA（Dock/菜单栏/触发角/底层增强分组随 Phase 3/4 细化）、真机亮暗/SF Pro/侧栏目视回执。Phase 2 native 层已开始（见下节）。
 
 ## v4.0-alpha Phase 2 变更（Native 层，进行中）
@@ -31,7 +31,7 @@ Beautiful 接管日常桌面三件套：屏幕底部是悬浮 Dock（应用固�
 | 目标 | 现在 | 证据/边界 |
 |---|---|---|
 | C++ 进程内层 + 注入 payload | `src/Beautiful.Native/`（C ABI、材质/捕获/场景/注入）、`src/Beautiful.TrayBridge/`（空 payload：心跳/卸载/宿主 Mutex 自卸载）、`tools/NativeSmoke/`；`scripts/build-native.cmd` 用 VS2022 v143 /W4 + /WX 编译 | native 构建 **0 警告 0 错误**；`NativeSmoke`：ABI/health/material probe/scene/screen capture/inject gate **6 PASS / 0 SKIP / 0 FAIL** |
-| 协议固定布局 | `Core/Native/NativeProtocol`（BnRect/BnHealth/BnMaterialDesc/BnCaptureResult）+ 尺寸/偏移单测；NativeSmoke 打印同一组 `sizeof` | `NativeProtocolTests`；C# 785 通过 |
+| 协议固定布局 | `Core/Native/NativeProtocol`（BnRect/BnHealth/BnMaterialDesc/BnCaptureResult）+ 尺寸/偏移单测；NativeSmoke 打印同一组 `sizeof` | `NativeProtocolTests`；C# 797 通过 |
 | 材质引擎（D-BLUR 一级路） | DComp + `Windows.UI.Composition` HostBackdrop 背板窗口；`NativeMaterialHost` 按 `GetWindowRect` 物理像素同步菜单栏/Dock，探针可用时让出 WPF 静态底 | HostBackdrop 探针通过（modules=0xF）；agent smoke 已在真实 Win11 创建 Dock/菜单栏两块背板（`logs/native.log`: `Material created`），截图无黑块；**材质目视仍待所有者按 §2.5 回执** |
 | 捕获服务 | WGC（Graphics Capture）优先 → native PrintWindow → 屏幕 BitBlt；5×4 纯色判废；`WindowCapture` 在开关开启时优先走 native | `NativeSmoke` 屏幕捕获 PASS；WGC 真窗口路径 **UNVERIFIED(owner)**（本 VM 无控制台窗口可抓） |
 | 场景渲染骨架 | D3D11 离屏纹理/回读基准图（渐变+网格），为 Phase 3-T7 genie 铺路 | `NativeSmoke scene offscreen render` PASS |
@@ -45,11 +45,11 @@ Beautiful 接管日常桌面三件套：屏幕底部是悬浮 Dock（应用固�
 
 | 目标 | 现在 | 证据/边界 |
 |---|---|---|
-| Big Sur Dock 度量（P3-T1 部分） | 默认图标 56px（范围 32-96）、放大 1.7x、面板圆角 25、间距 7；新增「距底边距」设置（0-24，默认 4）并真正进入 AppBar 预留带与 PanelHost 底边距 | `SettingsStoreTests`/`ThemeDefinitionTests` 785 通过；**真机观感 UNVERIFIED(owner)** |
+| Big Sur Dock 度量（P3-T1 部分） | 默认图标 56px（范围 32-96）、放大 1.7x、面板圆角 25、间距 7；新增「距底边距」设置（0-24，默认 4）并真正进入 AppBar 预留带与 PanelHost 底边距 | `SettingsStoreTests`/`ThemeDefinitionTests` 797 通过；**真机观感 UNVERIFIED(owner)** |
 | 全屏避让（P3-T6） | `FullscreenAvoidanceService`：1s 读前台 DWM 可见矩形，Core `FullscreenAvoidance` 判定；真全屏隐藏菜单栏/Dock，退出恢复；设置「全屏应用时隐藏菜单栏与 Dock」默认开 | 纯函数 28 条既有测试 + 服务构建通过；**真全屏触发 UNVERIFIED(owner)** |
 | 材质（P3-T2） | 已接 Phase 2 `NativeMaterialHost`（探针可用让出静态底） | 同 Phase 2 边界 |
 | 文件夹堆栈（P3-T3 起步） | 文件夹可作为 Dock 固定项；Core `DockPinOps.CanPin` 允许目录；点击弹 FluentMenu 列表（Shell 图标、在访达中打开、最多 10 项）；二级目录暂以资源管理器打开 | `DockPinCanPinTests`；**列表形态，fan/grid 布局、OLE 拖出、嵌套堆栈与下载堆栈仍未完成** |
-| 最小化效果（P3-T7 部分） | `MinimizeEffect` = genie/zoom/suck；速度 0.5-2.0x；按进程排除清单；设置页动画卡接线。zoom 目前是源窗口内中心缩放淡出，suck 是更紧的条带吸吮 | 设置归一化单测 + 785 测试通过；**native shader 网格渲染与精确 Dock 位移仍未完成**，真机动画目视 UNVERIFIED(owner) |
+| 最小化效果（P3-T7 部分） | `MinimizeEffect` = genie/zoom/suck；速度 0.5-2.0x；按进程排除清单；设置页动画卡接线。zoom 目前是源窗口内中心缩放淡出，suck 是更紧的条带吸吮 | 设置归一化单测 + 797 测试通过；**native shader 网格渲染与精确 Dock 位移仍未完成**，真机动画目视 UNVERIFIED(owner) |
 | 最近使用的项目（P3-T4 起步） | 从 `%APPDATA%\Microsoft\Windows\Recent\*.lnk` 读取，按目标扩展名的默认打开程序（AssocQueryString）匹配 Dock 应用；Dock 右键出现“最近使用的项目”子菜单；空表整段不出现，缺失文件置灰 | `DockContextMenuPlanTests`；**不是 AutomaticDestinations-ms/Jump List 解析**，浏览器等自定义 AppID 可能匹配不到，已在 README 如实标注 |
 | 停靠边/自动隐藏（P3-T5） | **未开始**（下一批） | 不假装完成；按总纲 Core 先行逐项实现 |
 
@@ -436,3 +436,12 @@ dotnet publish src/Beautiful.App -c Release -r win-x64 --self-contained true -p:
 | 前台应用真菜单（P4-T3 起步） | 点顶栏前台应用名 → `GetMenu` 递归镜像真实 Win32 菜单，点击按命令 ID `PostMessage(WM_COMMAND)` 回发；自绘菜单应用（Chrome/msedge/Office/UWP）GetMenu 为空时给置灰说明，不伪造 | `MenuMirrorTextTests`；真实 Win11 smoke 用 msedge 验证了“无菜单”降级路径；**经典 Win32 应用（记事本等）的真菜单回发未逐项验证** |
 
 > Phase 4 已完成"24px + logo 菜单真实系统动作 + 关于本机信息卡 + 前台应用真菜单镜像（含自绘菜单降级）"；控制中心/通知中心/托盘像素/蓝牙电池等仍待后续。
+
+## v4.0-alpha Phase 5 变更（Launchpad/系统级，进行中）
+
+| 目标 | 现在 | 证据/边界 |
+|---|---|---|
+| 触发角（P5-T2 起步） | Core `HotCornerPlan` 四角命中 + `HotCornerDwellState` 驻留状态机（300ms、触发后须离开再武装）；`HotCornerService` 100ms GetCursorPos（不装鼠标钩子），真全屏时抑制；设置页新增「触发角」四角下拉：禁用/显示桌面/锁定屏幕/睡眠（默认全禁用） | `HotCornerPlanTests` + 797 测试通过；**Launchpad/屏保动作未提供**（依赖 Phase 5 Launchpad 与屏保接线，不放假选项）；真机四角触发 UNVERIFIED(owner) |
+| Launchpad / Spotlight 视觉 / 打开动画 | **未开始**（Next） | Phase 5 其余项未做 |
+
+> Phase 5 仅完成触发角；Launchpad、Spotlight 视觉校准、窗口打开动画仍待后续。

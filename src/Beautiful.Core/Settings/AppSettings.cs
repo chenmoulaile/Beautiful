@@ -137,6 +137,14 @@ public sealed record AppSettings
     /// </summary>
     public bool FullscreenAvoidanceEnabled { get; init; } = true;
 
+    // ---------- 触发角（v4 Phase 5-T2；默认全部禁用，避免误触） ----------
+    public string HotCornerTopLeft { get; init; } = "disabled";
+    public string HotCornerTopRight { get; init; } = "disabled";
+    public string HotCornerBottomLeft { get; init; } = "disabled";
+    public string HotCornerBottomRight { get; init; } = "disabled";
+
+    public static IReadOnlyList<string> KnownHotCornerActions { get; } = ["disabled", "showdesktop", "lock", "sleep"];
+
     /// <summary>
     /// 顶栏是否显示"托盘图标区"入口（v3.2）：点开可看到通知区域里被收起的第三方应用图标，
     /// 点击/右键会转发回图标自己的窗口。关掉只是少一颗按钮，不影响系统托盘本身。
@@ -280,6 +288,10 @@ public sealed record AppSettings
         MinimizeEffect = Canonical(MinimizeEffect, "genie", KnownMinimizeEffects),
         AnimationSpeed = Math.Clamp(AnimationSpeed, 0.5, 2.0),
         MinimizeExcludes = (MinimizeExcludes ?? string.Empty).Trim(),
+        HotCornerTopLeft = Canonical(HotCornerTopLeft, "disabled", KnownHotCornerActions),
+        HotCornerTopRight = Canonical(HotCornerTopRight, "disabled", KnownHotCornerActions),
+        HotCornerBottomLeft = Canonical(HotCornerBottomLeft, "disabled", KnownHotCornerActions),
+        HotCornerBottomRight = Canonical(HotCornerBottomRight, "disabled", KnownHotCornerActions),
         MaterialQuality = Canonical(MaterialQuality, "auto", KnownMaterialQualities)
     };
 

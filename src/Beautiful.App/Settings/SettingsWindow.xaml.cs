@@ -174,6 +174,10 @@ public partial class SettingsWindow : Window
         NativeCaptureCheck.IsChecked = s.NativeCapture;
         NativeSceneCheck.IsChecked = s.NativeScene;
         NativeTrayBridgeCheck.IsChecked = s.NativeTrayBridge;
+        SelectByTag(HotCornerTopLeftBox, s.HotCornerTopLeft, "disabled");
+        SelectByTag(HotCornerTopRightBox, s.HotCornerTopRight, "disabled");
+        SelectByTag(HotCornerBottomLeftBox, s.HotCornerBottomLeft, "disabled");
+        SelectByTag(HotCornerBottomRightBox, s.HotCornerBottomRight, "disabled");
         SelectByTag(MaterialQualityBox, s.MaterialQuality, "auto");
         UpdateNativeControls();
 
@@ -412,6 +416,21 @@ public partial class SettingsWindow : Window
         if (_loading) return;
         var value = TagOf(GenieEngineBox.SelectedItem) ?? "mesh";
         SettingsService.UpdateAndSave(SettingsService.Current with { GenieEngine = value });
+    }
+
+    // ---------- 触发角 ----------
+
+    private void HotCorner_Changed(object sender, SelectionChangedEventArgs e)
+    {
+        if (_loading) return;
+        SettingsService.UpdateAndSave(SettingsService.Current with
+        {
+            HotCornerTopLeft = TagOf(HotCornerTopLeftBox.SelectedItem) ?? "disabled",
+            HotCornerTopRight = TagOf(HotCornerTopRightBox.SelectedItem) ?? "disabled",
+            HotCornerBottomLeft = TagOf(HotCornerBottomLeftBox.SelectedItem) ?? "disabled",
+            HotCornerBottomRight = TagOf(HotCornerBottomRightBox.SelectedItem) ?? "disabled"
+        });
+        // HotCornerService 每 100ms 读一次设置，下一拍自然生效。
     }
 
     // ---------- 底层增强（Phase 2） ----------
