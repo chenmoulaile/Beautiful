@@ -62,6 +62,15 @@ public sealed class LauncherService : IDisposable
     /// <summary>索引是否还在后台构建（面板的状态行据此说"正在建立索引…"而不是空白）。</summary>
     public bool IsIndexBuilding => !_indexReady;
 
+    /// <summary>索引是否已就绪（Launchpad 打开时据此决定显示空状态还是网格）。</summary>
+    public bool IsIndexReady => _indexReady;
+
+    /// <summary>全部可启动应用（Build 后的确定次序）。Launchpad 复用同一份索引，不重复扫盘。</summary>
+    public IReadOnlyList<LauncherApp> AllApps => _index.All;
+
+    /// <summary>索引构建完成（UI 线程）；Launchpad/Spotlight 据此刷新空状态。</summary>
+    public event Action? IndexChanged;
+
     /// <summary>
      /// 启动即预热索引（幂等，不阻塞）。放在 App 的启动序里而不是首次打开时：
      /// 第一次按热键就等 1 秒磁盘 IO 是"功能没反应"的观感，而这份扫描本来就得有人做。
@@ -93,6 +102,7 @@ public sealed class LauncherService : IDisposable
             Logger.Info($"启动器：索引就绪，{_index.Count} 条可启动项");
         }
         _indexReady = true;
+        IndexChanged?.Invoke();
         // 面板若正开着（用户没等索引就先打开了）：按当前查询重跑一次，绝不留一个"永远在建立索引"的脸
         _panel?.RefreshAfterIndexReady();
     }

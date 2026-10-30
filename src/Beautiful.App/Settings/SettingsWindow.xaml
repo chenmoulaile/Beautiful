@@ -572,6 +572,8 @@
                                    Text="热键必须包含至少一个修饰键 + 非空格主键；Ctrl+Space / Win+Space / Alt+Space 会被拒绝（它们是系统输入法/布局/窗口菜单的既有绑定）。非法值会自愈为 ctrl+alt+space 并留日志。"/>
                         <TextBlock Style="{StaticResource HintText}"
                                    Text="Launchpad 网格、搜索、触发角属于 Phase 5；本页只接线已有的启动器热键与开关，不提前放空控件。"/>
+                        <TextBlock Style="{StaticResource HintText}"
+                                   Text="F4 打开全屏启动台（7×5 网格/搜索/翻页），复用启动器索引；启动器关闭时 F4 不注册。"/>
                     </StackPanel>
                 </Border>
 

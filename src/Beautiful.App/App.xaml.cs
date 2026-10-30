@@ -48,6 +48,7 @@ public partial class App : Application
     private Switcher.SwitcherService? _switcher;
     private Switcher.SwitcherWindow? _switcherWindow;
     private Launcher.LauncherService? _launcher;
+    private Launcher.LaunchpadHotkeyService? _launchpadHotkey;
     private Settings.SettingsWindow? _settingsWindow;
     private TrayIconManager? _tray;
     private bool _exiting;
@@ -151,13 +152,15 @@ public partial class App : Application
 
             // 6.7 启动器（v3 T7）：Spotlight 式搜索面板。索引在后台线程扫开始菜单，UI 不等待它。
             EnsureLauncher();
-
             // 7. --settings：设置窗口命令行入口（与托盘"设置"等效；窗口为单例）
             if (e.Args.Contains("--settings", StringComparer.OrdinalIgnoreCase))
                 OpenSettings();
             // 7.1 --about：关于本机卡（验证/截图入口；与 logo 菜单同一单例）
             if (e.Args.Contains("--about", StringComparer.OrdinalIgnoreCase))
                 Shell.AboutWindow.ShowSingleton();
+            // 7.2 --launchpad：启动台（验证/截图入口；与 F4 同一窗口）
+            if (e.Args.Contains("--launchpad", StringComparer.OrdinalIgnoreCase))
+                Launcher.LaunchpadWindow.ShowOrToggle(_launcher);
 
             // 8. 托盘最后就位（SMTC 已随 Dock 构造期异步初始化，失败仅记日志）
             _tray = new TrayIconManager(
@@ -191,6 +194,8 @@ public partial class App : Application
         _fullscreenAvoidance = null;
         _hotCorners?.Dispose();
         _hotCorners = null;
+        _launchpadHotkey?.Dispose();
+        _launchpadHotkey = null;
         _tray?.Dispose();
         _tray = null;
         _animator?.Dispose();   // WinEvent 钩子必须卸载（幂等）
@@ -598,6 +603,7 @@ public partial class App : Application
         {
             _launcher = new Launcher.LauncherService();
             _launcher.PrewarmIndex();
+            RestartLaunchpadHotkey();
             Logger.Info($"启动器已装配（热键={SettingsService.Current.LauncherHotkey}）");
         }
         catch (Exception ex)
@@ -616,8 +622,22 @@ public partial class App : Application
         if (_launcher is null) return;
         var old = _launcher;
         _launcher = null;
+        _launchpadHotkey?.Dispose();
+        _launchpadHotkey = null;
+        Launcher.LaunchpadWindow.CloseCurrent();
         try { old.Dispose(); }
         catch (Exception ex) { Logger.Warn($"启动器销毁异常: {ex.Message}"); }
+    }
+
+    /// <summary>启动台 F4 热键：与启动器服务同生共死；注册失败只记日志。</summary>
+    private void RestartLaunchpadHotkey()
+    {
+        _launchpadHotkey?.Dispose();
+        _launchpadHotkey = null;
+        if (_launcher is null || _exiting) return;
+        _launchpadHotkey = new Launcher.LaunchpadHotkeyService();
+        _launchpadHotkey.Pressed += () => Launcher.LaunchpadWindow.ShowOrToggle(_launcher);
+        _launchpadHotkey.Start();
     }
 
     /// <summary>

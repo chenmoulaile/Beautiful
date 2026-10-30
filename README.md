@@ -442,6 +442,7 @@ dotnet publish src/Beautiful.App -c Release -r win-x64 --self-contained true -p:
 | 目标 | 现在 | 证据/边界 |
 |---|---|---|
 | 触发角（P5-T2 起步） | Core `HotCornerPlan` 四角命中 + `HotCornerDwellState` 驻留状态机（300ms、触发后须离开再武装）；`HotCornerService` 100ms GetCursorPos（不装鼠标钩子），真全屏时抑制；设置页新增「触发角」四角下拉：禁用/显示桌面/锁定屏幕/睡眠（默认全禁用） | `HotCornerPlanTests` + 797 测试通过；**Launchpad/屏保动作未提供**（依赖 Phase 5 Launchpad 与屏保接线，不放假选项）；真机四角触发 UNVERIFIED(owner) |
-| Launchpad / Spotlight 视觉 / 打开动画 | **未开始**（Next） | Phase 5 其余项未做 |
+| Launchpad（P5-T1 起步） | F4 全局热键（RegisterHotKey，失败只记日志）；全屏 7×5 网格、壁纸模糊底、搜索过滤、翻页/滚轮、Enter/点击启动；复用 LauncherService 索引（171 条真实应用 smoke） | 真实 Win11 `--launchpad` 截图验证；**文件夹、拖拽排序、自定义图标/持久化、Dock 启动台图标、壁纸幻灯片降级仍待后续**；搜索占位已修 |
+| Spotlight 视觉 / 打开动画 | **未开始**（Next） | Phase 5 其余项未做 |
 
-> Phase 5 仅完成触发角；Launchpad、Spotlight 视觉校准、窗口打开动画仍待后续。
+> Phase 5 已完成触发角与 Launchpad 基础版；Spotlight 视觉校准、窗口打开动画、Launchpad 文件夹/拖拽仍待后续。
