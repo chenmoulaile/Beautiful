@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Runtime.InteropServices;   // ExternalException / Marshal.SizeOf
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Interop;
@@ -20,8 +21,9 @@ namespace Beautiful.App.Animation;
 /// <para>
 /// 【为什么用 WinEvent 而不是钩子拦 <c>SC_MINIMIZE</c>】要"抢在"系统最小化之前拦，只能上全局 CBT 钩子，
 /// 而全局钩子必须把回调放进一个注入到别人进程的 DLL 里 —— 为一个动画引入注入组件完全不值。
-/// <c>EVENT_SYSTEM_MINIMIZESTART</c> 在最小化开始的那一刻回调，此时窗口画面还在，
-/// 抓一帧当替身盖在原位，真窗口在替身底下正常最小化，替身再收进 Dock 图标：视觉上就是"被吸进去"。
+/// <c>EVENT_SYSTEM_MINIMIZESTART</c> 在最小化开始的那一刻回调；<b>但这个回调到达我们手里时窗口通常已经缩下去了</b>
+/// （v4.0 真机实测：回调里 <c>IsIconic=True</c>、rect=-16000），所以画面必须在别处先留好：
+/// Dock 路径在 <c>ShowWindow</c> 前同步预抓，其余三条路径靠前台帧缓存兜底（见 <see cref="ForegroundFrameCache"/>）。
 /// </para>
 /// <para>
 /// 【为什么替身用分层窗口 + 条带 Rectangle】逐像素透明只有分层窗口这一条路（v2 已被系统背板证伪），
@@ -30,8 +32,10 @@ namespace Beautiful.App.Animation;
 /// <see cref="GenieMath"/>（纯函数 + 单测），这里只负责每帧把它乘回像素。
 /// </para>
 /// <para>
-/// 【帧率无关】动画时长固定，进度按 <see cref="Stopwatch"/> 真实经过时间算，
-/// 由 <c>CompositionTarget.Rendering</c>（vsync）驱动 —— 不用固定步长定时器（v2 的"一卡一卡"就是这么来的）。
+/// 【v3.0 冲刺改了什么】① 全部时长/比例改读 <see cref="AnimParams"/>(热加载)；② 放行判定收口到
+/// <see cref="AnimPolicy"/>（风暴/并发/节流/排除/全屏）；③ 每条早退都产出结构化
+/// <c>动画未播：源= 层= 因=</c>，每次成功都产出 <c>动画触发：… 帧数= P95=</c>；
+/// ④ 挂载自检把"钩子句柄 + 设置实值 + 生效引擎"写进日志，且对外暴露降级原因（设置页可见）。
 /// </para>
 /// </summary>
 public sealed class MinimizeAnimator : IDisposable
@@ -43,14 +47,11 @@ public sealed class MinimizeAnimator : IDisposable
     private const uint WinEventOutOfContext = 0x00000000;
     private const uint WinEventSkipOwnProcess = 0x00000002;
 
-    /// <summary>最小化收拢时长。macOS 实测约 0.35s；再长就开始觉得等。</summary>
-    private const int MinimizeDurationMs = 320;
-
-    /// <summary>最大化/还原的缩放时长（比最小化短，因为它没有"吸进洞里"的位移量）。</summary>
-    private const int ZoomDurationMs = 200;
-
     /// <summary>收拢后的宽度相对源窗口的比例（≈ Dock 图标宽 / 普通窗口宽）。</summary>
     private const double EndWidthRatio = 0.10;
+
+    /// <summary>小于这个边长（物理像素）的窗口不套动画：下拉框/浮动提示条抖一下只会显得廉价。</summary>
+    private const int MinShellSize = 120;
 
     /// <summary>Dock 上该窗口图标那一格的物理矩形；null = 这条窗口没进 Dock。</summary>
     private readonly Func<IntPtr, Rect?> _dockTarget;
@@ -66,8 +67,20 @@ public sealed class MinimizeAnimator : IDisposable
     private GenieMeshGhost? _meshGhost;
     private bool _disabledByEnvironment;
 
+    /// <summary>前台帧缓存（兜底捕获层）。采样在后台线程，查询在 UI 线程。</summary>
+    private readonly ForegroundFrameCache _frames = new();
+
+    /// <summary>放行门禁（风暴/并发/节流/排除/全屏）。</summary>
+    private readonly AnimPolicy _policy = new(AnimParamsStore.Current);
+
     /// <summary>hwnd → 上一次的 (矩形, 是否最大化)。只为识别"从非最大化跳到最大化"那一下。</summary>
     private readonly Dictionary<IntPtr, (RECT Rect, bool Zoomed)> _lastRect = new();
+
+    /// <summary>pid → 进程名。排除清单与日志都要它；每 3-4 分钟才有新 pid，缓存足够。</summary>
+    private readonly Dictionary<uint, string> _processNames = new();
+
+    private DispatcherTimer? _sampleTimer;
+    private string _exclusionSnapshot = "";
 
     public MinimizeAnimator(Func<IntPtr, Rect?> dockTargetProvider)
     {
@@ -76,7 +89,9 @@ public sealed class MinimizeAnimator : IDisposable
         _disabledByEnvironment = Environment.GetEnvironmentVariable("BEAUTIFUL_NO_ANIMATION") == "1";
         if (_disabledByEnvironment)
         {
-            Logger.Info("最小化动画：环境开关 BEAUTIFUL_NO_ANIMATION=1 已停用");
+            DisabledReason = "环境开关 BEAUTIFUL_NO_ANIMATION=1";
+            MountStatus = $"动画子系统未启用：{DisabledReason}";
+            Logger.Info(MountStatus);
             return;
         }
 
@@ -90,14 +105,72 @@ public sealed class MinimizeAnimator : IDisposable
             EventObjectLocationChange, EventObjectLocationChange, IntPtr.Zero, _proc,
             0, 0, WinEventOutOfContext | WinEventSkipOwnProcess);
 
-        if (_minimizeHook == IntPtr.Zero)
-            Logger.Warn("最小化动画：MINIMIZESTART 钩子安装失败，动画不可用");
-        else
-            Logger.Info("最小化动画：已挂载（最小化 genie + 最大化缩放）");
+        ApplyExclusions();
+        BuildMountStatus();
+        StartFrameSampler();
+    }
+
+    /// <summary>动画子系统未启用的原因（设置页/诊断块用）；null = 正常运行。</summary>
+    public string? DisabledReason { get; private set; }
+
+    /// <summary>挂载自检行：钩子实值 + 设置实值 + 生效引擎 + 参数摘要（v3.0 §Q2-1）。</summary>
+    public string MountStatus { get; private set; } = "动画子系统：未初始化";
+
+    /// <summary>
+    /// 自检并落日志：<b>不是</b>打印"已挂载"就算完——要把两个钩子句柄、设置项实值、
+    /// 引擎（native 会回退）、参数摘要一起写下来。用户报"动画没播"时，这一行就能排除掉
+    /// "设置关了"/"引擎退化了"/"钩子没装上"三类原因，剩下的才值得去查捕获。
+    /// </summary>
+    private void BuildMountStatus()
+    {
+        var p = AnimParamsStore.Current;
+        var s = SettingsService.Current;
+        var requestedEngine = string.IsNullOrWhiteSpace(s.GenieEngine) ? p.Engine : s.GenieEngine;
+        var effectiveEngine = EffectiveEngine(requestedEngine);
+        var hooksOk = _minimizeHook != IntPtr.Zero;
+        var locOk = _locationHook != IntPtr.Zero;
+
+        if (!hooksOk)
+        {
+            DisabledReason = "MINIMIZESTART 钩子安装失败（SetWinEventHook 返回 0）";
+            MountStatus = $"动画子系统未启用：{DisabledReason}";
+            Logger.Warn(MountStatus);
+            return;
+        }
+
+        DisabledReason = null;
+        var degraded = new List<string>();
+        if (!locOk) degraded.Add("LOCATIONCHANGE 钩子失败（最大化动画不可用）");
+        if (!s.MinimizeAnimation) degraded.Add("设置项 MinimizeAnimation 为关");
+        if (effectiveEngine != requestedEngine) degraded.Add($"引擎 {requestedEngine} 不可用已回退 {effectiveEngine}");
+
+        MountStatus = $"动画子系统已挂载：MINIMIZE=0x{_minimizeHook.ToInt64():X} "
+                      + $"LOCATION={(locOk ? $"0x{_locationHook.ToInt64():X}" : "失败")} "
+                      + $"设置=开 请求引擎={requestedEngine} 生效引擎={effectiveEngine} "
+                      + $"前台缓存=开 参数[{p.ToLogLine()}]"
+                      + (degraded.Count > 0 ? $" 降级：{string.Join("；", degraded)}" : "");
+        Logger.Info(MountStatus);
+    }
+
+    /// <summary>
+    /// 生效引擎：<c>native</c> 在 native 场景渲染器可用时才算数，否则回退 <c>mesh</c>；
+    /// <c>mesh</c> 在 3D 面建不起来时运行期再退 <c>strips</c>（见 StartMesh）。
+    /// </summary>
+    private static string EffectiveEngine(string requested)
+    {
+        var r = requested?.Trim().ToLowerInvariant() ?? "mesh";
+        if (r == "native")
+            return SettingsService.Current.NativeModules && SettingsService.Current.NativeScene && NativeLoader.Available
+                ? "native"
+                : "mesh";
+        return r is "mesh" or "strips" ? r : "mesh";
     }
 
     /// <summary>当前是否启用（设置页/诊断块用）。</summary>
     public bool IsRunning => _minimizeHook != IntPtr.Zero && !_disabledByEnvironment;
+
+    /// <summary>前台缓存条数（诊断行用）。</summary>
+    public int CachedFrames => _frames.Count;
 
     /// <summary>
     /// 原生回调：只许做"取出参数 + 投递"两件事。任何异常逃逸出去都会打断消息泵，
@@ -112,7 +185,7 @@ public sealed class MinimizeAnimator : IDisposable
 
             if (evt == EventSystemMinimizeStart)
             {
-                _dispatcher.BeginInvoke(() => PlayMinimize(hwnd), DispatcherPriority.Render);
+                _dispatcher.BeginInvoke(() => PlayMinimize(hwnd, "MINIMIZESTART"), DispatcherPriority.Render);
                 return;
             }
             if (evt == EventSystemMinimizeEnd)
@@ -155,63 +228,175 @@ public sealed class MinimizeAnimator : IDisposable
         return fw > 0 && fh > 0 && tw > fw * 1.2 && th > fh * 1.2;
     }
 
-    /// <summary>速度倍率（0.5-2.0）：时长 = 基准 / 倍率，倍率越大越快。</summary>
-    private static double SpeedFactor => Math.Clamp(SettingsService.Current.AnimationSpeed, 0.5, 2.0);
-
-    private static int ScaledDuration(int baseMs) => (int)Math.Round(baseMs / SpeedFactor);
+    // ---------- 门禁 ----------
 
     /// <summary>
-    /// 按进程名排除最小化动画（设置项 MinimizeExcludes；逗号/分号分隔，忽略 .exe 与大小写）。
-    /// 拿不到进程信息时按"不排除"处理——宁可多播一次动画，也不让动画因一次查询失败整体消失。
+    /// 排除清单（设置项 MinimizeExcludes）→ 策略。每次动画前调一次：设置改了不必重启动画器
+    /// （与"动画器装配只在启动"是两件事：装配是钩子，排除是数据）。
     /// </summary>
-    private static bool IsExcluded(IntPtr hwnd)
+    private void ApplyExclusions()
     {
-        var raw = SettingsService.Current.MinimizeExcludes;
-        if (string.IsNullOrWhiteSpace(raw)) return false;
+        var raw = SettingsService.Current.MinimizeExcludes ?? "";
+        if (string.Equals(raw, _exclusionSnapshot, StringComparison.Ordinal)) return;
+        _exclusionSnapshot = raw;
+        var list = raw.Split([',', ';'], StringSplitOptions.RemoveEmptyEntries)
+                      .Select(s => s.Trim())
+                      .Where(s => s.Length > 0)
+                      .ToList();
+        _policy.SetExclusions(list);
+        Logger.Info($"动画排除清单：{(list.Count == 0 ? "空" : string.Join("、", list))}");
+    }
+
+    /// <summary>
+    /// 请求放行。<b>放行后调用方必须 <see cref="AnimPolicy.Complete"/></b>（在 <see cref="RunClock"/>
+    /// 的收尾里统一做），否则并发槽会漏，几轮之后所有动画都会被"并发上限"挡住。
+    /// </summary>
+    private bool Admit(IntPtr hwnd, AnimKind kind, string source, out int durationMs, out uint pid)
+    {
+        durationMs = 0;
+        pid = 0;
+
+        if (!IsRunning)
+        {
+            Logger.Info(AnimReport.Skipped(source, "无", "动画子系统未启用", DisabledReason));
+            return false;
+        }
+        if (Busy)
+        {
+            Logger.Info(AnimReport.Skipped(source, "无", "上一条动画未结束（单替身闸门）"));
+            return false;
+        }
+
+        ApplyExclusions();
+        _ = NativeMethods.GetWindowThreadProcessId(hwnd, out pid);
+        var name = ProcessName(pid);
+        var fullscreen = IsFullscreenForeground();
+
+        var decision = _policy.Evaluate(new AnimRequest(kind, pid, name, NowMs(), fullscreen, Source: source));
+        if (!decision.Allowed)
+        {
+            Logger.Info(AnimReport.Skipped(source, "无", decision.Reason, $"进程={name}"));
+            return false;
+        }
+        durationMs = decision.DurationMs;
+        _activeKind = kind;
+        return true;
+    }
+
+    /// <summary>当前已放行那一条动画的种类。单个替身闸门（<see cref="Busy"/>）保证同时只有一条在跑，
+    /// 所以用一个字段即可——不必把 kind 沿着六个渲染函数一路传下去。</summary>
+    private AnimKind _activeKind = AnimKind.Minimize;
+
+    /// <summary>单调毫秒（策略只吃时间戳，不读系统时钟）。</summary>
+    private static long NowMs() => (long)(Stopwatch.GetTimestamp() * 1000.0 / Stopwatch.Frequency);
+
+    private string ProcessName(uint pid)
+    {
+        if (pid == 0) return "未知";
+        if (_processNames.TryGetValue(pid, out var cached)) return cached;
         try
         {
-            NativeMethods.GetWindowThreadProcessId(hwnd, out var pid);
-            if (pid == 0) return false;
-            using var process = Process.GetProcessById((int)pid);
-            var name = process.ProcessName;
-            foreach (var part in raw.Split([',', ';'], StringSplitOptions.RemoveEmptyEntries))
-            {
-                var token = part.Trim();
-                if (token.EndsWith(".exe", StringComparison.OrdinalIgnoreCase)) token = token[..^4];
-                if (token.Length > 0 && string.Equals(token, name, StringComparison.OrdinalIgnoreCase))
-                {
-                    Logger.Info($"最小化动画排除：{name}");
-                    return true;
-                }
-            }
+            using var proc = Process.GetProcessById((int)pid);
+            var name = proc.ProcessName;
+            if (_processNames.Count > 256) _processNames.Clear();
+            _processNames[pid] = name;
+            return name;
         }
-        catch (Exception ex) when (ex is ArgumentException or InvalidOperationException or System.ComponentModel.Win32Exception)
+        catch (Exception ex) when (ex is ArgumentException or InvalidOperationException
+                                     or System.ComponentModel.Win32Exception)
         {
-            // 进程已退出/权限不足：不排除
+            return "未知";
         }
-        return false;
     }
+
+    /// <summary>前台窗口是否真全屏（盖住整块显示器）。判定复用 Core 的 <see cref="FullscreenAvoidance"/>。</summary>
+    private static bool IsFullscreenForeground()
+    {
+        var fore = FullscreenProbe.Read();
+        if (fore is not { IsEligible: true } f) return false;
+        var mon = MonitorFromWindow(f.Handle, 2 /* MONITOR_DEFAULTTONEAREST */);
+        if (mon == IntPtr.Zero) return false;
+        var mi = new MONITORINFO { cbSize = Marshal.SizeOf<MONITORINFO>() };
+        if (!GetMonitorInfo(mon, ref mi)) return false;
+        var r = mi.rcMonitor;
+        return FullscreenAvoidance.CoversMonitor(f.Bounds, new PhysicalRect(r.Left, r.Top, r.Right, r.Bottom));
+    }
+
+    /// <summary>
+    /// 抓帧并留进前台缓存。返回 null 时已经写好"动画未播"行——调用方直接返回即可。
+    /// </summary>
+    private BitmapSource? Capture(IntPtr hwnd, string source)
+    {
+        var image = WindowCapture.Capture(hwnd, out var layer);
+        if (image is null)
+        {
+            Logger.Info(AnimReport.Skipped(source, layer, "抓帧不可用"));
+            return null;
+        }
+        _lastLayer = layer;
+        return image;
+    }
+
+    /// <summary>最近一次抓帧命中的层（进触发日志）。</summary>
+    private string _lastLayer = "无";
 
     // ---------- 动画 ----------
 
-    /// <summary>最小化：抓一帧盖在原位，再把替身收进该应用在 Dock 上的图标。</summary>
-    private void PlayMinimize(IntPtr hwnd)
+    /// <summary>最小化：抓一帧（或取缓存帧）盖在原位，再把替身收进该应用在 Dock 上的图标。</summary>
+    private void PlayMinimize(IntPtr hwnd, string source)
     {
-        if (!IsRunning || Busy || IsExcluded(hwnd)) return;
+        if (!Admit(hwnd, AnimKind.Minimize, source, out var durationMs, out _)) return;
+
+        var p = AnimParamsStore.Current;
+
         if (NativeMethods.IsIconic(hwnd))
         {
-            // 事件走队列后到，状态早已翻转——Dock 路径这时应已由预抓接管并占用 Busy。
-            Logger.Info($"genie 事件路径错过：0x{hwnd.ToInt64():X} 到手时已最小化");
+            // 事件走系统队列送达时状态早已翻转（真机实测：回调里 IsIconic=True、rect=-16000,-16000）。
+            // 画面只能取前台缓存里替这个窗口留的那一帧；龄超过判废线就如实说"没画面"。
+            if (_frames.TryGet(hwnd, p.ForegroundCacheDiscardMs, out var cached, out var cachedRect, out var age)
+                && cached is not null && cachedRect.Width >= MinShellSize)
+            {
+                var verdict = _policy.Usability((long)age);
+                Logger.Info($"genie 事件路径：0x{hwnd.ToInt64():X} 到手时已最小化，改用缓存帧补播 "
+                            + $"(龄={age:0}ms 判定={verdict})");
+                var icon = IconRectFor(cachedRect, _dockTarget(hwnd));
+                LogGeometry(source, "缓存", hwnd, cachedRect, icon);
+                StartGenie(cached, cachedRect, icon, durationMs, reverse: false, source, "缓存", age);
+                return;
+            }
+
+            _policy.Complete(AnimKind.Minimize);
+            Logger.Info(AnimReport.Skipped(source, "缓存", "到手时已最小化且缓存帧过期/缺失",
+                $"缓存条数={_frames.Count}"));
             return;
         }
 
-        var image = WindowCapture.Capture(hwnd);
-        if (image is null) { Logger.Info("genie 事件路径：抓帧不可用，跳过"); return; }
-        if (!NativeMethods.GetWindowRect(hwnd, out var rect)) return;
+        if (!NativeMethods.GetWindowRect(hwnd, out var rect))
+        {
+            _policy.Complete(AnimKind.Minimize);
+            Logger.Info(AnimReport.Skipped(source, "无", "读窗口矩形失败"));
+            return;
+        }
+        var sourceRect = ToRect(rect);
+        if (sourceRect.Width < MinShellSize || sourceRect.Height < MinShellSize)
+        {
+            _policy.Complete(AnimKind.Minimize);
+            Logger.Info(AnimReport.Skipped(source, "无", "窗口过小", $"{sourceRect.Width:0}×{sourceRect.Height:0}"));
+            return;
+        }
 
-        var source = ToRect(rect);
-        var icon = IconRectFor(source, _dockTarget(hwnd));
-        StartGenie(image, source, icon, ScaledDuration(MinimizeDurationMs), reverse: false);
+        var image = Capture(hwnd, source);
+        if (image is null)
+        {
+            _policy.Complete(AnimKind.Minimize);
+            return;
+        }
+        var layer = _lastLayer;
+        _frames.Put(hwnd, image, sourceRect);   // 留一份：最小化后悬停预览与后续补播都靠它
+
+        var iconRect = IconRectFor(sourceRect, _dockTarget(hwnd));
+        LogGeometry(source, layer, hwnd, sourceRect, iconRect);
+        StartGenie(image, sourceRect, iconRect, durationMs, reverse: false, source, layer, 0);
     }
 
     /// <summary>
@@ -225,20 +410,31 @@ public sealed class MinimizeAnimator : IDisposable
     /// </summary>
     public (BitmapSource? Image, Rect? SourceRect) PreCapture(IntPtr hwnd)
     {
-        if (!IsRunning || Busy || IsExcluded(hwnd)) return (null, null);
+        if (!IsRunning || Busy) return (null, null);
         if (hwnd == IntPtr.Zero || NativeMethods.IsIconic(hwnd)) return (null, null);
-        var image = WindowCapture.Capture(hwnd);
-        if (image is null) return (null, null);
+
         if (!NativeMethods.GetWindowRect(hwnd, out var rect)) return (null, null);
-        return (image, ToRect(rect));
+        var sourceRect = ToRect(rect);
+        var image = WindowCapture.Capture(hwnd, out var layer);
+        if (image is null)
+        {
+            Logger.Info(AnimReport.Skipped("Dock预抓", layer, "抓帧不可用"));
+            return (null, null);
+        }
+        _frames.Put(hwnd, image, sourceRect);   // 顺手留一份：这个窗口下次最小化后悬停预览就有画面了
+        var icon = IconRectFor(sourceRect, _dockTarget(hwnd));
+        LogGeometry("Dock预抓", layer, hwnd, sourceRect, icon);
+        Logger.Info($"Dock 预抓帧：0x{hwnd.ToInt64():X} 层={layer} "
+                    + $"{image.PixelWidth}×{image.PixelHeight} 落点={icon.X:0},{icon.Y:0} {icon.Width:0}×{icon.Height:0}");
+        return (image, sourceRect);
     }
 
     /// <summary>用预抓的画面放 genie。窗口此刻多半已经缩下去，矩形用预抓的那份，不再现查。</summary>
     public void PlayMinimizeFromCapture(IntPtr hwnd, BitmapSource image, Rect sourceRect)
     {
-        if (!IsRunning || Busy || IsExcluded(hwnd)) return;
+        if (!Admit(hwnd, AnimKind.Minimize, "Dock", out var durationMs, out _)) return;
         var icon = IconRectFor(sourceRect, _dockTarget(hwnd));
-        StartGenie(image, sourceRect, icon, ScaledDuration(MinimizeDurationMs), reverse: false);
+        StartGenie(image, sourceRect, icon, durationMs, reverse: false, "Dock", "预抓帧", 0);
     }
 
     /// <summary>
@@ -247,58 +443,89 @@ public sealed class MinimizeAnimator : IDisposable
     /// </summary>
     private void PlayRestore(IntPtr hwnd)
     {
-        if (!IsRunning || Busy || IsExcluded(hwnd)) return;
-        // 刚还原的窗口需要一点时间把客户区画完，抓太早会得到上一帧或纯色
-        if (!NativeMethods.GetWindowRect(hwnd, out var rect)) return;
-        var source = ToRect(rect);
-        if (source.Width <= 0 || source.Height <= 0) return;
+        if (!Admit(hwnd, AnimKind.Restore, "MINIMIZEEND", out var durationMs, out _)) return;
 
-        var image = WindowCapture.Capture(hwnd);
-        if (image is null) return;
-        var icon = IconRectFor(source, _dockTarget(hwnd));
-        StartGenie(image, source, icon, ScaledDuration(MinimizeDurationMs), reverse: true);
+        if (!NativeMethods.GetWindowRect(hwnd, out var rect))
+        {
+            _policy.Complete(AnimKind.Restore);
+            Logger.Info(AnimReport.Skipped("MINIMIZEEND", "无", "读窗口矩形失败"));
+            return;
+        }
+        var sourceRect = ToRect(rect);
+        if (sourceRect.Width <= 0 || sourceRect.Height <= 0)
+        {
+            _policy.Complete(AnimKind.Restore);
+            Logger.Info(AnimReport.Skipped("MINIMIZEEND", "无", "窗口矩形为零"));
+            return;
+        }
+
+        // 刚还原的窗口需要一点时间把客户区画完，抓太早会得到上一帧或纯色
+        var image = Capture(hwnd, "MINIMIZEEND");
+        if (image is null)
+        {
+            _policy.Complete(AnimKind.Restore);
+            return;
+        }
+        var layer = _lastLayer;
+        _frames.Put(hwnd, image, sourceRect);
+
+        var icon = IconRectFor(sourceRect, _dockTarget(hwnd));
+        LogGeometry("MINIMIZEEND", layer, hwnd, sourceRect, icon);
+        StartGenie(image, sourceRect, icon, durationMs, reverse: true, "MINIMIZEEND", layer, 0);
     }
 
     /// <summary>按设置选效果：genie（灯罩网格/条带）、zoom（缩放淡出）、suck（更紧的吸吮）。</summary>
-    private void StartGenie(BitmapSource image, Rect windowRect, Rect iconRect, int durationMs, bool reverse)
+    private void StartGenie(BitmapSource image, Rect windowRect, Rect iconRect, int durationMs, bool reverse,
+        string source, string layer, double ageMs)
     {
         var effect = SettingsService.Current.MinimizeEffect;
-        if (string.Equals(effect, "zoom", StringComparison.OrdinalIgnoreCase))
+        var engine = EffectiveEngine(AnimParamsStore.Current.Engine);
+
+        // native 场景渲染器尚未提供动画宿主（BN_Anim_* 未实现）：如实回退 mesh，日志写生效值
+        if (effect == "zoom")
         {
-            StartZoomEffect(image, windowRect, iconRect, durationMs, reverse);
+            StartZoomEffect(image, windowRect, iconRect, durationMs, reverse, source, layer, ageMs);
             return;
         }
-        if (string.Equals(effect, "suck", StringComparison.OrdinalIgnoreCase))
+        if (effect == "suck")
         {
-            StartStripGenie(image, windowRect, iconRect, durationMs, reverse, lag: 0.15);
+            StartStripGenie(image, windowRect, iconRect, durationMs, reverse, 0.15, source, layer, engine, ageMs);
             return;
         }
-        if (string.Equals(Services.SettingsService.Current.GenieEngine, "strips", StringComparison.OrdinalIgnoreCase))
+        if (engine == "strips")
         {
-            StartStripGenie(image, windowRect, iconRect, durationMs, reverse);
+            StartStripGenie(image, windowRect, iconRect, durationMs, reverse, GenieMath.DefaultLag,
+                source, layer, engine, ageMs);
             return;
         }
-        StartMesh(image, ToLamp(windowRect), ToLamp(iconRect), durationMs, reverse);
+        StartMesh(image, ToLamp(windowRect), ToLamp(iconRect), durationMs, reverse, source, layer, ageMs);
     }
 
     /// <summary>
     /// zoom：整窗向图标方向缩成一个点并淡出。当前用源窗口内的中心缩放（避免被 2D 幽灵窗口的
     /// 画布裁切）；Dock 图标方向的精确位移等 native 场景渲染器接管后再补。
     /// </summary>
-    private void StartZoomEffect(BitmapSource image, Rect windowRect, Rect iconRect, int durationMs, bool reverse)
+    private void StartZoomEffect(BitmapSource image, Rect windowRect, Rect iconRect, int durationMs, bool reverse,
+        string source, string layer, double ageMs)
     {
-        if (windowRect.Width <= 0 || windowRect.Height <= 0) return;
+        if (windowRect.Width <= 0 || windowRect.Height <= 0)
+        {
+            _policy.Complete(AnimKind.Minimize);
+            return;
+        }
         var cx = Math.Clamp((iconRect.X + iconRect.Width / 2 - windowRect.Left) / windowRect.Width, 0.15, 0.85);
         var cy = Math.Clamp((iconRect.Y + iconRect.Height / 2 - windowRect.Top) / windowRect.Height, 0.15, 0.85);
         var target = new GenieRect(cx - 0.05, cy - 0.05, 0.1, 0.1);
 
         StartGhost(image, windowRect, durationMs, t =>
         {
+            // v3.0：morph 曲线按 v2.2 §5 用 easeInOutQuad（原来是线性）
             var p = reverse ? 1.0 - t : t;
-            var r = GenieMath.ZoomLerp(new GenieRect(0, 0, 1, 1), target, p);
-            var opacity = 1.0 - 0.35 * GenieMath.Clamp01(p);
+            var e = AnimCurve.EaseInOutQuad(p);
+            var r = GenieMath.ZoomLerp(new GenieRect(0, 0, 1, 1), target, e);
+            var opacity = 1.0 - 0.35 * GenieMath.Clamp01(e);
             return new List<(GenieRect, double)> { (r, opacity) };
-        });
+        }, source, "zoom", layer, ageMs);
     }
 
     /// <summary>
@@ -307,7 +534,7 @@ public sealed class MinimizeAnimator : IDisposable
     /// 但它只用 2D 绘制，在任何渲染环境下都画得出来。
     /// </summary>
     private void StartStripGenie(BitmapSource image, Rect source, Rect icon, int durationMs, bool reverse,
-        double lag = GenieMath.DefaultLag)
+        double lag, string sourceName, string layer, string engine, double ageMs)
     {
         var scaleX = (icon.X + icon.Width / 2 - (source.Left + source.Width / 2)) / source.Width;
         var scaleY = (icon.Y - source.Top) / source.Height;
@@ -319,7 +546,7 @@ public sealed class MinimizeAnimator : IDisposable
             return GenieMath.Sample(p, GenieMath.DefaultSlices, lag,
                         0.5 + scaleX, 1.0 + scaleY, endWidth)
                     .Select(b => (b.Rect, b.Opacity)).ToList();
-        });
+        }, sourceName, engine, layer, ageMs);
     }
 
     /// <summary>
@@ -339,10 +566,26 @@ public sealed class MinimizeAnimator : IDisposable
     private static LampGeometry ToLamp(Rect r) => new(r.X, r.Y, r.Width, r.Height);
 
     /// <summary>
+    /// 几何三方对账（v3.0 §Q2-4）：源窗口 <c>GetWindowRect</c> / DWM 可见矩形 / Dock 图标物理矩形。
+    /// <b>每一帧动画都要有这一行</b>：DPI 倍率错位与图标落点错位在这里是"能被读出来的数字"，
+    /// 而不是"看着有点偏"。
+    /// </summary>
+    private void LogGeometry(string source, string layer, IntPtr hwnd, Rect sourceRect, Rect iconRect)
+    {
+        var srcAnim = new AnimRect(sourceRect.X, sourceRect.Y, sourceRect.Width, sourceRect.Height);
+        var dwm = srcAnim;
+        if (NativeMethods.DwmGetRectAttribute(hwnd, NativeMethods.DwmwaExtendedFrameBounds, out var ext,
+                Marshal.SizeOf<RECT>()) == 0 && ext.Right > ext.Left && ext.Bottom > ext.Top)
+            dwm = AnimRect.FromLtrb(ext.Left, ext.Top, ext.Right, ext.Bottom);
+        var icon = new AnimRect(iconRect.X, iconRect.Y, iconRect.Width, Math.Max(1, iconRect.Height));
+        Logger.Info(AnimReport.Geometry($"{source}/{layer}", srcAnim, dwm, icon, null));
+    }
+
+    /// <summary>
     /// 用纹理网格跑一版 genie。<paramref name="reverse"/> = 还原方向（进度从 1 倒放到 0）。
     /// </summary>
     private void StartMesh(BitmapSource image, LampGeometry windowRect, LampGeometry iconRect,
-        int durationMs, bool reverse)
+        int durationMs, bool reverse, string source, string layer, double ageMs)
     {
         GenieMeshGhost? ghost = null;
         try
@@ -351,8 +594,13 @@ public sealed class MinimizeAnimator : IDisposable
         }
         catch (Exception ex) when (ex is InvalidOperationException or OutOfMemoryException)
         {
-            // 3D 渲染面建不起来（无硬件加速的极端环境等）：这次不动画，别把主流程带崩
-            Logger.Warn($"genie 网格渲染不可用，本次跳过动画：{ex.GetType().Name}");
+            // 3D 渲染面建不起来（无硬件加速的极端环境等）：按红线回退 strips，而不是"这次不动画"。
+            // 回退是可观测的：日志里引擎值变成 strips，用户在 AnimLab 里也能看到。
+            Logger.Warn($"genie 网格渲染不可用，回退条带引擎：{ex.GetType().Name}");
+            var stripSource = new Rect(windowRect.X, windowRect.Y, windowRect.Width, windowRect.Height);
+            var stripIcon = new Rect(iconRect.X, iconRect.Y, iconRect.Width, Math.Max(1, iconRect.Height));
+            StartStripGenie(image, stripSource, stripIcon, durationMs, reverse, GenieMath.DefaultLag,
+                source, layer, "strips", ageMs);
             return;
         }
 
@@ -361,7 +609,7 @@ public sealed class MinimizeAnimator : IDisposable
         ghost.Show();
         ghost.Place();
 
-        RunClock(durationMs,
+        RunClock(durationMs, source, "mesh", layer, ageMs,
             t => ghost.Apply(reverse ? 1.0 - t : t, windowRect, iconRect),
             () =>
             {
@@ -370,21 +618,51 @@ public sealed class MinimizeAnimator : IDisposable
             });
     }
 
-    /// <summary>vsync 驱动的计时器：进度按真实经过时间算，与帧率无关（裁定：动画必须帧率无关）。</summary>
-    private void RunClock(int durationMs, Action<double> onFrame, Action onDone)
+    /// <summary>
+    /// vsync 驱动的计时器：进度按真实经过时间算，与帧率无关（裁定：动画必须帧率无关）。
+    /// <para>
+    /// v3.0 起顺带统计帧间隔：收尾时把"帧数 / P50 / P95 / max"写进 <c>动画触发</c> 行。
+    /// 没有这组数字，"动画卡不卡"只能靠肉眼，而肉眼对 20ms 与 45ms 的差别并不可靠。
+    /// </para>
+    /// </summary>
+    private void RunClock(int durationMs, string source, string engine, string layer, double ageMs,
+        Action<double> onFrame, Action onDone)
     {
         var clock = Stopwatch.StartNew();
+        var intervals = new List<double>(64);
+        var lastFrameMs = 0.0;
+        var frames = 0;
+
         EventHandler? tick = null;
+        void Finish()
+        {
+            if (tick is not null) CompositionTarget.Rendering -= tick;
+            var stats = FrameStats.FromIntervals(intervals);
+            Logger.Info(AnimReport.Trigger(source, layer, engine, durationMs, Math.Max(frames, stats.Frames),
+                stats.P95 > 0 ? stats.P95 : 0));
+            if (ageMs > 0) Logger.Info($"动画帧来源：缓存帧龄={ageMs:0}ms");
+            try { onDone(); }
+            finally
+            {
+                // 槽必须释放：无论正常收尾还是异常中止，否则几轮之后全部被"并发上限"挡住
+                _policy.Complete(_activeKind);
+            }
+        }
+
         tick = (_, _) =>
         {
             try
             {
-                var t = clock.Elapsed.TotalMilliseconds / durationMs;
+                var elapsed = clock.Elapsed.TotalMilliseconds;
+                var t = elapsed / durationMs;
+                frames++;
+                if (lastFrameMs > 0) intervals.Add(elapsed - lastFrameMs);
+                lastFrameMs = elapsed;
+
                 if (t >= 1.0)
                 {
                     onFrame(1.0);
-                    CompositionTarget.Rendering -= tick;
-                    onDone();
+                    Finish();
                     return;
                 }
                 onFrame(t);
@@ -392,44 +670,60 @@ public sealed class MinimizeAnimator : IDisposable
             catch (Exception ex)
             {
                 // 渲染回调抛出去会让整个 UI 线程的渲染停摆：立刻收摊，动画可以没有
-                Logger.Warn($"genie 动画异常终止: {ex.GetType().Name} {ex.Message}");
-                CompositionTarget.Rendering -= tick;
-                onDone();
+                Logger.Warn($"genie 动画异常终止（渲染侧已降级）：{ex.GetType().Name} {ex.Message}");
+                try { Finish(); } catch { /* 收尾也不能抛 */ }
             }
         };
         CompositionTarget.Rendering += tick;
     }
 
-    /// <summary>最大化/还原：替身从旧矩形长到新矩形（单条带，无滞后）。</summary>
+    /// <summary>最大化/还原：替身从旧矩形长到新矩形（morph 曲线，无滞后）。</summary>
     private void PlayZoom(IntPtr hwnd, RECT fromRect, RECT toRect)
     {
-        if (!IsRunning || Busy) return;
-        var image = WindowCapture.Capture(hwnd);
-        if (image is null) return;
+        if (!Admit(hwnd, AnimKind.Maximize, "LOCATIONCHANGE", out var durationMs, out _)) return;
+
+        var image = Capture(hwnd, "LOCATIONCHANGE");
+        if (image is null)
+        {
+            _policy.Complete(AnimKind.Maximize);
+            return;
+        }
+        var layer = _lastLayer;
 
         var from = ToRect(fromRect);
         var to = ToRect(toRect);
-        if (from.Width <= 0 || from.Height <= 0) return;
-
-        StartGhost(image, to, ScaledDuration(ZoomDurationMs), t =>
+        if (from.Width <= 0 || from.Height <= 0)
         {
+            _policy.Complete(AnimKind.Maximize);
+            Logger.Info(AnimReport.Skipped("LOCATIONCHANGE", layer, "旧矩形无效"));
+            return;
+        }
+
+        var p = AnimParamsStore.Current;
+        var maxDuration = p.Scaled(p.MorphDurationMs);
+        durationMs = durationMs <= 0 ? maxDuration : durationMs;
+
+        StartGhost(image, to, durationMs, t =>
+        {
+            var e = AnimCurve.EaseInOutQuad(t);
             var r = GenieMath.ZoomLerp(
                 new GenieRect(
                     (from.Left - to.Left) / to.Width, (from.Top - to.Top) / to.Height,
                     from.Width / to.Width, from.Height / to.Height),
-                new GenieRect(0, 0, 1, 1), t);
+                new GenieRect(0, 0, 1, 1), e);
             return new List<(GenieRect, double)> { (r, 1.0) };
-        });
+        }, "LOCATIONCHANGE", "morph", layer, 0);
     }
 
     private void StartGhost(BitmapSource image, Rect screenPhysical, int durationMs,
-        Func<double, List<(GenieRect Rect, double Opacity)>> sampler)
+        Func<double, List<(GenieRect Rect, double Opacity)>> sampler,
+        string source, string engine, string layer, double ageMs)
     {
         var ghost = new GhostLayer(image, GenieMath.DefaultSlices, screenPhysical);
         _ghost = ghost;
         ghost.Show();
         ghost.Apply(sampler(0));
-        RunClock(durationMs, t => ghost.Apply(sampler(t)), CloseGhost);
+        RunClock(durationMs, source, engine, layer, ageMs, t => ghost.Apply(sampler(t)), CloseGhost);
     }
 
     private void CloseGhost()
@@ -446,12 +740,59 @@ public sealed class MinimizeAnimator : IDisposable
 
     private static Rect ToRect(RECT r) => new(r.Left, r.Top, r.Right - r.Left, r.Bottom - r.Top);
 
+    // ---------- 前台帧采样 ----------
+
+    /// <summary>
+    /// 前台帧采样器：每 <see cref="AnimParams.ForegroundRefreshMs"/> 至多一张（2Hz），全屏期间零轮询。
+    /// <para>
+    /// 定时器只做节流判断，真正的 <c>PrintWindow</c> 丢给线程池：抓一张 4K 前台窗口要几十毫秒，
+    /// 留在 UI 线程上每秒两次，等于每秒抽掉三四帧——Dock 悬停与动画都会发涩。
+    /// </para>
+    /// </summary>
+    private void StartFrameSampler()
+    {
+        if (!IsRunning) return;
+        var ownPid = (uint)Environment.ProcessId;
+        _sampleTimer = new DispatcherTimer(DispatcherPriority.Background, _dispatcher)
+        {
+            Interval = TimeSpan.FromMilliseconds(200),
+        };
+        _sampleTimer.Tick += (_, _) =>
+        {
+            try
+            {
+                var fullscreen = IsFullscreenForeground();
+                _ = Task.Run(() =>
+                {
+                    try { _frames.SampleForeground(ownPid, fullscreen: fullscreen); }
+                    catch (Exception ex) when (ex is InvalidOperationException or ArgumentException
+                                                  or ExternalException or OutOfMemoryException)
+                    {
+                        Logger.Warn($"前台取样异常（已隔离，不影响动画）：{ex.Message}");
+                    }
+                });
+            }
+            catch (Exception ex) when (ex is InvalidOperationException or ArgumentException or ExternalException
+                                          or OutOfMemoryException)
+            {
+                Logger.Warn($"前台取样调度异常（已隔离）：{ex.Message}");
+            }
+        };
+        _sampleTimer.Start();
+        Logger.Info("前台帧采样：已启动（2Hz，全屏期间零轮询）");
+    }
+
     public void Dispose()
     {
+        _sampleTimer?.Stop();
+        _sampleTimer = null;
         if (_minimizeHook != IntPtr.Zero) NativeMethods.UnhookWinEvent(_minimizeHook);
         if (_locationHook != IntPtr.Zero) NativeMethods.UnhookWinEvent(_locationHook);
         _minimizeHook = _locationHook = IntPtr.Zero;
         _proc = null;
+        _lastRect.Clear();
+        _processNames.Clear();
+        _frames.Clear();
         _meshGhost?.Dispose();
         _meshGhost = null;
         CloseGhost();

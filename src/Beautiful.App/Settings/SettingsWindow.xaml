@@ -595,6 +595,12 @@
                                   Checked="MinimizeAnimation_Changed" Unchecked="MinimizeAnimation_Changed"/>
                         <TextBlock Style="{StaticResource HintText}"
                                    Text="动画器在启动时装配，本项修改后重启 Beautiful 生效（不做假即时）。"/>
+                        <CheckBox x:Name="AnimSuppressSystemAnimCheck"
+                                  Content="动画期间关闭系统「缩向任务栏」动画（避免两条动画打架）"
+                                  Margin="0,8,0,0"
+                                  Checked="AnimSuppressSystemAnim_Changed" Unchecked="AnimSuppressSystemAnim_Changed"/>
+                        <TextBlock Style="{StaticResource HintText}"
+                                   Text="只在本次运行内临时接管 SPI_SETANIMATION，退出时还原成原来的值；重启生效。关掉后系统动画与 genie 会同时播放。"/>
                         <StackPanel Orientation="Horizontal" Margin="0,12,0,0">
                             <TextBlock Text="效果" Style="{StaticResource RowLabel}" Width="72"/>
                             <ComboBox x:Name="MinimizeEffectBox" Width="220" VerticalAlignment="Center"

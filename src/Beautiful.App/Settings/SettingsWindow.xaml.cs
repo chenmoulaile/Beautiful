@@ -1,4 +1,4 @@
-using System.Collections.ObjectModel;
+﻿using System.Collections.ObjectModel;
 using System.Reflection;
 using System.Windows;
 using System.Windows.Interop;
@@ -171,6 +171,7 @@ public partial class SettingsWindow : Window
         LauncherEnabledCheck.IsChecked = s.LauncherEnabled;
         LauncherHotkeyBox.Text = s.LauncherHotkey;
         MinimizeAnimationCheck.IsChecked = s.MinimizeAnimation;
+        AnimSuppressSystemAnimCheck.IsChecked = s.AnimSuppressSystemAnim;
         SelectByTag(MinimizeEffectBox, s.MinimizeEffect, "genie");
         AnimationSpeedSlider.Value = s.AnimationSpeed;
         AnimationSpeedLabel.Text = $"×{s.AnimationSpeed:0.0}";
@@ -387,6 +388,16 @@ public partial class SettingsWindow : Window
         if (_loading) return;
         // 动画器在启动时装配：只落盘，不假装即时生效（设置页文案已写明"重启生效"）
         SettingsService.UpdateAndSave(SettingsService.Current with { MinimizeAnimation = MinimizeAnimationCheck.IsChecked == true });
+    }
+
+    private void AnimSuppressSystemAnim_Changed(object sender, RoutedEventArgs e)
+    {
+        if (_loading) return;
+        // 与 MinimizeAnimation 同一条纪律：接管发生在启动装配期，这里只落盘，不假装即时改系统设置
+        SettingsService.UpdateAndSave(SettingsService.Current with
+        {
+            AnimSuppressSystemAnim = AnimSuppressSystemAnimCheck.IsChecked == true,
+        });
     }
 
     private void FullscreenAvoidance_Changed(object sender, RoutedEventArgs e)

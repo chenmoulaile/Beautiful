@@ -43,6 +43,9 @@ public partial class App : Application
     /// <summary>最小化/最大化动画（v3.2）：持有两条 WinEvent 钩子，退出必须卸。</summary>
     private Animation.MinimizeAnimator? _animator;
 
+    /// <summary>系统最小化动画接管（v3.0 §Q2-2）：退出必须还原用户原来的 SPI_SETANIMATION 值。</summary>
+    private Animation.SystemAnimationSuppressor? _animSuppressor;
+
     private TopBarWindow? _topBar;
     private FullscreenAvoidanceService? _fullscreenAvoidance;
     private HotCornerService? _hotCorners;
@@ -133,7 +136,23 @@ public partial class App : Application
             {
                 try
                 {
+                    // v3.0 §Q2-6：动画参数从 config/anim-params.json 热加载（文件不存在会自动生成默认表）。
+                    // 必须在动画器构造之前 Load：构造期就要用它算挂载自检行与首帧时长。
+                    Services.AnimParamsStore.Load();
+
                     _animator = new Animation.MinimizeAnimator(hwnd => _dock?.IconRectPhysical(hwnd));
+
+                    // v3.0 §Q2-2：接管系统"缩向任务栏"动画，消除两条动画打架。
+                    // 只在本程序真的会播动画时才接管；关掉动画功能就等于把系统动画原样还给用户。
+                    if (SettingsService.Current.AnimSuppressSystemAnim)
+                    {
+                        _animSuppressor = new Animation.SystemAnimationSuppressor();
+                        _animSuppressor.Enable();
+                    }
+                    else
+                    {
+                        Logger.Info("系统动画接管：设置项 AnimSuppressSystemAnim 为关，系统最小化动画保持原样");
+                    }
                 }
                 catch (Exception ex)
                 {
@@ -426,6 +445,8 @@ public partial class App : Application
         _tray = null;
         _animator?.Dispose();   // WinEvent 钩子必须卸载（幂等）
         _animator = null;
+        _animSuppressor?.Dispose();   // SPI_SETANIMATION 必须还原成用户原值（幂等）
+        _animSuppressor = null;
         DestroyLauncher();  // 覆盖层是瞬态弹层：兜底路径也要收（Dispose 幂等，ExitApp 已走过一次则 no-op）
         DestroySwitcher(); // 键盘钩子必须卸载（幂等）：残留的 WH_KEYBOARD_LL 会在进程退出时由系统回收，
                            // 但显式 Shutdown 而未走 ExitApp 的路径若卡在非 UI 线程，卸载会失败 → 这里至少留日志
@@ -1216,6 +1237,10 @@ public partial class App : Application
             _volumeOsd = null;
             TopBar.NotificationBannerHost.CloseAll();
             _dock?.Close();          // DockWindow.OnClosing：AppBar ABM_REMOVE（hwnd 销毁前）
+            _animator?.Dispose();    // WinEvent 钩子：退出过程中任何一次最小化都不该再起动画
+            _animator = null;
+            _animSuppressor?.Dispose();   // 系统动画还原必须在退出链里完成（红线：全局状态全挂 ExitApp）
+            _animSuppressor = null;
             _taskbar?.Restore();     // Hide/AutoHide 还原系统任务栏
             _tray?.Dispose();        // 移除托盘图标（防幽灵图标）
             _tray = null;

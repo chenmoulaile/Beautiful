@@ -177,6 +177,16 @@ public sealed record AppSettings
     /// <summary>最小化效果："genie"（默认）| "zoom"（缩放淡出）| "suck"（更紧的吸吮）。</summary>
     public string MinimizeEffect { get; init; } = "genie";
 
+    /// <summary>
+    /// 动画功能开启期间是否<b>临时关闭系统的最小化动画</b>（<c>SPI_SETANIMATION</c>，默认开）。
+    /// <para>
+    /// Windows 默认会画"窗口缩成一个矩形飞向任务栏"，我们画的替身是往 Dock 图标收——两条同时出现
+    /// 就是观感上的"打架"。系统那条不在我们的合成链里，唯一能关掉它的公开开关就是这条系统设置。
+    /// 只在会话内生效（不写注册表），退出时还原成用户原值；关掉本项则全程不碰系统设置。
+    /// </para>
+    /// </summary>
+    public bool AnimSuppressSystemAnim { get; init; } = true;
+
     /// <summary>动画速度倍率（0.5..2.0，加载时钳制；越小越慢）。</summary>
     public double AnimationSpeed { get; init; } = 1.0;
 

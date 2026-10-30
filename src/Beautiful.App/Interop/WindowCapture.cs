@@ -60,20 +60,35 @@ internal static class WindowCapture
     /// 但替身只在"该窗口即将消失"的一瞬显示，可接受。
     /// </para>
     /// </summary>
-    public static BitmapSource? Capture(IntPtr hwnd)
+    public static BitmapSource? Capture(IntPtr hwnd) => Capture(hwnd, out _);
+
+    /// <summary>
+    /// 同 <see cref="Capture(IntPtr)"/>，另外报告<b>实际命中的捕获层</b>（<c>native</c> / <c>PrintWindow</c> /
+    /// <c>屏幕</c> / 失败原因）。这一项必须能写进日志：用户报"动画没播"时，第一件事就是分清
+    /// "没抓到"和"抓到了但不该播"——v4.0 之前两者在日志里长得一模一样。
+    /// </summary>
+    public static BitmapSource? Capture(IntPtr hwnd, out string layer)
     {
-        if (hwnd == IntPtr.Zero) return null;
-        if (!GetWindowRect(hwnd, out var rect)) return null;
+        layer = "无";
+        if (hwnd == IntPtr.Zero) { layer = "窗口句柄为空"; return null; }
+        if (!GetWindowRect(hwnd, out var rect)) { layer = "读窗口矩形失败"; return null; }
         var width = rect.Right - rect.Left;
         var height = rect.Bottom - rect.Top;
         // 最小化中的窗口矩形是 (-32000,-32000) 那套哨兵值；负/零尺寸直接判不可用
-        if (width <= 0 || height <= 0 || width > 16384 || height > 16384) return null;
+        if (width <= 0 || height <= 0 || width > 16384 || height > 16384)
+        {
+            layer = $"尺寸不可用({width}×{height})";
+            return null;
+        }
 
         var viaNative = CaptureViaNative(hwnd, width, height);
-        if (viaNative is not null) return viaNative;
+        if (viaNative is not null) { layer = "native"; return viaNative; }
         var viaPrintWindow = CaptureViaPrintWindow(hwnd, width, height);
-        if (viaPrintWindow is not null) return viaPrintWindow;
-        return CaptureViaScreen(rect, width, height);
+        if (viaPrintWindow is not null) { layer = "PrintWindow"; return viaPrintWindow; }
+        var viaScreen = CaptureViaScreen(rect, width, height);
+        if (viaScreen is not null) { layer = "屏幕"; return viaScreen; }
+        layer = "PrintWindow纯色判废且屏幕退路失败";
+        return null;
     }
 
     /// <summary>
