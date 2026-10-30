@@ -51,10 +51,16 @@ public sealed class DockViewModel
 
     /// <param name="separatorsEnabled">初始分隔符开关（来自主题 DockSeparatorsEnabled；主题切换经 <see cref="ApplySeparatorPolicy"/> 重放）。</param>
     /// <param name="importTaskbarPins">首次建列表时是否并入 Windows 原生任务栏的固定应用（已有 dock.json 则不动）。</param>
+    private readonly DockIconOverridesStore _iconOverrides;
+
+    /// <summary>自定义图标表（右键"更换图标…"写这里）；测试可注入独立目录。</summary>
+    public DockIconOverridesStore IconOverrides => _iconOverrides;
+
     public DockViewModel(WindowTracker tracker, PinnedAppsStore? pinnedStore = null, bool separatorsEnabled = false,
-        bool importTaskbarPins = false)
+        bool importTaskbarPins = false, DockIconOverridesStore? iconOverrides = null)
     {
         _tracker = tracker;
+        _iconOverrides = iconOverrides ?? new DockIconOverridesStore();
         _pinnedStore = pinnedStore ?? new PinnedAppsStore();
         _separatorsEnabled = separatorsEnabled;
 
@@ -199,8 +205,19 @@ public sealed class DockViewModel
         catch { return path; }   // 坏快捷方式退回原路径（DockPinOps 亦会 try/catch，双保险不丢项）
     }
 
-    private static DockItem MakePinned(string path)
+    private DockItem MakePinned(string path)
     {
+        // 用户自定义图标优先（只对文件/快捷方式生效；文件夹堆栈不参与）
+        if (!Directory.Exists(path) && _iconOverrides.For(path) is { } overrideIcon)
+        {
+            return new DockItem(Id: path,
+                                Label: Path.GetFileNameWithoutExtension(path),
+                                Icon: IconExtractor.GetIcon(overrideIcon),
+                                Kind: DockItemKind.Pinned,
+                                LaunchPath: path,
+                                IconSource: overrideIcon);
+        }
+
         // 文件夹 = macOS 堆栈：图标源就是目录本身（Shell 文件夹图标），点击由 DockWindow 弹堆栈菜单。
         if (Directory.Exists(path))
             return new DockItem(Id: path,

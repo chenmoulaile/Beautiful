@@ -75,6 +75,7 @@ internal static class DockContextMenuBuilder
             RecycleBinHasItems = item.Kind == DockItemKind.RecycleBin && RecycleBinHasItems(),
             // 真机实测（Win11 24H2）：properties 动词对快捷方式可用、对裸 .exe 返回 1155，
             // 而 shell 的按序号属性页 API 在本进程内调用会抛 → 裸 exe 干脆不给这一格（见 Core 的字段说明）
+            HasIconOverride = vm.IconOverrides.Has(item.LaunchPath),
             PropertiesPageAvailable = !executable.EndsWith(".exe", StringComparison.OrdinalIgnoreCase)
                                       || item.LaunchPath.EndsWith(".lnk", StringComparison.OrdinalIgnoreCase)
         };

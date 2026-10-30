@@ -192,6 +192,12 @@ public partial class App : Application
                 _topBar?.ShowControlCenterForDiagnostics();
             }
 
+            // 7.04 --dock-shot：把 --shot 的目标固定为 Dock 窗口（验图标/角标/进度用）
+            if (e.Args.Contains("--dock-shot", StringComparer.OrdinalIgnoreCase))
+            {
+                _shotDock = true;
+            }
+
             // 7.05 --dock-badge <text>：Dock 角标截图入口（把角标打到第一个条目，不读真实未读）
             var dockBadge = ParseArgValue(e.Args, "--dock-badge");
             if (!string.IsNullOrWhiteSpace(dockBadge))

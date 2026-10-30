@@ -28,6 +28,12 @@ public enum DockContextAction
     /// <summary>属性…（properties 动词）。</summary>
     Properties,
 
+    /// <summary>更换图标…（用户自选图片，只写本地路径，不内置任何图标）。</summary>
+    ChangeIcon,
+
+    /// <summary>恢复默认图标（删掉该固定项的自定义图标记录）。</summary>
+    ResetIcon,
+
     /// <summary>固定到 Dock（写 dock.json）。</summary>
     Pin,
 
@@ -136,6 +142,9 @@ public sealed record DockContextMenuInput
     /// 比"灰着说清原因"更诚实的是"不给一个点了没反应的入口"。
     /// </summary>
     public bool PropertiesPageAvailable { get; init; }
+
+    /// <summary>该固定项当前是否有自定义图标（决定菜单里给不给"恢复默认图标"）。</summary>
+    public bool HasIconOverride { get; init; }
 }
 
 /// <summary>
@@ -312,6 +321,25 @@ public static class DockContextMenuPlan
         // 属性页在本机打不开时**整格不给**（见 DockContextMenuInput.PropertiesPageAvailable 的实测说明）
         if (input.PropertiesPageAvailable)
             items.Add(ShellPathEntry("props", DockContextAction.Properties, "属性…", input));
+
+        // 自定义图标（P7 补）：只对固定项给；"恢复默认"只在确实覆盖过时出现，避免一排永远灰着的项
+        items.Add(new DockContextMenuEntry
+        {
+            Id = "icon",
+            Action = DockContextAction.ChangeIcon,
+            Label = "更换图标…",
+            TargetPath = input.LaunchPath
+        });
+        if (input.HasIconOverride)
+        {
+            items.Add(new DockContextMenuEntry
+            {
+                Id = "iconreset",
+                Action = DockContextAction.ResetIcon,
+                Label = "恢复默认图标",
+                TargetPath = input.LaunchPath
+            });
+        }
 
         if (running)
         {

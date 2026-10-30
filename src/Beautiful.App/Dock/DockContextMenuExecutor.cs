@@ -67,6 +67,8 @@ internal sealed class DockContextMenuExecutor
                 case DockContextAction.RunAsAdmin: RunAsAdmin(entry.TargetPath, menu.Item); break;
                 case DockContextAction.OpenFileLocation: OpenFileLocation(entry.TargetPath); break;
                 case DockContextAction.Properties: ShowProperties(entry.TargetPath); break;
+                case DockContextAction.ChangeIcon: ChangeIcon(entry.TargetPath); break;
+                case DockContextAction.ResetIcon: ResetIcon(entry.TargetPath); break;
                 case DockContextAction.Pin: _vm.PinExecutable(entry.TargetPath ?? string.Empty); break;
                 case DockContextAction.Unpin: _vm.Unpin(entry.TargetPath ?? string.Empty); break;
                 case DockContextAction.SwitchToWindow: SwitchTo(entry.WindowHandle); break;
@@ -87,6 +89,51 @@ internal sealed class DockContextMenuExecutor
             // 常驻进程绝不为一次菜单点击而死：兜住一切（含 Win32Exception、COMException、进程已退出等）
             Logger.Error($"Dock 菜单动作失败：{entry.Action} / {entry.Label} —— {ex.Message}", ex);
         }
+    }
+
+    /// <summary>
+    /// 更换图标：弹文件选择框 → Core 规则校验 → 写 dock-icons.json → 重载固定项。
+    /// 取消/校验失败都只记日志，不弹模态错误框（用户按取消不是错误）。
+    /// </summary>
+    private void ChangeIcon(string? pinnedPath)
+    {
+        if (string.IsNullOrWhiteSpace(pinnedPath))
+        {
+            return;
+        }
+
+        var dialog = new Microsoft.Win32.OpenFileDialog
+        {
+            Title = "选择图标图片",
+            Filter = "图片 (*.png;*.ico;*.jpg;*.jpeg;*.bmp)|*.png;*.ico;*.jpg;*.jpeg;*.bmp",
+            CheckFileExists = true
+        };
+        if (dialog.ShowDialog() != true)
+        {
+            return;
+        }
+
+        if (!_vm.IconOverrides.Set(pinnedPath, dialog.FileName, out var reason))
+        {
+            Logger.Warn($"更换图标失败：{reason}");
+            return;
+        }
+
+        _vm.ReloadPinned();
+        Logger.Info("更换图标：已应用并重载固定项");
+    }
+
+    /// <summary>恢复默认图标：删记录并重载。</summary>
+    private void ResetIcon(string? pinnedPath)
+    {
+        if (string.IsNullOrWhiteSpace(pinnedPath))
+        {
+            return;
+        }
+
+        _vm.IconOverrides.Reset(pinnedPath);
+        _vm.ReloadPinned();
+        Logger.Info("更换图标：已恢复默认");
     }
 
     // ---------- 启动 ----------
