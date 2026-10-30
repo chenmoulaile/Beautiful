@@ -22,3 +22,6 @@ src/Beautiful.App/Assets/Fonts/
 
 # 安装器产物（55MB 级，随 GitHub Release 分发，不进版本库）
 installer/out/
+
+# Superpowers SDD workspace (git-ignored scratch)
+.superpowers/
