@@ -87,6 +87,10 @@ public class DockBadgeTests
     [InlineData("105%", 1.0)]
     [InlineData("56", -1.0)]
     [InlineData("abc%", -1.0)]
+    [InlineData("已完成 51%", 0.51)]
+    [InlineData("操作进度: 6%；速度: 760 MB/秒", 0.06)]
+    [InlineData("已完成 100%", 1.0)]
+    [InlineData("12345%", -1.0)]
     [InlineData("", -1.0)]
     [InlineData(null, -1.0)]
     public void 进度文本只认带百分号的纯数字(string? text, double expected)

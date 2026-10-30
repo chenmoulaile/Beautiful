@@ -155,9 +155,13 @@ public static class DockProgressBar
     }
 
     /// <summary>
-    /// 解析拷贝对话框进度条的可访问文本（Explorer 实测给的是 "56%"）。
-    /// 解析不到返回 -1（调用方据此画"忙碌但不知道多少"的不确定态），解析到则钳到 0..1。
-    /// 允许 "56 %"、"56%"、前后空白；不带百分号的裸数字一律不认——那不是进度语义。
+    /// 从一段可访问文本里解析进度百分比。
+    /// <para>
+    /// 真机实测（Win11 24H2，DirectUI 拷贝对话框）给出的不是裸 "56%"，而是
+    /// <c>已完成 51%</c>、<c>操作进度: 6%；速度: 760 MB/秒</c> 这类带前后缀的句子，
+    /// 因此这里取**最后一个 % 号前面紧邻的那段数字**，而不是要求整串都是数字。
+    /// 找不到 % 或 % 前没有数字返回 -1（调用方据此走"忙碌但不知道多少"的不确定态）。
+    /// </para>
     /// </summary>
     public static double ParsePercentText(string? text)
     {
@@ -166,28 +170,32 @@ public static class DockProgressBar
             return -1;
         }
 
-        var trimmed = text.Trim();
-        if (!trimmed.EndsWith('%'))
+        var percentIndex = text.LastIndexOf('%');
+        if (percentIndex <= 0)
         {
             return -1;
         }
 
-        var number = trimmed[..^1].Trim().Replace(" ", string.Empty);
-        if (number.Length == 0)
+        // 从 % 往前跳过空格，再连续吞掉数字
+        var end = percentIndex - 1;
+        while (end >= 0 && text[end] == ' ')
         {
-            return -1;
+            end--;
         }
 
-        // 只认纯数字（不接受 "1,234" 这类千分位：进度不会到千）
-        foreach (var ch in number)
+        var start = end;
+        while (start >= 0 && char.IsAsciiDigit(text[start]))
         {
-            if (!char.IsAsciiDigit(ch))
-            {
-                return -1;
-            }
+            start--;
         }
 
-        return int.TryParse(number, out var percent) ? Clamp(percent / 100.0) : -1;
+        var digits = text[(start + 1)..(end + 1)];
+        if (digits.Length is 0 or > 3)
+        {
+            return -1;   // 没数字，或"12345%"这种明显不是进度的串
+        }
+
+        return int.TryParse(digits, out var percent) ? Clamp(percent / 100.0) : -1;
     }
 
     /// <summary>

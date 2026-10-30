@@ -200,20 +200,30 @@ internal sealed class TaskbarProgressService : IDisposable
         {
             var all = root.FindAll(TreeScope.Descendants, Condition.TrueCondition);
             var best = -1.0;
+            var bestScore = -1;
             var bestWidth = double.NegativeInfinity;
             for (var i = 0; i < all.Count && i < 200; i++)
             {
                 var element = all[i];
-                var fraction = DockProgressBar.ParsePercentText(element.Current.Name);
+                var name = element.Current.Name;
+                var fraction = DockProgressBar.ParsePercentText(name);
                 if (fraction < 0)
                 {
                     continue;
                 }
 
+                // 实测元素形状（日志）：Group/TitleBar/Text 给"已完成 51%"（总体），
+                // Pane 给"操作进度: 6%；速度: 760 MB/秒"（当前文件）。必须优先总体：
+                // 分数 = 名称含"已完成" 3 分 > 纯数字% 2 分 > 其它 1 分；同分取更宽的元素。
+                var score = name.Contains("已完成", StringComparison.Ordinal) ? 3
+                    : name.Contains("操作进度", StringComparison.Ordinal) ? 1
+                    : 2;
+
                 var width = element.Current.BoundingRectangle.Width;
-                if (width >= bestWidth)
+                if (score > bestScore || (score == bestScore && width >= bestWidth))
                 {
                     best = fraction;
+                    bestScore = score;
                     bestWidth = width;
                 }
             }
