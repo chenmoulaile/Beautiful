@@ -294,6 +294,27 @@
                     <TextBlock x:Name="VolumeReason" FontSize="10.5" Opacity="0.62" TextWrapping="Wrap"
                                Margin="4,0,4,6" Visibility="Collapsed"/>
 
+                    <!-- ============ 逐应用音量（Phase 7-T5） ============
+                         Core Audio 会话级音量：每个应用一条会话，改它不影响系统总音量。
+                         会话列表是打开面板时的快照，右上"刷新"重新枚举（不订阅会话通知：瞬态面板不值当）。 -->
+                    <Border Style="{StaticResource CcGroupStyle}">
+                        <StackPanel>
+                            <Grid Margin="0,0,0,4">
+                                <TextBlock Text="逐应用音量" FontSize="11" Opacity="0.62" VerticalAlignment="Center"/>
+                                <Button x:Name="MixerRefreshButton" Content="刷新" HorizontalAlignment="Right"
+                                        Height="20" Padding="8,0" FontSize="10.5"
+                                        Style="{StaticResource CcFooterStyle}" Click="MixerRefresh_Click"
+                                        AutomationProperties.Name="刷新逐应用音量列表"/>
+                            </Grid>
+                            <ScrollViewer MaxHeight="150" VerticalScrollBarVisibility="Auto"
+                                          HorizontalScrollBarVisibility="Disabled">
+                                <StackPanel x:Name="MixerList"/>
+                            </ScrollViewer>
+                            <TextBlock x:Name="MixerReason" FontSize="10.5" Opacity="0.62" TextWrapping="Wrap"
+                                       Margin="0,4,0,0" Visibility="Collapsed"/>
+                        </StackPanel>
+                    </Border>
+
                     <!-- ============ 外观（主题三选一） ============ -->
                     <TextBlock Text="外观" FontSize="11" Opacity="0.62" Margin="4,2,0,4"/>
                     <!-- 宽度锁 210：主题只剩 macOS 一项时，UniformGrid 的单个子元素会撑满整行，

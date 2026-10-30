@@ -10,7 +10,12 @@ using Beautiful.App.Themes;
 using Beautiful.App.TopBar;
 using Beautiful.Core.Controls;
 using Beautiful.Core.Layout;
+using Beautiful.App.Interop; // IconExtractor（逐应用混音的行图标）
 using Brush = System.Windows.Media.Brush; // UseWindowsForms 隐式全局 using 与 System.Drawing.Brush 冲突
+using Button = System.Windows.Controls.Button;
+using FontFamily = System.Windows.Media.FontFamily;
+using HorizontalAlignment = System.Windows.HorizontalAlignment;
+using Image = System.Windows.Controls.Image;
 using Brushes = System.Windows.Media.Brushes; // 同上
 using RadioButton = System.Windows.Controls.RadioButton; // 同上（分段选项：WPF 只有 RadioButton 带 GroupName）
 using UserControl = System.Windows.Controls.UserControl; // 同上（WinForms 同名 UserControl）
@@ -52,6 +57,9 @@ public partial class ControlCenterPanel : UserControl, IBackdropAware, IPopupSha
     private readonly SystemVolumeService _volume = new();
     private WifiService? _wifi;   // Wi-Fi 砖块：懒建（面板每次打开重建一次，句柄随 Shutdown 释放）
 
+    /// <summary>逐应用混音（Phase 7-T5）：懒建，Shutdown 时释放所有会话句柄。</summary>
+    private AudioSessionService? _sessions;
+
     /// <summary>初始化/回读期间的屏蔽位：程序改 IsChecked/Value 不得回写系统（同 SettingsWindow 的惯用法）。</summary>
     private bool _loading = true;
 
@@ -73,6 +81,7 @@ public partial class ControlCenterPanel : UserControl, IBackdropAware, IPopupSha
         RefreshVolume();
         RefreshWifi();
         RefreshBrightness();
+        BuildMixer();
         _loading = false;
     }
 
@@ -470,11 +479,163 @@ public partial class ControlCenterPanel : UserControl, IBackdropAware, IPopupSha
         }
     }
 
+    // ---------- 逐应用音量（Phase 7-T5） ----------
+
+    private void MixerRefresh_Click(object sender, RoutedEventArgs e) => BuildMixer();
+
+    /// <summary>
+    /// 重建逐应用音量列表。数据来自 <see cref="AudioSessionService.Enumerate"/>（会话快照），
+    /// 不可用时整块换成一行原因——不画"拖了没反应"的滑杆。
+    /// </summary>
+    private void BuildMixer()
+    {
+        if (MixerList is null)
+        {
+            return;
+        }
+
+        MixerList.Children.Clear();
+        _sessions ??= new AudioSessionService();
+        if (!_sessions.IsAvailable)
+        {
+            MixerReason.Text = _sessions.UnavailableReason ?? "逐应用混音不可用";
+            MixerReason.Visibility = Visibility.Visible;
+            return;
+        }
+
+        var previous = _loading;
+        _loading = true;
+        try
+        {
+            var sessions = _sessions.Enumerate();
+            MixerReason.Visibility = sessions.Count == 0 ? Visibility.Visible : Visibility.Collapsed;
+            MixerReason.Text = "当前没有应用在播放声音";
+            foreach (var session in sessions)
+            {
+                MixerList.Children.Add(BuildMixerRow(session));
+            }
+        }
+        finally
+        {
+            _loading = previous;
+        }
+    }
+
+    /// <summary>一行：[图标] 名称 [静音] 滑杆 百分比。滑杆/静音直接写会话音量（即时生效）。</summary>
+    private FrameworkElement BuildMixerRow(AudioSessionInfo session)
+    {
+        var grid = new Grid { Height = 26, Margin = new Thickness(0, 1, 0, 1) };
+        grid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+        grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+        grid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+        grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(96) });
+        grid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+
+        var iconHost = new Grid { Width = 16, Height = 16, Margin = new Thickness(0, 0, 8, 0) };
+        var icon = session.ExecutablePath is null ? null : IconExtractor.GetIcon(session.ExecutablePath, 32);
+        if (icon is not null)
+        {
+            iconHost.Children.Add(new Image { Source = icon, Stretch = Stretch.Uniform });
+        }
+        else
+        {
+            iconHost.Children.Add(new TextBlock
+            {
+                Text = session.IsSystemSounds ? "\uE767" : "\uE8D6",
+                FontSize = 11,
+                FontFamily = new FontFamily("Segoe Fluent Icons, Segoe MDL2 Assets"),
+                HorizontalAlignment = HorizontalAlignment.Center,
+                VerticalAlignment = VerticalAlignment.Center,
+                Opacity = 0.7,
+                Foreground = (Brush)FindResource("ThemeTextPrimary")
+            });
+        }
+
+        Grid.SetColumn(iconHost, 0);
+        grid.Children.Add(iconHost);
+
+        var name = new TextBlock
+        {
+            Text = session.Name,
+            FontSize = 11.5,
+            VerticalAlignment = VerticalAlignment.Center,
+            TextTrimming = TextTrimming.CharacterEllipsis,
+            ToolTip = session.ExecutablePath ?? session.Name
+        };
+        Grid.SetColumn(name, 1);
+        grid.Children.Add(name);
+
+        var mute = new Button
+        {
+            Content = session.Muted ? "\uE74F" : "\uE767",
+            Width = 20,
+            Height = 20,
+            Margin = new Thickness(4, 0, 4, 0),
+            Padding = new Thickness(0),
+            FontSize = 11,
+            FontFamily = new FontFamily("Segoe Fluent Icons, Segoe MDL2 Assets"),
+            Style = (Style)FindResource("CcFooterStyle"),
+            Foreground = (Brush)FindResource("ThemeTextPrimary"),
+            Opacity = session.Muted ? 0.55 : 1.0,
+            ToolTip = session.Muted ? "取消静音" : "静音"
+        };
+        AutomationProperties.SetName(mute, $"\u9759\u97f3 {session.Name}");
+        mute.Click += (_, _) =>
+        {
+            var target = !session.Muted;
+            if (_sessions?.SetMute(session.ProcessId, target) == true)
+            {
+                BuildMixer();   // 回读真值：不信任界面自己的猜测
+            }
+        };
+        Grid.SetColumn(mute, 2);
+        grid.Children.Add(mute);
+
+        var slider = new Slider
+        {
+            Minimum = 0,
+            Maximum = 100,
+            Value = session.VolumePercent,
+            IsMoveToPointEnabled = true,
+            VerticalAlignment = VerticalAlignment.Center,
+            Margin = new Thickness(0, 0, 6, 0),
+            ToolTip = $"{session.Name} 音量 {session.VolumePercent}%"
+        };
+        AutomationProperties.SetName(slider, $"{session.Name} \u97f3\u91cf");
+        slider.ValueChanged += (_, e) =>
+        {
+            if (_loading)
+            {
+                return;
+            }
+
+            _sessions?.SetVolume(session.ProcessId, (int)Math.Round(e.NewValue));
+        };
+        Grid.SetColumn(slider, 3);
+        grid.Children.Add(slider);
+
+        var percent = new TextBlock
+        {
+            Text = session.Muted ? "静音" : $"{session.VolumePercent}%",
+            FontSize = 10.5,
+            MinWidth = 32,
+            TextAlignment = TextAlignment.Right,
+            VerticalAlignment = VerticalAlignment.Center,
+            Opacity = 0.8
+        };
+        Grid.SetColumn(percent, 4);
+        grid.Children.Add(percent);
+
+        return grid;
+    }
+
     public void Shutdown()
     {
         SetKeepOpen(false);
         _host = null;
         _volume.Dispose();
+        _sessions?.Dispose();
+        _sessions = null;
         _wifi?.Dispose();
         _wifi = null;
     }
