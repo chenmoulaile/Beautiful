@@ -641,6 +641,8 @@
                     <StackPanel>
                         <TextBlock Text="媒体" Style="{StaticResource SectionTitle}"/>
 
+                        <CheckBox x:Name="DockWidgetCheck" Content="在 Dock 行尾显示时钟 / 天气小组件"
+                                  Margin="0,8,0,0" Checked="DockWidget_Changed" Unchecked="DockWidget_Changed"/>
                         <CheckBox x:Name="CapsuleCheck" Content="在 Dock 显示媒体胶囊"
                                   Checked="Capsule_Changed" Unchecked="Capsule_Changed"/>
                         <CheckBox x:Name="HidePanelCheck" Content="媒体面板失焦自动收起"

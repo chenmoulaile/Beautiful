@@ -151,6 +151,7 @@ public partial class SettingsWindow : Window
         ReflectionCheck.IsChecked = s.ReflectionEnabledFor(SettingsService.ThemeDefinitionOf(s).ReflectionDefault);
         BounceCheck.IsChecked = s.BounceEnabled;
         CapsuleCheck.IsChecked = s.ShowMediaCapsule;
+        DockWidgetCheck.IsChecked = s.DockWidgetEnabled;
         HidePanelCheck.IsChecked = s.HidePanelOnDeactivate;
         PreviewCheck.IsChecked = s.PreviewEnabled;
 
@@ -667,6 +668,15 @@ public partial class SettingsWindow : Window
     }
 
     // ---------- 媒体 ----------
+
+    /// <summary>Dock 小组件开关（Phase 7-T3）：立即重排行尾，不需要重启 Dock。</summary>
+    private void DockWidget_Changed(object sender, RoutedEventArgs e)
+    {
+        if (_loading) return;
+        var on = DockWidgetCheck.IsChecked == true;
+        SettingsService.UpdateAndSave(SettingsService.Current with { DockWidgetEnabled = on });
+        App.ApplyDockWidget(on);
+    }
 
     private void Capsule_Changed(object sender, RoutedEventArgs e)
     {

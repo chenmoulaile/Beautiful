@@ -66,6 +66,12 @@ public partial class DockWindow : AcrylicWindow
 
     /// <summary>进度条服务（Phase 7-T1）：轮询 Explorer 拷贝对话框的 UIA 进度。</summary>
     private TaskbarProgressService? _progress;
+
+    /// <summary>小组件天气源（Phase 7-T3）：wttr.in，15 分钟缓存，失败静默。</summary>
+    private WeatherService? _weather;
+
+    /// <summary>小组件时钟定时器（每分钟刷新一次即可；10s 一拍是为了让分钟翻转更及时）。</summary>
+    private System.Windows.Threading.DispatcherTimer? _widgetTimer;
     // 组合根（本任务最简路径）：DockWindow 持有 SmtcService + MediaViewModel，
     // MediaViewModel 构造期自启动 SMTC；MediaPanel 惰性创建（胶囊点击时）。
     // App.OnStartup / DockViewModel 保持不动（媒体条目由 DockViewModel 的 suffix 占位提供）。
@@ -347,6 +353,42 @@ public partial class DockWindow : AcrylicWindow
         // 角标（Phase 7-T2）：标题解析是纯函数，服务只做定时采样；关窗口时在 OnClosed 里停掉。
         _badges = new DockBadgeService(_vm, Surface, Dispatcher);
         _progress = new TaskbarProgressService(Surface, Dispatcher);
+        InitWidget();
+    }
+
+    /// <summary>
+    /// Dock 小组件（Phase 7-T3）：时钟由本地定时器驱动（不联网），天气走 <see cref="WeatherService"/>。
+    /// 天气事件在后台线程触发，这里必须回投 UI 线程再改集合——DockSurface 的条目替换不是线程安全的。
+    /// </summary>
+    private void InitWidget()
+    {
+        _vm.ApplyWidgetEnabled(SettingsService.Current.DockWidgetEnabled);
+        RefreshWidgetClock();
+
+        _widgetTimer = new System.Windows.Threading.DispatcherTimer(
+            TimeSpan.FromSeconds(10), System.Windows.Threading.DispatcherPriority.Background,
+            (_, _) => RefreshWidgetClock(), Dispatcher);
+        _widgetTimer.Start();
+
+        _weather = new WeatherService();
+        _weather.Updated += (_, _) => Dispatcher.BeginInvoke(new Action(() =>
+            _vm.UpdateWidget(detail: _weather?.Current?.Detail)));
+        _weather.RefreshIfStale();
+    }
+
+    private void RefreshWidgetClock()
+        => _vm.UpdateWidget(clock: Core.Dock.DockWidget.Clock(DateTimeOffset.Now));
+
+    /// <summary>小组件点击：打开通知中心（Big Sur 的时钟点击语义，面板里带月历）。</summary>
+    private void OpenWidgetPanel(DockItem item)
+    {
+        Point? anchor = null;
+        if (Surface.GetItemBounds(item) is { } bounds)
+        {
+            anchor = PointToScreen(new Point(bounds.X, bounds.Y));
+        }
+
+        TopBar.NotificationCenterWindow.ShowOrToggle(NotificationService.Current, anchor);
     }
 
     // ---------- 主题引擎（Task 13） ----------
@@ -657,6 +699,10 @@ public partial class DockWindow : AcrylicWindow
         _badges = null;
         _progress?.Dispose();
         _progress = null;
+        _widgetTimer?.Stop();
+        _widgetTimer = null;
+        _weather?.Dispose();
+        _weather = null;
         _vm.Detach();
         _tracker.Dispose();
         _mediaVm.Dispose();                          // 停定时器 + 解除 SmtcService 事件订阅
@@ -938,6 +984,11 @@ public partial class DockWindow : AcrylicWindow
         CancelPreview();
         switch (item.Kind)
         {
+            case DockItemKind.Widget:
+                // 时钟块不启动任何程序：点它只开通知中心（含月历），与顶栏时钟同一语义。
+                OpenWidgetPanel(item);
+                break;
+
             case DockItemKind.Window:
                 var wi = item.WindowHandle is { } h
                     ? _tracker.Windows.FirstOrDefault(w => w.Handle == h)
@@ -1304,6 +1355,9 @@ public partial class DockWindow : AcrylicWindow
         hwnd = IntPtr.Zero;
         switch (item.Kind)
         {
+            case DockItemKind.Widget:   // 小组件没有可预览的窗口
+                return false;
+
             case DockItemKind.Window:
                 var h = item.WindowHandle ?? IntPtr.Zero;
                 if (h != IntPtr.Zero && NativeMethods.IsWindow(h) && !NativeMethods.IsIconic(h))

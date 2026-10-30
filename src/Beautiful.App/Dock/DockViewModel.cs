@@ -38,6 +38,12 @@ public sealed class DockViewModel
     private readonly DockItem _recycleBin = CreateRecycleBinItem();
     private readonly DockItem _media = CreateMediaItem();
 
+    /// <summary>Dock 小组件（时钟 + 天气）。Label = 时钟、Detail = 温度与天气描述。</summary>
+    private DockItem _widget = CreateWidgetItem();
+
+    /// <summary>小组件是否参与排布（设置项 DockWidgetEnabled）。关闭后整块从行尾消失。</summary>
+    private bool _widgetEnabled = true;
+
     // 分隔符同样是固定实例（角色 → 实例）：槽位不变时 Reconcile 不产生任何集合事件
     private readonly DockItem _appsSeparator = MakeSeparator(DockSeparatorRole.AppsBoundary);
     private readonly DockItem _trashSeparator = MakeSeparator(DockSeparatorRole.TrashBoundary);
@@ -275,6 +281,55 @@ public sealed class DockViewModel
     /// <summary>回收站图标的 shell 命名空间 id（启动路径是 shell: 形式，取图要用 ::{clsid} 形式）。</summary>
     private const string RecycleBinIconSource = "::{645FF040-5081-101B-9F08-00AA002F954E}";
 
+    private static DockItem CreateWidgetItem()
+        => new(Id: "widget:clock-weather",
+               Label: DockWidget.Clock(DateTimeOffset.Now),
+               Icon: null,
+               Kind: DockItemKind.Widget,
+               LaunchPath: string.Empty,
+               Detail: DockWidget.Detail(null, -1));
+
+    /// <summary>
+    /// 刷新小组件两行文字（时钟由定时器驱动，天气由 WeatherService 驱动）。
+    /// 只在文字真的变了时才替换条目实例：<see cref="Reconcile"/> 用引用相等做最小差异，
+    /// 每秒替换会让 DockSurface 每秒重建一次容器（放大动画会被打断）。
+    /// </summary>
+    public void UpdateWidget(string? clock = null, string? detail = null)
+    {
+        var updated = _widget with
+        {
+            Label = clock ?? _widget.Label,
+            Detail = detail ?? _widget.Detail
+        };
+
+        if (updated == _widget)
+        {
+            return;
+        }
+
+        _widget = updated;
+        for (var i = 0; i < Items.Count; i++)
+        {
+            if (Items[i].Kind == DockItemKind.Widget)
+            {
+                Items[i] = _widget;
+                return;
+            }
+        }
+    }
+
+    /// <summary>开关小组件（设置页）：立即重排，不需要重启 Dock。</summary>
+    public void ApplyWidgetEnabled(bool enabled)
+    {
+        if (_widgetEnabled == enabled)
+        {
+            return;
+        }
+
+        _widgetEnabled = enabled;
+        Reconcile();
+    }
+
     private static DockItem CreateMediaItem()
         => new(Id: "media", Label: "媒体", Icon: null, Kind: DockItemKind.Media, LaunchPath: string.Empty);
 
@@ -404,6 +459,13 @@ public sealed class DockViewModel
         AddBlock(semantic, kinds, _windows);
         semantic.Add(_recycleBin); kinds.Add(_recycleBin.Kind);
         semantic.Add(_media); kinds.Add(_media.Kind);
+
+        // 小组件挂在行尾（媒体胶囊之后）：它不参与固定/窗口块，也不该被分隔符切开——
+        // macOS 的 Dock 里"信息块"永远在最右端单独待着。
+        if (_widgetEnabled)
+        {
+            semantic.Add(_widget); kinds.Add(_widget.Kind);
+        }
 
         // ② 主题决定的分隔符槽位（Core 纯函数，可单测）
         _slots = DockSeparatorPlan.Slots(kinds, _separatorsEnabled);

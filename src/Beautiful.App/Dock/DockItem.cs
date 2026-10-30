@@ -17,6 +17,11 @@ namespace Beautiful.App.Dock;
 /// 回收站是 shell 命名空间 id。烘焙缓存按它取键，因此它必须稳定且能区分不同图标；
 /// 为 null 时转换器退回用原位图实例的引用身份。
 /// </param>
+/// <param name="Detail">
+/// 第二行小字（目前只有小组件用：温度 + 天气描述）。其它条目为 null。
+/// 单独一个字段而不是塞进 <see cref="Label"/>：Label 是工具提示/无障碍名称，
+/// 把温度拼进去会让读屏把"14:05 23° 晴"当成应用名念一遍。
+/// </param>
 public record DockItem(
     string Id,
     string Label,
@@ -24,4 +29,5 @@ public record DockItem(
     DockItemKind Kind,
     string LaunchPath,
     IntPtr? WindowHandle = null,
-    string? IconSource = null);
+    string? IconSource = null,
+    string? Detail = null);

@@ -153,10 +153,35 @@
                            Fill="{DynamicResource ThemeDockSeparatorFill}"/>
             </Grid>
         </DataTemplate>
+        <!-- 小组件条目（Phase 7-T3）：时钟 + 天气两行字。
+             不给图标：图标槽位会让两行文字挤在 44 DIP 里；宽度固定 112，
+             使 Dock 的放大场把整块当作一个"图标"处理，邻居推挤仍然自然。 -->
+        <DataTemplate x:Key="WidgetItemTemplate">
+            <Grid x:Name="ItemRoot" Background="Transparent" Width="112"
+                  ToolTip="{Binding Detail}">
+                <StackPanel VerticalAlignment="Center">
+                    <TextBlock Text="{Binding Label}" FontSize="17" FontWeight="SemiBold"
+                               HorizontalAlignment="Center"
+                               Foreground="{DynamicResource ThemeTextPrimary}"/>
+                    <TextBlock Text="{Binding Detail}" FontSize="11.5" Margin="0,1,0,0"
+                               HorizontalAlignment="Center" MaxWidth="106"
+                               TextTrimming="CharacterEllipsis"
+                               Foreground="{DynamicResource ThemeTextSecondary}"/>
+                </StackPanel>
+                <Border x:Name="Hover" CornerRadius="14" Background="#22FFFFFF"
+                        IsHitTestVisible="False" Visibility="Collapsed"/>
+            </Grid>
+            <DataTemplate.Triggers>
+                <Trigger SourceName="ItemRoot" Property="IsMouseOver" Value="True">
+                    <Setter TargetName="Hover" Property="Visibility" Value="Visible"/>
+                </Trigger>
+            </DataTemplate.Triggers>
+        </DataTemplate>
         <dock:DockItemTemplateSelector x:Key="ItemSelector"
                                        DefaultTemplate="{StaticResource DefaultItemTemplate}"
                                        MediaTemplate="{StaticResource MediaItemTemplate}"
-                                       SeparatorTemplate="{StaticResource SeparatorItemTemplate}"/>
+                                       SeparatorTemplate="{StaticResource SeparatorItemTemplate}"
+                                       WidgetTemplate="{StaticResource WidgetItemTemplate}"/>
         <!-- 条目右键菜单（固定/取消固定）v2 Task 15 起改走 FluentMenu（自绘高级弹层，观感同托盘菜单）：
              代码后置按 DockSurface.HitTestItem 命中的条目在光标处 FluentMenu.Show，不再用原生 ContextMenu。
              历史注记：容器挂 ContextMenuService 的 ContextMenu 在本 AppBar 窗口会把事件路由到

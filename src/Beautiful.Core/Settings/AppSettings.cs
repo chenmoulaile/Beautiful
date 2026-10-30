@@ -26,6 +26,12 @@ public sealed record AppSettings
     /// <summary>Dock 是否显示媒体胶囊条目。</summary>
     public bool ShowMediaCapsule { get; init; } = true;
 
+    /// <summary>
+    /// Dock 行尾的时钟/天气小组件（Phase 7-T3）。默认开；关掉后整块从行尾消失，
+    /// 不占宽度也不联网取天气。
+    /// </summary>
+    public bool DockWidgetEnabled { get; init; } = true;
+
     /// <summary>媒体面板失焦是否自动收起。</summary>
     public bool HidePanelOnDeactivate { get; init; } = true;
 

@@ -16,9 +16,13 @@ public sealed class DockItemTemplateSelector : DataTemplateSelector
     public DataTemplate? MediaTemplate { get; set; }
     public DataTemplate? SeparatorTemplate { get; set; }
 
+    public DataTemplate? WidgetTemplate { get; set; }
+
     public override DataTemplate? SelectTemplate(object item, DependencyObject container) => item switch
     {
         DockItem { Kind: DockItemKind.Media } => MediaTemplate,
+        // 小组件没有图标，走图标模板会被画成回退字形 ▣
+        DockItem { Kind: DockItemKind.Widget } => WidgetTemplate ?? DefaultTemplate,
         // 分隔符模板未提供（旧主题字典缺键）时收起为 0 宽条目：宁可看不见也不画成方块图标
         DockItem { Kind: DockItemKind.Separator } => SeparatorTemplate ?? DefaultTemplate,
         _ => DefaultTemplate

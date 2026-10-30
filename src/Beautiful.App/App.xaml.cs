@@ -939,6 +939,17 @@ public partial class App : Application
     /// <summary>外部请求打开设置窗口。<see cref="OpenSettings"/> 自己是单例的，重复请求只会激活。</summary>
     internal static void OpenSettingsFromExternal() => (Current as App)?.OpenSettings();
 
+    /// <summary>设置页切换 Dock 小组件：直接让 Dock 重排行尾（不需要重启，也不重建窗口）。</summary>
+    internal static void ApplyDockWidget(bool enabled)
+    {
+        if (Current is App { _dock: { } dock })
+        {
+            dock.Vm.ApplyWidgetEnabled(enabled);
+        }
+
+        Logger.Info($"Dock 小组件已{(enabled ? "启用" : "停用")}");
+    }
+
     /// <summary>设置页切换音量 HUD：重建控制器（关掉时连钩子都不装，媒体键立刻回到系统行为）。</summary>
     internal static void ApplyVolumeOsd(bool enabled)
     {
