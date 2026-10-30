@@ -181,7 +181,13 @@ public sealed class VolumeOsdController : IDisposable
 
         try
         {
-            _window ??= new VolumeOsdWindow();
+            // 上一次淡出后窗口已 Close，不能复用（WPF 关闭的 Window 不可再 Show）：
+            // 检测到已关闭就重建一个。这是"第一次能用、第二次按音量键没反应"的根因。
+            if (_window is null || !_window.IsLoaded)
+            {
+                _window = new VolumeOsdWindow();
+            }
+
             _window.ShowState(percent, muted, hold);
         }
         catch (Exception ex)

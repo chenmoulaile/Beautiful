@@ -82,6 +82,7 @@ public partial class NotificationCenterWindow : Window
             PositionAtRightEdge();
             Rebuild();
             PanelScroll.ScrollToTop();
+            PlaySlideIn();
             _ = EnsureServiceStartedAsync();
         };
         Closed += (_, _) =>
@@ -150,6 +151,28 @@ public partial class NotificationCenterWindow : Window
     }
 
     private Point? AnchorPhysical { get; init; }
+
+    /// <summary>
+    /// 从右侧滑入（Big Sur 通知中心是"从边缘推出来"的）：位移 20 DIP + 淡入，180ms。
+    /// 只动 RenderTransform，不重排布局；结束后清掉变换，避免影响后续命中测试。
+    /// </summary>
+    private void PlaySlideIn()
+    {
+        var transform = new TranslateTransform(20, 0);
+        RenderTransform = transform;
+        Opacity = 0;
+
+        var slide = new System.Windows.Media.Animation.DoubleAnimation(0, TimeSpan.FromMilliseconds(180))
+        {
+            EasingFunction = new System.Windows.Media.Animation.QuadraticEase
+            {
+                EasingMode = System.Windows.Media.Animation.EasingMode.EaseOut
+            }
+        };
+        var fade = new System.Windows.Media.Animation.DoubleAnimation(1, TimeSpan.FromMilliseconds(140));
+        transform.BeginAnimation(TranslateTransform.XProperty, slide);
+        BeginAnimation(OpacityProperty, fade);
+    }
 
     // ---------- 定位 ----------
 

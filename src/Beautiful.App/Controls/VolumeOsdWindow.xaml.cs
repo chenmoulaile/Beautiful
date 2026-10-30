@@ -89,9 +89,18 @@ public partial class VolumeOsdWindow : Window
         _shownAt = DateTime.UtcNow;
         HoldFor = hold ?? VolumeOsd.HoldDuration;
 
+        _closed = false;   // 上一次已淡出关闭：这次重新显示必须清掉标志，否则 Tick 直接 return
         if (!IsVisible)
         {
-            Show();
+            try
+            {
+                Show();
+            }
+            catch (InvalidOperationException)
+            {
+                // 窗口已被销毁（Close 之后不能再 Show）：由控制器重建实例
+                throw;
+            }
         }
 
         PositionAtTopCenter();

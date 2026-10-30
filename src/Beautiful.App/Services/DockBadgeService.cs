@@ -28,7 +28,8 @@ internal sealed class DockBadgeService : IDisposable
     /// <summary>能解析出未读数的应用（exe 文件名小写）。扩大范围前请先确认真机标题格式。</summary>
     private static readonly HashSet<string> Whitelist = new(StringComparer.OrdinalIgnoreCase)
     {
-        "wechat.exe",       // 微信 4.x
+        "wechat.exe",       // 微信 3.x
+        "weixin.exe",       // 微信 4.x（真机反馈未出现角标，4.x 主进程名是 Weixin.exe）
         "wechatappex.exe",  // 微信小程序宿主
         "qq.exe",           // QQ
         "tim.exe"           // TIM
@@ -85,6 +86,13 @@ internal sealed class DockBadgeService : IDisposable
                 }
 
                 counts[exe] = counts.TryGetValue(exe, out var existing) ? Math.Max(existing, count) : count;
+            }
+
+            // 诊断：白名单应用的"exe + 解析出的条数"各记一次（不含标题），用来确认
+            // 微信到底跑的是哪个 exe、标题里有没有未读数——只统计，不泄露消息内容。
+            foreach (var pair in counts)
+            {
+                Logger.Info($"Dock 角标：{pair.Key} 解析到 {pair.Value} 条未读");
             }
 
             var badges = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
