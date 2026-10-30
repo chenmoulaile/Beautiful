@@ -312,10 +312,18 @@
 
                         <StackPanel Orientation="Horizontal" Margin="0,16,0,0">
                             <TextBlock Text="图标大小" Style="{StaticResource RowLabel}" Width="72"/>
-                            <Slider x:Name="IconSizeSlider" Width="300" Minimum="32" Maximum="72"
+                            <Slider x:Name="IconSizeSlider" Width="300" Minimum="32" Maximum="96"
                                     SmallChange="1" LargeChange="4" IsSnapToTickEnabled="True" TickFrequency="1"
                                     VerticalAlignment="Center" ValueChanged="IconSizeSlider_ValueChanged"/>
                             <TextBlock x:Name="IconSizeLabel" Style="{StaticResource ValueLabel}"/>
+                        </StackPanel>
+
+                        <StackPanel Orientation="Horizontal" Margin="0,12,0,0">
+                            <TextBlock Text="距底边距" Style="{StaticResource RowLabel}" Width="72"/>
+                            <Slider x:Name="DockEdgeMarginSlider" Width="300" Minimum="0" Maximum="24"
+                                    SmallChange="1" LargeChange="4" IsSnapToTickEnabled="True" TickFrequency="1"
+                                    VerticalAlignment="Center" ValueChanged="DockEdgeMargin_ValueChanged"/>
+                            <TextBlock x:Name="DockEdgeMarginLabel" Style="{StaticResource ValueLabel}"/>
                         </StackPanel>
 
                         <StackPanel Orientation="Horizontal" Margin="0,12,0,0">
@@ -510,6 +518,10 @@
                                   Checked="MinimizeAnimation_Changed" Unchecked="MinimizeAnimation_Changed"/>
                         <TextBlock Style="{StaticResource HintText}"
                                    Text="动画器在启动时装配，本项修改后重启 Beautiful 生效（不做假即时）。"/>
+                        <CheckBox x:Name="FullscreenAvoidanceCheck" Content="全屏应用时隐藏菜单栏与 Dock"
+                                  Margin="0,10,0,0" Checked="FullscreenAvoidance_Changed" Unchecked="FullscreenAvoidance_Changed"/>
+                        <TextBlock Style="{StaticResource HintText}"
+                                   Text="真全屏（盖住整块屏）才让位；最大化窗口不触发。判定在 Core FullscreenAvoidance，1s 轮询只读前台几何。"/>
 
                         <StackPanel Orientation="Horizontal" Margin="0,14,0,0">
                             <TextBlock Text="genie 引擎" Style="{StaticResource RowLabel}" Width="84"/>

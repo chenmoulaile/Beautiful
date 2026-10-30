@@ -43,7 +43,7 @@ namespace Beautiful.App.Dock;
 public partial class DockWindow : AcrylicWindow
 {
     // 面板可见高度与条带顶部透明余量随图标尺寸/主题几何/放大强度动态计算（见 VisiblePanelDip / StripHeadroomDip），
-    // 不再是固定常量——图标尺寸是设置项（32..72），macOS 放大后图标会向上生长，窗口必须容得下。
+    // 不再是固定常量——图标尺寸是设置项（32..96），macOS 放大后图标会向上生长，窗口必须容得下。
     // 【v3 T4：竖向几何全部主题驱动】行内余量（DockSurface.RowInsetDip）与面板内边距取自 ThemeDefinition，
     // 于是"面板贴图标"成为原生各自的值而不是统一 20+12：IconSize=44 时 macOS 行 54 / 面板 66 DIP
     // （原 64 / 76；倒影显式开启时仍复原为 83.2 / 95.2，见 DockRowMath 推导）。
@@ -431,6 +431,9 @@ public partial class DockWindow : AcrylicWindow
                                     theme.DockPanelPaddingXDip, theme.DockPanelPaddingYDip);
         Surface.Margin = padding;
         DockPanelRoot.Padding = padding;
+        // 悬浮感（Big Sur）：面板距屏幕底边默认 4 DIP。PanelHost 整体上移 margin，
+        // VisiblePanelDip() 把 margin 计入 AppBar 预留带，于是"预留高度 = 面板 + 空隙"。
+        PanelHost.Margin = new Thickness(0, 0, 0, s.DockEdgeMargin);
         // 烘焙参数（主题形状 / 尺寸 / DPI / IconTreatment）→ 决定 ThemeIconClip 的属主，必须在下面两步之前
         ScheduleIconRebind();
         // 图标宽高 + 遮罩 + 分隔符几何（线粗/高度/盒宽）随尺寸与主题重注入主题字典（冻结/数值，非逐帧路径）。
@@ -472,7 +475,7 @@ public partial class DockWindow : AcrylicWindow
     private void ScheduleIconRebind()
     {
         // 图块按"放大上限"一起放大烘焙：不放大时传 1，行为与过去完全一致；
-        // 放大开着时按 MaxScale 烘，1.8× 的悬停放大才是从大图向下采样而不是拉伸。
+        // 放大开着时按 MaxScale 烘，1.7× 的悬停放大才是从大图向下采样而不是拉伸。
         var magnification = Surface.ShowMagnification ? Surface.MaxScale : 1.0;
         var changed = IconBakeContext.Configure(ThemeManager.Current, Surface.IconSize,
                                                 CurrentDpiScale(), SettingsService.Current.IconTreatment,
@@ -505,10 +508,11 @@ public partial class DockWindow : AcrylicWindow
     /// + 主题上下内边距各一（XAML 里 Surface.Margin / DockPanelRoot.Padding 由 <see cref="ApplySurfaceLayoutParams"/>
     /// 写成同一组主题值，所以这里不是第二条算术路径而是同一来源的两次消费）。
     /// <b>这是上报 shell 的 AppBar 预留带高度</b>（v3 §1.C：停靠区只预留 Dock 本体）。
-    /// IconSize=44 时：macOS 66 DIP、Linux 70、鸿蒙 72（v2 统一 76，倒影开启 95.2）。
+    /// IconSize=56 时：macOS 面高按主题行高计算（v2 统一 76，倒影开启 95.2）。
     /// </summary>
     private double VisiblePanelDip()
-        => DockRowMath.PanelHeightDip(Surface.RowHeightDip, ThemeManager.Current.DockPanelPaddingYDip);
+        => DockRowMath.PanelHeightDip(Surface.RowHeightDip, ThemeManager.Current.DockPanelPaddingYDip)
+           + SettingsService.Current.DockEdgeMargin;
 
     /// <summary>
     /// 窗口在面板之上的透明余量，供放大后的图标向上生长不被窗口上沿裁切。
@@ -517,7 +521,7 @@ public partial class DockWindow : AcrylicWindow
     /// "旧统一行内余量 20 的一半 + 旧的 6 DIP 面板边距"；v3 T4 把行内余量交给主题（macOS 10）之后
     /// 常量就不成立了——面板收紧 10 DIP，放大后的图标顶边会被窗口上沿切掉一截。
     /// 现在越出量由 <see cref="DockRowMath.MagnificationHeadroomDip"/> 用同一组主题值算：
-    /// IconSize=44/MaxScale=1.8/余量 10/边距 6 → 24.2 → 取 25（≥22 的下限保住"贴底无缝"的实测结论）。
+    /// IconSize=44/MaxScale=1.7/余量 10/边距 6 → 24.2 → 取 25（≥22 的下限保住"贴底无缝"的实测结论）。
     /// <para>
     /// v3 T1 起这截余量<b>只在窗口矩形里</b>（<c>StripMath.WindowRect</c> 把窗口在预留带之上放大），
     /// 不再进 ABM_SETPOS 的上报值 —— 窗口可以越出自己的 AppBar 预留带，预留带只决定工作区。

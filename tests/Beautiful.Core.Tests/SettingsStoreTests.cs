@@ -15,6 +15,7 @@ public class AppSettingsTests
         Assert.True(s.NativeBlur);
         Assert.False(s.NativeTrayBridge);   // Phase 2 注入默认关：真机演练回执后才允许默认开
         Assert.Equal("auto", s.MaterialQuality);
+        Assert.True(s.FullscreenAvoidanceEnabled);
         Assert.Equal("hide", s.TaskbarPolicy);
         Assert.False(s.Autostart);
         Assert.True(s.ShowMediaCapsule);
@@ -40,15 +41,16 @@ public class AppSettingsTests
     }
 
     [Fact]
-    public void v2默认值_顶栏切换器预览弹跳开_倒影关_图标48_放大1点8_底部_热键默认()
+    public void v2默认值_顶栏切换器预览弹跳开_倒影关_图标56_放大1点7_底部_热键默认()
     {
         var s = new AppSettings();
         Assert.True(s.TopBarEnabled);
         Assert.True(s.SwitcherEnabled);
         Assert.Equal("macos", s.SwitcherStyle);
         Assert.Equal("alt+tab", s.SwitcherHotkey);
-        Assert.Equal(48, s.DockIconSize);
-        Assert.Equal(1.8, s.MagnificationStrength);
+        Assert.Equal(56, s.DockIconSize);
+        Assert.Equal(4, s.DockEdgeMargin);
+        Assert.Equal(1.7, s.MagnificationStrength);
         Assert.Equal("bottom", s.DockPosition);
         Assert.True(s.PreviewEnabled);
         Assert.True(s.BounceEnabled);
@@ -64,7 +66,7 @@ public class AppSettingsTests
     {
         Assert.Equal(40, new AppSettings { DockIconSize = 40 }.Normalized().DockIconSize);
         Assert.Equal(32, new AppSettings { DockIconSize = 32 }.Normalized().DockIconSize);
-        Assert.Equal(72, new AppSettings { DockIconSize = 72 }.Normalized().DockIconSize);
+        Assert.Equal(96, new AppSettings { DockIconSize = 96 }.Normalized().DockIconSize);
         Assert.Equal(2.2, new AppSettings { MagnificationStrength = 2.2 }.Normalized().MagnificationStrength);
         Assert.Equal(1.0, new AppSettings { MagnificationStrength = 1.0 }.Normalized().MagnificationStrength);
         Assert.Equal(2.5, new AppSettings { MagnificationStrength = 2.5 }.Normalized().MagnificationStrength);
@@ -73,7 +75,9 @@ public class AppSettingsTests
     [Fact]
     public void v2数值字段_越界钳制_图标32到72_放大1点0到2点5()
     {
-        Assert.Equal(72, new AppSettings { DockIconSize = 200 }.Normalized().DockIconSize);
+        Assert.Equal(96, new AppSettings { DockIconSize = 200 }.Normalized().DockIconSize);
+        Assert.Equal(24, new AppSettings { DockEdgeMargin = 40 }.Normalized().DockEdgeMargin);
+        Assert.Equal(0, new AppSettings { DockEdgeMargin = -3 }.Normalized().DockEdgeMargin);
         Assert.Equal(32, new AppSettings { DockIconSize = 8 }.Normalized().DockIconSize);
         Assert.Equal(32, new AppSettings { DockIconSize = -100 }.Normalized().DockIconSize);
         Assert.Equal(2.5, new AppSettings { MagnificationStrength = 9 }.Normalized().MagnificationStrength);
@@ -134,7 +138,7 @@ public class AppSettingsTests
         Assert.Equal(ok, ok.Normalized());
 
         var bad = new AppSettings { DockIconSize = 200, MagnificationStrength = 9 }.Normalized();
-        Assert.Equal(72, bad.DockIconSize);         // 图标尺寸上限
+        Assert.Equal(96, bad.DockIconSize);         // 图标尺寸上限
         Assert.Equal(2.5, bad.MagnificationStrength); // 放大强度上限
     }
 
@@ -320,8 +324,9 @@ public class AppSettingsStoreTests : IDisposable
         Assert.True(s.SwitcherEnabled);
         Assert.Equal("macos", s.SwitcherStyle);
         Assert.Equal("alt+tab", s.SwitcherHotkey);
-        Assert.Equal(48, s.DockIconSize);
-        Assert.Equal(1.8, s.MagnificationStrength);
+        Assert.Equal(56, s.DockIconSize);
+        Assert.Equal(4, s.DockEdgeMargin);
+        Assert.Equal(1.7, s.MagnificationStrength);
         Assert.Equal("bottom", s.DockPosition);
         Assert.True(s.PreviewEnabled);
         Assert.True(s.BounceEnabled);
@@ -376,7 +381,7 @@ public class AppSettingsStoreTests : IDisposable
         File.WriteAllText(Path.Combine(_dir, "settings.json"),
             """{"DockIconSize":200,"MagnificationStrength":9}""");
         var s = _store.Load();
-        Assert.Equal(72, s.DockIconSize);
+        Assert.Equal(96, s.DockIconSize);
         Assert.Equal(2.5, s.MagnificationStrength);
 
         File.WriteAllText(Path.Combine(_dir, "settings.json"),

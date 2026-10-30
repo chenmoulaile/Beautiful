@@ -41,7 +41,7 @@ public sealed record ThemeDefinition(
     double IconMaskRadiusRatio, // 圆角半径 / artwork 边长（Squircle 忽略本值，用 Superellipse 的 n）
     bool IconShadow)            // 是否烘焙"图标自身 alpha 轮廓"下方的柔影（macOS/鸿蒙有，GNOME 无）
 {
-    /// <summary>控制器裁定：MaxScale&gt;1 才启用高斯放大（macOS MaxScale=1.8）。</summary>
+    /// <summary>控制器裁定：MaxScale&gt;1 才启用高斯放大（macOS MaxScale=1.7）。</summary>
     public bool ShowMagnification => MaxScale > 1.0;
 
     /// <summary>
@@ -50,7 +50,7 @@ public sealed record ThemeDefinition(
     /// </summary>
     public double DockSeparatorBoxWidthDip => DockSeparatorWidthDip + 2.0 * DockSeparatorSideInsetDip;
 
-    /// <summary>macOS：暗色亚克力 #B4202020（tint 同底色）、系统蓝 #0A84FF、抛物线放大 MaxScale=1.8、
+    /// <summary>macOS：暗色亚克力 #B4202020（tint 同底色）、系统蓝 #0A84FF、抛物线放大 MaxScale=1.7、
     /// 指示点=图标下方小圆点。原生 Dock **紧贴图标**（行内只留约 10 DIP 呼吸）、
     /// 有「固定应用 | 正在运行 | 废纸篓」两道分隔符、现代 macOS **无倒影**。
     /// </summary>
@@ -59,11 +59,11 @@ public sealed record ThemeDefinition(
         DockBackground: Argb("#B4202020"),
         AcrylicTint: Argb("#B4202020"),
         BlurEnabled: true,
-        PanelCornerRadius: 18,
+        PanelCornerRadius: 25,
         IconCornerRadiusRatio: 0,
-        IconSize: 44,
-        ItemSpacing: 6,
-        MaxScale: 1.8,
+        IconSize: 56,
+        ItemSpacing: 7,
+        MaxScale: 1.7,
         IndicatorStyle: "dot",
         AccentHex: "#0A84FF",
         FontFamily: "Segoe UI Variable",

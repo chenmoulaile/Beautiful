@@ -59,8 +59,11 @@ public sealed record AppSettings
     /// <summary>切换器触发键组合（小写规范形，如 "alt+tab" / "ctrl+alt+tab"）。</summary>
     public string SwitcherHotkey { get; init; } = "alt+tab";
 
-    /// <summary>Dock 基准图标尺寸（32..72，加载时钳制）。</summary>
-    public int DockIconSize { get; init; } = 48;
+    /// <summary>Dock 基准图标尺寸（32..96，加载时钳制）。</summary>
+    public int DockIconSize { get; init; } = 56;
+
+    /// <summary>Dock 面板距屏幕底边距（0..24 DIP，默认 4；macOS 是悬浮感而非贴死底边）。</summary>
+    public int DockEdgeMargin { get; init; } = 4;
 
     /// <summary>悬停放大强度倍率（1.0..2.5，加载时钳制）。默认值与 <see cref="DefaultMagnificationStrength"/> 同源。</summary>
     public double MagnificationStrength { get; init; } = DefaultMagnificationStrength;
@@ -116,6 +119,12 @@ public sealed record AppSettings
     /// 最大化/还原则做一段缩放过渡。关掉即回到"瞬间消失/瞬间变大"的系统行为。
     /// </summary>
     public bool MinimizeAnimation { get; init; } = true;
+
+    /// <summary>
+    /// 真全屏应用（游戏/F11/视频）盖住整块屏时，隐藏菜单栏与 Dock；退出全屏后恢复。
+    /// 判定全部走 Core <see cref="Layout.FullscreenAvoidance"/>（物理矩形比较，最大化不触发）。
+    /// </summary>
+    public bool FullscreenAvoidanceEnabled { get; init; } = true;
 
     /// <summary>
     /// 顶栏是否显示"托盘图标区"入口（v3.2）：点开可看到通知区域里被收起的第三方应用图标，
@@ -199,7 +208,11 @@ public sealed record AppSettings
     public const int MinDockIconSize = 32;
 
     /// <summary>Dock 图标尺寸上限。</summary>
-    public const int MaxDockIconSize = 72;
+    public const int MaxDockIconSize = 96;
+
+    /// <summary>Dock 距底边距下限/上限（DIP）。</summary>
+    public const int MinDockEdgeMargin = 0;
+    public const int MaxDockEdgeMargin = 24;
 
     /// <summary>放大强度下限（1.0 = 不放大）。</summary>
     public const double MinMagnificationStrength = 1.0;
@@ -212,7 +225,7 @@ public sealed record AppSettings
     /// （见 Controls.QuickSettings.WithMagnification）。写在这里而不是散在 UI 里，
     /// 是为了让"新配置的默认值"和"重新打开放大"永远是同一个数。
     /// </summary>
-    public const double DefaultMagnificationStrength = 1.8;
+    public const double DefaultMagnificationStrength = 1.7;
 
     /// <summary>显示器选择器的关键字取值（序号形另由 <see cref="MaxMonitorIndex"/> 界定）。</summary>
     public static IReadOnlyList<string> KnownMonitorKeywords { get; } = ["auto", "primary"];
@@ -224,7 +237,7 @@ public sealed record AppSettings
     public const int MaxMonitorIndex = 16;
 
     /// <summary>
-    /// 加载侧规范化：数值字段钳制到合法区间（DockIconSize 32..72、
+    /// 加载侧规范化：数值字段钳制到合法区间（DockIconSize 32..96、
     /// MagnificationStrength 1.0..2.5）；枚举串字段（主题/策略/切换器样式/停靠边/图标处理方式）
     /// 小写去空白后比对白名单，未知值收敛为默认，避免手改配置把 App 侧映射打到兜底分支之外的未定义行为。
     /// 显示器选择器（DockMonitor/TopBarMonitor）走 <see cref="MonitorSelectorOrDefault"/>：
@@ -247,6 +260,7 @@ public sealed record AppSettings
         SwitcherHotkey = HotkeyOrDefault(SwitcherHotkey, "alt+tab"),
         LauncherHotkey = Launcher.LauncherHotkey.Canonicalize(LauncherHotkey),
         DockIconSize = Math.Clamp(DockIconSize, MinDockIconSize, MaxDockIconSize),
+        DockEdgeMargin = Math.Clamp(DockEdgeMargin, MinDockEdgeMargin, MaxDockEdgeMargin),
         MagnificationStrength = Math.Clamp(MagnificationStrength, MinMagnificationStrength, MaxMagnificationStrength),
         DockMonitor = MonitorSelectorOrDefault(DockMonitor),
         TopBarMonitor = MonitorSelectorOrDefault(TopBarMonitor),

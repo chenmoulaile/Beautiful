@@ -43,6 +43,7 @@ public partial class App : Application
     private Animation.MinimizeAnimator? _animator;
 
     private TopBarWindow? _topBar;
+    private FullscreenAvoidanceService? _fullscreenAvoidance;
     private Switcher.SwitcherService? _switcher;
     private Switcher.SwitcherWindow? _switcherWindow;
     private Launcher.LauncherService? _launcher;
@@ -138,6 +139,7 @@ public partial class App : Application
             // 6.5 顶栏（Task 8）：同一受保护序列内创建（失败回滚链路覆盖它）。但它是附属表面，
             // 创建异常仅记日志降级为"无顶栏运行"，不得连坐 Dock/任务栏策略整体退出。
             if (SettingsService.Current.TopBarEnabled) EnsureTopBar();
+            else RestartFullscreenAvoidance();   // 顶栏关闭时也要为 Dock 启动全屏避让
 
             // 6.6 切换器（Task 11）：Alt+Tab 接管。同样按"附属能力"处理——钩子装不上只是退回原生
             // Alt+Tab，绝不能连坐主 UI；但退出时必须先卸钩（见 ExitApp/OnExit）。
@@ -181,6 +183,8 @@ public partial class App : Application
         // 兜底路径（系统会话结束、显式 Shutdown 等）也要清理；与 ExitApp 重复调用均幂等
         SystemAppearance.Changed -= OnSystemAppearanceChanged;
         SystemAppearance.Stop();
+        _fullscreenAvoidance?.Dispose();
+        _fullscreenAvoidance = null;
         _tray?.Dispose();
         _tray = null;
         _animator?.Dispose();   // WinEvent 钩子必须卸载（幂等）
@@ -313,6 +317,7 @@ public partial class App : Application
             _dock = dock;
             if (SettingsService.Current.TopBarEnabled) EnsureTopBar();
             EnsureSwitcherWindow();
+            RestartFullscreenAvoidance();
         }
         catch (Exception ex)
         {
@@ -345,6 +350,7 @@ public partial class App : Application
             bar.Show();
             _topBar = bar;
             Logger.Info("顶栏已显示");
+            RestartFullscreenAvoidance();
         }
         catch (Exception ex)
         {
@@ -380,6 +386,16 @@ public partial class App : Application
         _topBar = null;
         old.Close();
         Logger.Info("顶栏已销毁（条带已归还）");
+        RestartFullscreenAvoidance();
+    }
+
+    /// <summary>重建全屏避让服务（Dock/顶栏实例变化时调用；幂等）。</summary>
+    private void RestartFullscreenAvoidance()
+    {
+        _fullscreenAvoidance?.Dispose();
+        _fullscreenAvoidance = null;
+        if (_dock is not null && !_exiting)
+            _fullscreenAvoidance = new FullscreenAvoidanceService(_dock, _topBar);
     }
 
     /// <summary>设置页开关的即时生效入口（Task 16 设置 UI 接线用）：落盘 + 显示/隐藏，无需重启。</summary>

@@ -11,7 +11,7 @@ public class ThemeDefinitionTests
         Assert.Equal("#0A84FF", t.AccentHex);        // 系统蓝
         Assert.Equal("dot", t.IndicatorStyle);
         Assert.True(t.BlurEnabled);                  // 暗/亮亚克力
-        Assert.Equal(18, t.PanelCornerRadius, 6);
+        Assert.Equal(25, t.PanelCornerRadius, 6);
         Assert.Equal(0, t.IconCornerRadiusRatio, 6); // 图标原样不遮罩（T6 收到烘焪位图拥有形状）
         // 暗色亚克力 #B4202020
         Assert.Equal(0xB4, t.DockBackground.A);
@@ -23,14 +23,14 @@ public class ThemeDefinitionTests
     [Fact]
     public void macOS启用放大_而非放大的主题MaxScale为1()
     {
-        Assert.Equal(1.8, ThemeDefinition.MacOs().MaxScale, 6);
+        Assert.Equal(1.7, ThemeDefinition.MacOs().MaxScale, 6);
         Assert.True(ThemeDefinition.MacOs().ShowMagnification);
     }
 
     [Fact]
     public void ShowMagnification派生属性随MaxScale联动()
     {
-        // 控制器裁定：MaxScale > 1 才开高斯放大；macOS MaxScale=1.8 → 放大
+        // 控制器裁定：MaxScale > 1 才开高斯放大；macOS MaxScale=1.7 → 放大
         Assert.True(ThemeDefinition.MacOs().ShowMagnification);
     }
 

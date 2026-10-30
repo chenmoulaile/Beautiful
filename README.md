@@ -41,6 +41,17 @@ Beautiful 接管日常桌面三件套：屏幕底部是悬浮 Dock（应用固�
 
 > Phase 2 未完成/待回执：HostBackdrop 真机实拍、WGC 对 Chrome/Electron 窗口的实测、注入演练 explorer 健康回执、看门狗"explorer 异常重启 ≥2 次/10min 自动禁用"（当前只有手动开关与 payload 自卸载兜底）。
 
+## v4.0-alpha Phase 3 变更（Dock，进行中）
+
+| 目标 | 现在 | 证据/边界 |
+|---|---|---|
+| Big Sur Dock 度量（P3-T1 部分） | 默认图标 56px（范围 32-96）、放大 1.7x、面板圆角 25、间距 7；新增「距底边距」设置（0-24，默认 4）并真正进入 AppBar 预留带与 PanelHost 底边距 | `SettingsStoreTests`/`ThemeDefinitionTests` 777 通过；**真机观感 UNVERIFIED(owner)** |
+| 全屏避让（P3-T6） | `FullscreenAvoidanceService`：1s 读前台 DWM 可见矩形，Core `FullscreenAvoidance` 判定；真全屏隐藏菜单栏/Dock，退出恢复；设置「全屏应用时隐藏菜单栏与 Dock」默认开 | 纯函数 28 条既有测试 + 服务构建通过；**真全屏触发 UNVERIFIED(owner)** |
+| 材质（P3-T2） | 已接 Phase 2 `NativeMaterialHost`（探针可用让出静态底） | 同 Phase 2 边界 |
+| 堆栈/最近项目/停靠边/自动隐藏/genie 三效果（P3-T3/T4/T5/T7） | **未开始**（下一批） | 不假装完成；按总纲 Core 先行逐项实现 |
+
+> Phase 3 仅完成"度量默认值 + 全屏避让 + 材质接线"三块；堆栈、最近项目解析、左右/顶部停靠、四种隐藏模式、genie/zoom/suck 三效果仍待实现。真机对比截图是出口判据。
+
 ## 本地运行（真正能跑的那份在哪）
 
 - **装起来用（推荐）**：下载 GitHub Release 里的 `Beautiful-Setup-v<版本>.exe`，双击安装。

@@ -153,6 +153,8 @@ public partial class SettingsWindow : Window
 
         // 滑杆：设值触发 ValueChanged 更新标签；_loading 屏蔽应用/保存（值已由 Current 提供，均已规范化）
         IconSizeSlider.Value = s.DockIconSize;
+        DockEdgeMarginSlider.Value = s.DockEdgeMargin;
+        DockEdgeMarginLabel.Text = $"{s.DockEdgeMargin} px";
         MagnifySlider.Value = s.MagnificationStrength;
 
 
@@ -162,6 +164,7 @@ public partial class SettingsWindow : Window
         LauncherEnabledCheck.IsChecked = s.LauncherEnabled;
         LauncherHotkeyBox.Text = s.LauncherHotkey;
         MinimizeAnimationCheck.IsChecked = s.MinimizeAnimation;
+        FullscreenAvoidanceCheck.IsChecked = s.FullscreenAvoidanceEnabled;
         NativeModulesCheck.IsChecked = s.NativeModules;
         NativeBlurCheck.IsChecked = s.NativeBlur;
         NativeCaptureCheck.IsChecked = s.NativeCapture;
@@ -266,8 +269,18 @@ public partial class SettingsWindow : Window
         ScheduleSave();
     }
 
-    private void MagnifySlider_ValueChanged(object sender, RoutedPropertyChangedEventArgs<double> e)
+    private void DockEdgeMargin_ValueChanged(object sender, RoutedPropertyChangedEventArgs<double> e)
     {
+        if (DockEdgeMarginLabel is null) return;
+        var px = (int)e.NewValue;
+        DockEdgeMarginLabel.Text = $"{px} px";
+        if (_loading) return;
+        SettingsService.Update(SettingsService.Current with { DockEdgeMargin = px });
+        App.ApplyDockLayout();
+        ScheduleSave();
+    }
+
+    private void MagnifySlider_ValueChanged(object sender, RoutedPropertyChangedEventArgs<double> e)    {
         if (MagnifyLabel is null) return;
         var m = Math.Round(e.NewValue, 1);
         MagnifyLabel.Text = $"×{m:0.0}";
@@ -359,6 +372,13 @@ public partial class SettingsWindow : Window
         if (_loading) return;
         // 动画器在启动时装配：只落盘，不假装即时生效（设置页文案已写明"重启生效"）
         SettingsService.UpdateAndSave(SettingsService.Current with { MinimizeAnimation = MinimizeAnimationCheck.IsChecked == true });
+    }
+
+    private void FullscreenAvoidance_Changed(object sender, RoutedEventArgs e)
+    {
+        if (_loading) return;
+        SettingsService.UpdateAndSave(SettingsService.Current with { FullscreenAvoidanceEnabled = FullscreenAvoidanceCheck.IsChecked == true });
+        // 服务每 1s 读设置；这里不强行触发，下一拍自然按新值恢复/让位。
     }
 
     private void GenieEngine_Changed(object sender, SelectionChangedEventArgs e)
