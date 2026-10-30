@@ -62,6 +62,7 @@ internal sealed class DockContextMenuExecutor
             switch (entry.Action)
             {
                 case DockContextAction.Open: Launch(entry.TargetPath, menu.Item); break;
+                case DockContextAction.OpenRecent: Launch(entry.TargetPath, menu.Item); break;
                 case DockContextAction.OpenNewWindow: OpenNewWindow(entry.TargetPath, menu.Item); break;
                 case DockContextAction.RunAsAdmin: RunAsAdmin(entry.TargetPath, menu.Item); break;
                 case DockContextAction.OpenFileLocation: OpenFileLocation(entry.TargetPath); break;

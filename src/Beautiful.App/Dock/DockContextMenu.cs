@@ -69,6 +69,9 @@ internal static class DockContextMenuBuilder
             Windows = snaps,
             ThisWindowHandle = item.Kind == DockItemKind.Window ? item.WindowHandle ?? IntPtr.Zero : IntPtr.Zero,
             ForegroundHandle = foreground,
+            RecentItems = executable.EndsWith(".exe", StringComparison.OrdinalIgnoreCase)
+                ? RecentItemsService.FindForApp(executable, 6)
+                : Array.Empty<DockRecentItem>(),
             RecycleBinHasItems = item.Kind == DockItemKind.RecycleBin && RecycleBinHasItems(),
             // 真机实测（Win11 24H2）：properties 动词对快捷方式可用、对裸 .exe 返回 1155，
             // 而 shell 的按序号属性页 API 在本进程内调用会抛 → 裸 exe 干脆不给这一格（见 Core 的字段说明）

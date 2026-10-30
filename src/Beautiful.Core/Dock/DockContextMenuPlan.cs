@@ -16,6 +16,9 @@ public enum DockContextAction
     /// <summary>打开新窗口（再启动一次；浏览器类附 <c>-new-window</c>）。</summary>
     OpenNewWindow,
 
+    /// <summary>打开"最近使用的项目"里的一个文件（P3-T4；来自 Recent 快捷方式，App 侧解析）。</summary>
+    OpenRecent,
+
     /// <summary>以管理员身份运行（runas 动词）。</summary>
     RunAsAdmin,
 
@@ -79,6 +82,13 @@ public readonly record struct DockWindowSnap(
     IntPtr Handle, string Title, uint ProcessId, string ProcessName,
     bool IsMinimized, bool IsMaximized);
 
+/// <summary>最近使用的项目（App 侧从 Recent 快捷方式解析；Core 只负责排菜单，不碰文件系统）。</summary>
+/// <param name="Label">显示名（通常是文件名）。</param>
+/// <param name="TargetPath">点击后 ShellExecute 的目标。</param>
+/// <param name="LastUsedUtc">最近使用时间（用于排序/诊断）。</param>
+/// <param name="Exists">目标是否仍存在；false 时菜单项置灰并写明原因。</param>
+public readonly record struct DockRecentItem(string Label, string TargetPath, DateTime LastUsedUtc, bool Exists = true);
+
 /// <summary>构建一次 Dock 右键菜单的全部输入（一次弹出的快照，构建后不再变化）。</summary>
 public sealed record DockContextMenuInput
 {
@@ -99,6 +109,12 @@ public sealed record DockContextMenuInput
 
     /// <summary>该条目对应的所有窗口：Pinned = 同可执行文件的全部窗口；Window = 同进程的全部窗口。</summary>
     public IReadOnlyList<DockWindowSnap> Windows { get; init; } = Array.Empty<DockWindowSnap>();
+
+    /// <summary>
+    /// 该应用最近使用的项目（P3-T4；App 侧从 Recent 快捷方式按默认打开程序匹配）。
+    /// 空表 = 整段子菜单不出现——绝不挂一个空子菜单冒充"已实现"。
+    /// </summary>
+    public IReadOnlyList<DockRecentItem> RecentItems { get; init; } = Array.Empty<DockRecentItem>();
 
     /// <summary>Kind=Window 时本条目自己那一格对应的窗口句柄（Pinned/回收站传 0）。</summary>
     public IntPtr ThisWindowHandle { get; init; }
@@ -240,8 +256,28 @@ public static class DockContextMenuPlan
                 Id = "newwin", Action = DockContextAction.OpenNewWindow, Label = "打开新窗口", TargetPath = input.LaunchPath,
                 IsEnabled = !missing, DisabledReason = missing ? MissingTarget : null
             },
-            DockContextMenuEntry.Sep("sep0"),
         };
+
+        // 最近使用的项目：只有真的解析出条目才出现（P3-T4；空表不挂空子菜单）
+        if (input.RecentItems.Count > 0)
+        {
+            items.Add(new DockContextMenuEntry
+            {
+                Id = "recent",
+                Action = DockContextAction.OpenRecent,
+                Label = "最近使用的项目",
+                Children = input.RecentItems.Select(r => new DockContextMenuEntry
+                {
+                    Id = "recent:" + r.TargetPath,
+                    Action = DockContextAction.OpenRecent,
+                    Label = r.Label,
+                    TargetPath = r.TargetPath,
+                    IsEnabled = r.Exists,
+                    DisabledReason = r.Exists ? null : "文件已不存在",
+                }).ToList()
+            });
+        }
+        items.Add(DockContextMenuEntry.Sep("sep0"));
 
         // 只有真有窗口才有这一段：空窗口列表挂一个"窗口（0）"子菜单是假入口，规则由测试钉住
         if (running)

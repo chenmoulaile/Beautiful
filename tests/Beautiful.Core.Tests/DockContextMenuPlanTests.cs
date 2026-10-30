@@ -61,6 +61,31 @@ public class DockContextMenuPlanTests
             Assert.Empty(DockContextMenuPlan.Build(new DockContextMenuInput { Kind = kind }));
     }
 
+    [Fact]
+    public void 最近项目非空才出现_空表不挂空子菜单()
+    {
+        var empty = DockContextMenuPlan.Build(Pinned());
+        Assert.DoesNotContain(empty, e => e.Action == DockContextAction.OpenRecent);
+
+        var withRecent = Pinned() with
+        {
+            RecentItems =
+            [
+                new DockRecentItem("report.docx", @"C:\Docs\report.docx", DateTime.UtcNow, Exists: true),
+                new DockRecentItem("gone.txt", @"C:\Docs\gone.txt", DateTime.UtcNow.AddMinutes(-5), Exists: false),
+            ]
+        };
+        var plan = DockContextMenuPlan.Build(withRecent);
+        var recent = plan.Single(e => e.Action == DockContextAction.OpenRecent);
+        Assert.Equal("最近使用的项目", recent.Label);
+        Assert.Equal(2, recent.Children!.Count);
+        Assert.True(recent.Children[0].IsEnabled);
+        Assert.False(recent.Children[1].IsEnabled);
+        Assert.Equal("文件已不存在", recent.Children[1].DisabledReason);
+        Assert.Equal(DockContextAction.OpenRecent, recent.Children[0].Action);
+        Assert.Equal(@"C:\Docs\report.docx", recent.Children[0].TargetPath);
+    }
+
     // ---------- 固定应用：未运行 ----------
 
     [Fact]
