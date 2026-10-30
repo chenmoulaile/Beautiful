@@ -110,6 +110,12 @@ public sealed class DockSurface : Canvas
     /// <summary>倒影元素（与 _containers 同下标；null = 该项无倒影：媒体槽/无图标回退项/倒影关闭/分隔符）。</summary>
     private readonly List<FrameworkElement?> _reflections = new();
 
+    /// <summary>角标元素（按条目 Id 索引）：只覆盖状态，不改 DockItem 本身（record 不被 UI 状态污染）。</summary>
+    private readonly Dictionary<string, FrameworkElement> _badgeElements = new(StringComparer.Ordinal);
+
+    /// <summary>当前角标文字（按条目 Id）：条目重建/换源后据此把角标重新挂回新容器。</summary>
+    private readonly Dictionary<string, string> _badgeTexts = new(StringComparer.Ordinal);
+
     /// <summary>逐帧几何状态（下标 = 条目下标，与 _containers 对齐）。</summary>
     private double[] _cur = Array.Empty<double>();     // 当前（阻尼后）scale
     private double[] _tgt = Array.Empty<double>();     // 目标 scale（来自放大场）
@@ -449,6 +455,7 @@ public sealed class DockSurface : Canvas
         _containers.Clear();
         _items.Clear();
         _reflections.Clear();
+        _badgeElements.Clear();   // 容器已销毁：映射会在下面按 _badgeTexts 重新挂回
 
         var items = ItemsSource;
         if (items is not null)
@@ -468,6 +475,7 @@ public sealed class DockSurface : Canvas
                     fe.RenderTransform = new ScaleTransform(1.0, 1.0);
                     fe.SizeChanged += OnContainerSizeChanged;
                     Children.Add(fe);               // Panel.Children 负责可视/逻辑父子关系
+                    AttachBadge(fe, item.Id);       // 已知角标（换源/重建后）跟着新容器一起挂回去
                 }
                 _containers.Add(fe);
             }
@@ -530,6 +538,149 @@ public sealed class DockSurface : Canvas
             grid.Children.Add(reflection);
             _reflections[i] = reflection;
         }
+    }
+
+    // ---------- 角标（Phase 7-T2） ----------
+
+    /// <summary>
+    /// 按"进程 exe 文件名（小写、含扩展名）→ 角标文字"应用角标；不在表里的条目清空角标。
+    /// <para>
+    /// 键用 exe 文件名而不是完整路径：同一应用可能从不同版本目录启动（WindowsApps 的桩与实体路径），
+    /// 按整路径匹配会漏；而不同应用同名 exe 的概率远小于此。固定项与窗口项都能命中同一份表——
+    /// macOS 的角标语义就是"这个应用有几条未读"，与它是钉住的还是正在跑的无关。
+    /// </para>
+    /// </summary>
+    public void ApplyBadges(IReadOnlyDictionary<string, string> badgeByProcess)
+    {
+        foreach (var item in _items)
+        {
+            if (item is null || item.Kind == DockItemKind.Separator)
+            {
+                continue;
+            }
+
+            var exe = ExecutableKeyOf(item);
+            var text = exe.Length > 0 && badgeByProcess.TryGetValue(exe, out var value) ? value : null;
+            SetBadge(item.Id, text);
+        }
+    }
+
+    /// <summary>给某条目设置角标（null/空 = 清空）。</summary>
+    public void SetBadge(string itemId, string? text)
+    {
+        if (string.IsNullOrEmpty(text))
+        {
+            _badgeTexts.Remove(itemId);
+        }
+        else
+        {
+            _badgeTexts[itemId] = text;
+        }
+
+        if (_badgeElements.TryGetValue(itemId, out var element) && element is Border border
+            && border.Child is TextBlock label)
+        {
+            if (string.IsNullOrEmpty(text))
+            {
+                border.Visibility = Visibility.Collapsed;
+                return;
+            }
+
+            label.Text = text;
+            border.Visibility = Visibility.Visible;
+            return;
+        }
+
+        // 容器已存在但还没挂角标（例如诊断入口在树建好之后才设置）：就地补挂一次。
+        // 这一步必须在这里做，否则"设置了却看不见"——真机截图也看不出来，只有单测/日志能吵。
+        if (!string.IsNullOrEmpty(text))
+        {
+            var index = _items.FindIndex(item => string.Equals(item?.Id, itemId, StringComparison.Ordinal));
+            if (index >= 0 && index < _containers.Count && _containers[index] is { } container)
+            {
+                AttachBadge(container, itemId);
+            }
+        }
+    }
+
+    /// <summary>把条目对应的 exe 文件名折成键（小写）；拿不到返回空串。</summary>
+    private static string ExecutableKeyOf(DockItem item)
+    {
+        var candidate = item.Kind == DockItemKind.Window ? item.IconSource : item.IconSource ?? item.LaunchPath;
+        if (string.IsNullOrWhiteSpace(candidate))
+        {
+            return string.Empty;
+        }
+
+        try
+        {
+            var name = System.IO.Path.GetFileName(candidate);
+            return name.EndsWith(".exe", StringComparison.OrdinalIgnoreCase)
+                ? name.ToLowerInvariant()
+                : string.Empty;   // .lnk / 目录 / shell: 之类没有 exe 语义，不参与角标
+        }
+        catch (ArgumentException)
+        {
+            return string.Empty;
+        }
+    }
+
+    /// <summary>若该条目有已知角标，就在它的模板根 Grid 里挂一个右上角胶囊。</summary>
+    private void AttachBadge(FrameworkElement container, string? itemId)
+    {
+        if (itemId is null || container is not Grid grid)
+        {
+            return;
+        }
+
+        if (!_badgeTexts.TryGetValue(itemId, out var text) || text.Length == 0)
+        {
+            return;
+        }
+
+        var label = new TextBlock
+        {
+            Text = text,
+            FontSize = 9.5,
+            FontWeight = FontWeights.SemiBold,
+            Foreground = System.Windows.Media.Brushes.White,
+            HorizontalAlignment = System.Windows.HorizontalAlignment.Center,
+            VerticalAlignment = VerticalAlignment.Center
+        };
+
+        var badge = new Border
+        {
+            CornerRadius = new CornerRadius(8),
+            Background = BadgeBrush(),
+            MinWidth = 16,
+            Height = 16,
+            Padding = new Thickness(4, 0, 4, 0),
+            HorizontalAlignment = System.Windows.HorizontalAlignment.Right,
+            VerticalAlignment = VerticalAlignment.Top,
+            // 右上角、略微探出图标：macOS 的角标是压在图标边上的，不是嵌在图标里
+            Margin = new Thickness(0, -2, -4, 0),
+            IsHitTestVisible = false,
+            Child = label,
+            Effect = new System.Windows.Media.Effects.DropShadowEffect
+            {
+                BlurRadius = 4,
+                ShadowDepth = 0,
+                Opacity = 0.5,
+                Color = Colors.Black
+            }
+        };
+
+        grid.Children.Add(badge);
+        _badgeElements[itemId] = badge;
+        Logger.Info($"Dock 角标：已挂 {text}");
+    }
+
+    /// <summary>角标底色：macOS 的红色（比系统强调色更"提醒"）。冻结共享，避免每个角标一份 brush。</summary>
+    private static Brush BadgeBrush()
+    {
+        var brush = new SolidColorBrush(Color.FromRgb(0xFF, 0x3B, 0x30));
+        brush.Freeze();
+        return brush;
     }
 
     /// <summary>图标尺寸变更后刷新已挂倒影的高度/下探量（低频路径：滑杆/主题切换）。</summary>

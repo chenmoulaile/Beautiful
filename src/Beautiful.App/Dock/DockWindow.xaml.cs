@@ -60,6 +60,9 @@ public partial class DockWindow : AcrylicWindow
 
     private readonly WindowTracker _tracker = new();
     private readonly DockViewModel _vm;
+
+    /// <summary>角标服务（Phase 7-T2）：定时读白名单应用标题里的未读数。</summary>
+    private DockBadgeService? _badges;
     // 组合根（本任务最简路径）：DockWindow 持有 SmtcService + MediaViewModel，
     // MediaViewModel 构造期自启动 SMTC；MediaPanel 惰性创建（胶囊点击时）。
     // App.OnStartup / DockViewModel 保持不动（媒体条目由 DockViewModel 的 suffix 占位提供）。
@@ -337,6 +340,9 @@ public partial class DockWindow : AcrylicWindow
         // 策略重放订阅与上面的 ThemeChanged 同一条时序纪律：句柄已生成、构造已完成，
         // OnClosed 里有对称的一句解绑（半构造实例绝不挂在宿主事件上）。
         if (_taskbar is not null) _taskbar.PolicyApplied += OnTaskbarPolicyApplied;
+
+        // 角标（Phase 7-T2）：标题解析是纯函数，服务只做定时采样；关窗口时在 OnClosed 里停掉。
+        _badges = new DockBadgeService(_vm, Surface, Dispatcher);
     }
 
     // ---------- 主题引擎（Task 13） ----------
@@ -604,12 +610,32 @@ public partial class DockWindow : AcrylicWindow
         base.OnClosing(e);
     }
 
+    /// <summary>诊断入口：把角标打到第一个非分隔符条目上（截图验收用，不进产品逻辑）。</summary>
+    public void ApplyBadgeForDiagnostics(string text)
+    {
+        // 诊断拍照期间停掉实时角标服务：否则 3 秒后它会用"没有未读"把示例角标清掉，
+        // 截图里就只剩一个干净的 Dock（这个坑实测踩过一次）。
+        _badges?.Dispose();
+        _badges = null;
+
+        var item = _vm.Items.FirstOrDefault(i => i.Kind != DockItemKind.Separator);
+        if (item is not null)
+        {
+            Surface.SetBadge(item.Id, text);
+        }
+    }
+
+    /// <summary>诊断截图用的窗口句柄（未创建时 Zero）。</summary>
+    public IntPtr GetDiagnosticsHandle() => _hwnd;
+
     protected override void OnClosed(EventArgs e)
     {
         ThemeManager.ThemeChanged -= OnThemeChanged;
         _nativeMaterial?.Dispose();
         _nativeMaterial = null; // 解除主题订阅，防止闭包引用已关闭窗口
         if (_taskbar is not null) _taskbar.PolicyApplied -= OnTaskbarPolicyApplied;
+        _badges?.Dispose();
+        _badges = null;
         _vm.Detach();
         _tracker.Dispose();
         _mediaVm.Dispose();                          // 停定时器 + 解除 SmtcService 事件订阅

@@ -61,6 +61,9 @@ public partial class App : Application
 
     private bool _exiting;
 
+    /// <summary>诊断截图是否专门拍 Dock（--dock-badge）：只影响 --shot 选窗口，不影响产品逻辑。</summary>
+    private bool _shotDock;
+
     protected override void OnStartup(StartupEventArgs e)
     {
         base.OnStartup(e);
@@ -187,6 +190,14 @@ public partial class App : Application
             {
                 EnsureTopBar();
                 _topBar?.ShowControlCenterForDiagnostics();
+            }
+
+            // 7.05 --dock-badge <text>：Dock 角标截图入口（把角标打到第一个条目，不读真实未读）
+            var dockBadge = ParseArgValue(e.Args, "--dock-badge");
+            if (!string.IsNullOrWhiteSpace(dockBadge))
+            {
+                _shotDock = true;
+                _dock?.ApplyBadgeForDiagnostics(dockBadge!);
             }
 
             // 7.10 --banner-test：通知横幅截图入口（用固定示例内容，不读真实通知）
@@ -952,6 +963,11 @@ public partial class App : Application
             // 简介卡优先（它通常盖在访达之上，是本次要拍的证据）。
             // 音量 HUD 最先（诊断入口打开时它就是要拍的东西），其次通知中心，再访达。
             var handle = _volumeOsd?.DiagnosticsHandle ?? IntPtr.Zero;
+            if (handle == IntPtr.Zero && _shotDock)
+            {
+                handle = _dock?.GetDiagnosticsHandle() ?? IntPtr.Zero;
+            }
+
             if (handle == IntPtr.Zero)
             {
                 handle = TopBar.NotificationBannerHost.DiagnosticsHandle;
