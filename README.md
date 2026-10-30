@@ -51,7 +51,7 @@ Beautiful 接管日常桌面三件套：屏幕底部是悬浮 Dock（应用固�
 | 文件夹堆栈（P3-T3 起步） | 文件夹可作为 Dock 固定项；Core `DockPinOps.CanPin` 允许目录；点击弹 FluentMenu 列表（Shell 图标、在访达中打开、最多 10 项）；二级目录暂以资源管理器打开 | `DockPinCanPinTests`；**列表形态，fan/grid 布局、OLE 拖出、嵌套堆栈与下载堆栈仍未完成** |
 | 最小化效果（P3-T7 部分） | `MinimizeEffect` = genie/zoom/suck；速度 0.5-2.0x；按进程排除清单；设置页动画卡接线。zoom 目前是源窗口内中心缩放淡出，suck 是更紧的条带吸吮 | 设置归一化单测 + 1058 测试通过；**native shader 网格渲染与精确 Dock 位移仍未完成**，真机动画目视 UNVERIFIED(owner) |
 | 最近使用的项目（P3-T4 起步） | 从 `%APPDATA%\Microsoft\Windows\Recent\*.lnk` 读取，按目标扩展名的默认打开程序（AssocQueryString）匹配 Dock 应用；Dock 右键出现“最近使用的项目”子菜单；空表整段不出现，缺失文件置灰 | `DockContextMenuPlanTests`；**不是 AutomaticDestinations-ms/Jump List 解析**，浏览器等自定义 AppID 可能匹配不到，已在 README 如实标注 |
-| 停靠边/自动隐藏（P3-T5） | **未开始**（下一批） | 不假装完成；按总纲 Core 先行逐项实现 |
+| 停靠边/自动隐藏（P3-T5） | **未开始**（需所有者在场验收） | 卡点：`StripEdge` 只有 Top/Bottom，左右停靠要同时改 Core 几何、`MonitorGeometry.ForEdge`、`DockSurface` 的横排/竖排布局与 AppBar 四边协商；自动隐藏还涉及隐藏时回收/恢复工作区。这些是**注入/目视类交互**，盲改会直接弄坏桌面工作区，按 §2.5 需所有者配合验收，故本轮不动 |
 
 > Phase 3 已完成"度量默认值 + 全屏避让 + 材质接线 + 文件夹堆栈列表形态 + 最近项目（Recent 快捷方式）+ 最小化三效果设置（WPF 路径）"；fan/grid 堆栈、AutomaticDestinations-ms 解析、左右/顶部停靠、四种隐藏模式、native shader 动画仍待实现。真机对比截图是出口判据。
 
@@ -443,9 +443,9 @@ dotnet publish src/Beautiful.App -c Release -r win-x64 --self-contained true -p:
 |---|---|---|
 | 触发角（P5-T2 起步） | Core `HotCornerPlan` 四角命中 + `HotCornerDwellState` 驻留状态机（300ms、触发后须离开再武装）；`HotCornerService` 100ms GetCursorPos（不装鼠标钩子），真全屏时抑制；设置页新增「触发角」四角下拉：禁用/显示桌面/锁定屏幕/睡眠（默认全禁用） | `HotCornerPlanTests` + 1058 测试通过；**Launchpad/屏保动作未提供**（依赖 Phase 5 Launchpad 与屏保接线，不放假选项）；真机四角触发 UNVERIFIED(owner) |
 | Launchpad（P5-T1 起步） | F4 全局热键（RegisterHotKey，失败只记日志）；全屏 7×5 网格、壁纸模糊底、搜索过滤、翻页/滚轮、Enter/点击启动；复用 LauncherService 索引（171 条真实应用 smoke） | 真实 Win11 `--launchpad` 截图验证；**文件夹、拖拽排序、自定义图标/持久化、Dock 启动台图标、壁纸幻灯片降级仍待后续**；搜索占位已修 |
-| Spotlight 视觉 / 打开动画 | **未开始**（Next） | Phase 5 其余项未做 |
+| Spotlight 视觉（P5-T4） | 卡片 680 宽/圆角 12、搜索行留白与 20px 放大镜、结果行 32px 图标 + 主标题/副标题两行、选中态 ThemeAccent；`--spotlight` 截图入口 | 真机截图 `logs/5-t4-spotlight.png`；**窗口打开动画（P5-T3）仍未做**（依赖 native 幽灵渲染） |
 
-> Phase 5 已完成触发角与 Launchpad 基础版；Spotlight 视觉校准、窗口打开动画、Launchpad 文件夹/拖拽仍待后续。
+> Phase 5 已完成触发角、Launchpad 基础版与 Spotlight 视觉校准；**窗口打开动画（P5-T3，需 native 幽灵渲染）与 Launchpad 文件夹/拖拽仍待后续**。
 
 ## v4.0-alpha Phase 6 变更（访达，进行中）
 
@@ -459,9 +459,13 @@ dotnet publish src/Beautiful.App -c Release -r win-x64 --self-contained true -p:
 | 每文件夹视图选项（P6-b） | `FinderViewOptionRules`（值域钳制/路径键归一/容量上限 200/枚举字符串往返）+ `FinderViewOptionsStore`（`config/finder-view-options.json`，损坏自愈不删文件）；视图/排序列/图标尺寸/隐藏项按文件夹记忆；列表表头点击排序（同列翻转，▲/▼） | `FinderViewOptionsTests`（11）；真机截图确认列表表头「名称 ▲」与图标尺寸滑杆随视图显隐 |
 | Quick Look（P6-b） | `QuickLookRouter`（扩展名 → 文本/图片/媒体/PDF/信息卡）+ `QuickLookPager`（多选循环翻页）；窗口：文本 64KB BOM 感知、图片 OnLoad 解码、MediaElement 播放、**PDF 走 `Windows.Data.Pdf` 渲染首页**（StorageFile 失败自动退内存流）、失败一律信息卡并写明原因；多选空格 ←/→ 翻页、空格/Esc 关闭 | `QuickLookRouterTests` + `QuickLookPagerTests`（5）；真机 `--quicklook logs/pdf-smoke.pdf` 截图渲染出页面与「PDF 共 1 页」；**加密/系统 PDF 引擎不接受的文件回退信息卡（`logs/task05-sample.pdf` 实测 0x80048014）**；HEIC/IPreviewHandler 探针未做 |
 | 显示简介（P6-b） | `FinderInfoWindow`（⌘I / `--info`）：通用（种类/大小/占用磁盘/创建/修改）+ 打开方式（AssocQueryString 友好名）+ 位置（可选中路径）+ 权限与属性（只读/隐藏/系统，只读展示） | 真机截图：PDF 卡显示 595 字节、占用磁盘 595 字节、默认程序 Microsoft Edge；**改权限/改打开方式不提供**（系统写入，按 §16.8 留给所有者） |
-| 文件操作 UI（复制/移动/删除/重命名） | **未开始**（Next） | `IFileOperation` + macOS 风格进度浮窗 + 就地重命名尚未接线；Core 规划函数已就绪 |
-| 标签页 / 搜索 / 画廊 / Dock 互通 | **未开始**（P6-c） | 标签条、⌘F 全局搜索、画廊视图、Dock 堆栈"在访达中打开"仍未做 |
+| 文件操作（P6-c） | `IFileOperation` 互操作（复制/移动/回收站/重命名/新建文件夹）+ macOS 风格进度卡（当前项/进度/停止）；取消走 `IFileOperationProgressSink.Pre*Item` 返回 `E_ABORT` 软中断；删除降级链 `IFileOperation → VB 回收站 API`；剪贴板 = 进程内 `FinderClipboard` + 系统 `CF_HDROP`（可与资源管理器互拷） | `FinderClipboardTests`（13）+ `--fileop-smoke` 真机链路：建/拷/改名/回收站全部 PASS，无残留；**跨进程剪切降级为复制**（README 已写明） |
+| 标签页（P6-c） | `FinderTabSet`（每标签独立 `NavigationHistory`）+ Big Sur 标签条（多标签才出现）；⌘T 新建（插在当前右侧）、⌘W 关标签（最后一个才关窗）；标签点击切换并恢复各自视图选项 | `FinderTabSetTests`（14）；真机 `--tabs` 截图：4 标签、激活态高亮 |
+| 搜索（P6-c） | 当前文件夹实时过滤（零 IO）+「这台 Mac」受控递归：`FinderSearchLimits` 深度 8 / 2000 条 / 8 秒、跳过重解析点（防目录环）；结果带「位置」列；Esc 退出搜索 | `FinderSearchTests`（9）；真机 `--search .cs`：776 命中、状态栏文案正确；**不是全局索引**（Everything 式索引不在范围） |
+| Dock 互通（P6-c） | Dock 文件夹堆栈「在访达中打开」→ 自家访达（目录直接导航，文件打开所在目录） | 代码路径；真机点击 UNVERIFIED(owner) |
+| 画廊视图 / 标签拖出 | **未做** | 画廊（大图 + 胶片条）与拖标签出窗仍在 P6-c 清单上，未实现 |
 
 > Phase 6-b 已完成分栏/图标两视图、Quick Look（含 PDF 首页渲染）、显示简介与每文件夹视图选项；
-> **IFileOperation 文件操作 UI、标签页/搜索/画廊、Dock 互通仍待 P6-c**。
-> 真机截图证据存于 `logs/6b-*.png`（不入库，`logs/` 已 gitignore）；注入类/拖拽类交互仍为 `UNVERIFIED(owner)`。
+> Phase 6-c 已完成文件操作、标签页、搜索与 Dock 互通。
+> **剩余：画廊视图、拖标签出窗、注册为文件夹打开处理器（决策点 DF-1）**。
+> 真机截图证据存于 `logs/6b-*.png` / `logs/6c-*.png`（不入库，`logs/` 已 gitignore）；注入类/拖拽类交互仍为 `UNVERIFIED(owner)`。
