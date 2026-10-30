@@ -40,10 +40,21 @@ internal sealed class TaskbarProgressService : IDisposable
     private readonly DispatcherTimer _timer;
     private bool _disposed;
 
+    /// <summary>连续几次没找到对话框才清除进度条（防"对话框换阶段/重建"时进度条闪烁）。</summary>
+    private int _misses;
+
+    /// <summary>上一次上报的进度（用于"变化才写日志"，避免 300ms 一条刷屏）。</summary>
+    private double _lastFraction = double.NaN;
+
+    /// <summary>已 dump 过进度条结构的对话框句柄（每个对话框只 dump 一次）。</summary>
+    private IntPtr _dumpedDialog = IntPtr.Zero;
+
     public TaskbarProgressService(DockSurface surface, Dispatcher dispatcher)
     {
         _surface = surface;
-        _timer = new DispatcherTimer(TimeSpan.FromMilliseconds(700), DispatcherPriority.Background,
+        // 300ms：拷贝对话框自身大约每 100–200ms 更新一次，700ms 会明显"慢半拍"；
+        // 没有对话框时这一拍只是一次 EnumWindows（微秒级），有对话框时多一次 UIA 读（毫秒级）。
+        _timer = new DispatcherTimer(TimeSpan.FromMilliseconds(300), DispatcherPriority.Background,
             (_, _) => Refresh(), dispatcher);
         _timer.Start();
     }
@@ -58,11 +69,38 @@ internal sealed class TaskbarProgressService : IDisposable
 
         try
         {
-            var (found, fraction) = Probe();
+            var (found, fraction) = Probe(out var dialog);
             if (!found)
             {
-                _surface.ApplyProgress(Empty);
+                // 防抖：一次性没找到不等于拷贝结束（对话框换阶段时可能瞬时消失），
+                // 连续 3 次（约 0.9s）都没找到才清空。
+                if (++_misses >= 3)
+                {
+                    if (_lastFraction is not double.NaN)
+                    {
+                        Logger.Info("进度：拷贝对话框已消失，清除进度条");
+                        _lastFraction = double.NaN;
+                    }
+
+                    _surface.ApplyProgress(Empty);
+                }
+
                 return;
+            }
+
+            _misses = 0;
+
+            if (dialog != _dumpedDialog)
+            {
+                _dumpedDialog = dialog;
+                DumpProgressBars(dialog);
+            }
+
+            var value = fraction < 0 ? -1 : DockProgressBar.Clamp(fraction);
+            if (double.IsNaN(_lastFraction) || value < 0 || Math.Abs(value - _lastFraction) >= 0.02)
+            {
+                Logger.Info($"进度：fraction={(value < 0 ? "未知" : value.ToString("0.###"))}（已应用到 Dock）");
+                _lastFraction = value;
             }
 
             var map = new Dictionary<string, (double, DockProgressState)>(StringComparer.OrdinalIgnoreCase)
@@ -84,7 +122,12 @@ internal sealed class TaskbarProgressService : IDisposable
     /// 也供 <c>--progress-probe</c> 诊断入口复用，避免探针与产品走两条不同的读取路径。
     /// </summary>
     internal static (bool Found, double Fraction) Probe()
+        => Probe(out _);
+
+    /// <summary>同上，另返回对话框句柄（服务用它做"每个对话框只 dump 一次"的去重）。</summary>
+    internal static (bool Found, double Fraction) Probe(out IntPtr dialog)
     {
+        dialog = IntPtr.Zero;
         var handle = IntPtr.Zero;
         NativeMethods.EnumWindows((hwnd, _) =>
         {
@@ -107,40 +150,104 @@ internal sealed class TaskbarProgressService : IDisposable
             return (false, -1);
         }
 
+        dialog = handle;
+
         try
         {
             var root = AutomationElement.FromHandle(handle);
-            var condition = new PropertyCondition(AutomationElement.ControlTypeProperty, ControlType.ProgressBar);
-            var bar = root.FindFirst(TreeScope.Descendants, condition);
-            if (bar is null)
+            var bars = root.FindAll(TreeScope.Descendants,
+                new PropertyCondition(AutomationElement.ControlTypeProperty, ControlType.ProgressBar));
+            if (bars.Count == 0)
             {
                 return (true, -1);
             }
 
-            if (bar.TryGetCurrentPattern(ValuePattern.Pattern, out var valuePattern))
+            // 选"最宽的那条"：拷贝对话框里可能同时有"当前项"和"总体"两条进度条，
+            // 总体条横跨整个对话框、当前项条只占详情行。取最宽的一条才跟着整体进度走；
+            // 只取第一条会表现为"进度条跟着单个文件在 0↔100 之间来回跳"。
+            var best = -1.0;
+            var bestWidth = double.NegativeInfinity;
+            for (var i = 0; i < bars.Count; i++)
             {
-                var parsed = DockProgressBar.ParsePercentText(((ValuePattern)valuePattern).Current.Value);
-                if (parsed >= 0)
+                var fraction = FractionOf(bars[i]);
+                var width = bars[i].Current.BoundingRectangle.Width;
+                if (fraction >= 0 && width >= bestWidth)
                 {
-                    return (true, parsed);
+                    best = fraction;
+                    bestWidth = width;
                 }
             }
 
-            if (bar.TryGetCurrentPattern(RangeValuePattern.Pattern, out var rangePattern))
-            {
-                var range = ((RangeValuePattern)rangePattern).Current;
-                if (range.Maximum > 0)
-                {
-                    return (true, DockProgressBar.Clamp(range.Value / range.Maximum));
-                }
-            }
-
-            return (true, DockProgressBar.ParsePercentText(bar.Current.Name));
+            return (true, best);
         }
         catch (Exception ex)
         {
             Logger.Warn($"Dock 进度条：UIA 读取失败 {ex.GetType().Name} {ex.Message}");
             return (true, -1);
+        }
+    }
+
+    /// <summary>读一条进度条的 0..1（Value → RangeValue → Name 三级回退）；读不到返回 -1。</summary>
+    private static double FractionOf(AutomationElement bar)
+    {
+        if (bar.TryGetCurrentPattern(ValuePattern.Pattern, out var valuePattern))
+        {
+            var parsed = DockProgressBar.ParsePercentText(((ValuePattern)valuePattern).Current.Value);
+            if (parsed >= 0)
+            {
+                return parsed;
+            }
+        }
+
+        if (bar.TryGetCurrentPattern(RangeValuePattern.Pattern, out var rangePattern))
+        {
+            var range = ((RangeValuePattern)rangePattern).Current;
+            if (range.Maximum > 0)
+            {
+                return DockProgressBar.Clamp(range.Value / range.Maximum);
+            }
+        }
+
+        return DockProgressBar.ParsePercentText(bar.Current.Name);
+    }
+
+    /// <summary>
+    /// 首次看到某个拷贝对话框时，把它里面所有进度条的名字/数值/范围写一行日志。
+    /// <para>
+    /// 为什么需要：拷贝对话框里可能同时有"当前项"和"总体"两条进度条，只取第一条会表现为
+    /// "进度条跟着单个文件在 0↔100 之间跳"——用户看到的就是"同步不好"。日志只写数值与
+    /// UIA 名称（如 "56%"/"进度"），不写文件名或路径。
+    /// </para>
+    /// </summary>
+    private static void DumpProgressBars(IntPtr dialog)
+    {
+        try
+        {
+            var root = AutomationElement.FromHandle(dialog);
+            var bars = root.FindAll(TreeScope.Descendants,
+                new PropertyCondition(AutomationElement.ControlTypeProperty, ControlType.ProgressBar));
+            Logger.Info($"进度：对话框内共 {bars.Count} 条进度条");
+
+            for (var i = 0; i < bars.Count; i++)
+            {
+                var bar = bars[i];
+                var name = bar.Current.Name;
+                var valueText = bar.TryGetCurrentPattern(ValuePattern.Pattern, out var vp)
+                    ? ((ValuePattern)vp).Current.Value
+                    : string.Empty;
+                var rangeText = string.Empty;
+                if (bar.TryGetCurrentPattern(RangeValuePattern.Pattern, out var rp))
+                {
+                    var range = ((RangeValuePattern)rp).Current;
+                    rangeText = $"{range.Value:0.##}/{range.Maximum:0.##}";
+                }
+
+                Logger.Info($"进度：第 {i} 条 name=[{name}] value=[{valueText}] range=[{rangeText}]");
+            }
+        }
+        catch (Exception ex)
+        {
+            Logger.Warn($"进度：进度条结构读取失败 {ex.GetType().Name} {ex.Message}");
         }
     }
 
