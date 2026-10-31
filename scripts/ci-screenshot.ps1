@@ -9,6 +9,19 @@ param(
 $ErrorActionPreference = 'Stop'
 New-Item -ItemType Directory -Force -Path $OutDir | Out-Null
 
+# 【关键】runner 会话默认 disconnected → DWM 停止合成 → CopyFromScreen 拿到旧帧。
+# 把会话重定向到物理控制台，保住实时合成（alpha.15 实证：不加这句，截图全是启动前的旧桌面）。
+$currentUser = $env:USERNAME
+query user 2>$null | Out-String | Write-Host
+$sessionId = (query user 2>$null | Select-String $currentUser) -replace '.*\s(\d+)\s*$', '$1'
+if ($sessionId -match '^\d+$') {
+    Write-Host "redirect session $sessionId -> console"
+    tscon $sessionId /dest:console 2>&1 | Write-Host
+    Start-Sleep -Seconds 2
+} else {
+    Write-Host "WARN: no interactive session found for $currentUser"
+}
+
 Add-Type -AssemblyName System.Windows.Forms
 Add-Type -AssemblyName System.Drawing
 Add-Type @"
@@ -66,10 +79,11 @@ try {
     Save-Shot '03-after-toggle.png'
 }
 finally {
-    # 4) 日志取证：UI 线程未处理异常 → CI 红
+    # 4) 日志取证：未处理异常 → CI 红；Dock/顶栏就绪行缺失 → CI 红
     $logDir = Join-Path $AppDir 'logs'
     if (Test-Path $logDir) {
         Copy-Item -Path $logDir -Destination $OutDir -Recurse -Force
+        $all = Get-ChildItem $logDir -Filter *.log | Get-Content | Out-String
         $hits = Get-ChildItem $logDir -Filter *.log | ForEach-Object {
             Select-String -Path $_.FullName -Pattern '未处理异常|XamlParseException|Unhandled'
         }
@@ -78,7 +92,9 @@ finally {
             $hits | ForEach-Object { Write-Host $_.Line }
             exit 7
         }
-        Write-Host "logs clean: no unhandled UI exceptions"
+        if ($all -notmatch 'Dock 就绪')      { Write-Host 'MISSING: Dock 就绪';    exit 9 }
+        if ($all -notmatch 'TopBar|顶栏')     { Write-Host 'MISSING: TopBar 就绪';  exit 10 }
+        Write-Host "logs clean: no unhandled UI exceptions; Dock/TopBar ready lines present"
     } else {
         Write-Host "no logs dir (app may have failed to start)"
         exit 8
