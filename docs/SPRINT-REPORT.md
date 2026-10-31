@@ -115,7 +115,8 @@
 | 设置面 | done | OpenAnimation（默认开）/ CloseAnimation（默认关）/ OpenAnimStyle 三项 + 设置页控件，SHOW/DESTROY 路径真即时 | AppSettings + SettingsWindow |
 | 旧打开动画让位 | done | ghost 版开启时 AW_BLEND 实验路径不再叠加（两条打开动画不打架） | WindowTracker.AddWindow |
 | CI 门禁 | done | ci.yml：windows-latest 全套（native /W4 /WX + NativeSmoke + build + test）+ ubuntu 交叉编译哨兵 | .github/workflows/ci.yml |
-| 首轮 CI 修复 | done | ① global.json 钉住 .NET 8（runner 预装 10 SDK，新编译器重载决议不同致 CS0023）；② build-native.cmd 改 vswhere 探测（runner 是 Enterprise，旧脚本只认 BuildTools 硬编码路径） | global.json / scripts/build-native.cmd |
+| 首轮 CI 修复 | done | ① global.json 钉住 .NET 8（runner 预装 10 SDK，新编译器重载决议不同致 CS0023）；② build-native.cmd 改候选路径直查（runner 已迁 windows-2025-vs2026，VS 2026 Enterprise 在 %ProgramFiles%\18\Enterprise）；③ 时钟两测去时区依赖（ToLocalTime × UTC 机器） | global.json / scripts/build-native.cmd / DockWidgetTests |
+| **CI 终态** | **全绿** | RUN#4（b53fa50）：windows-gate（native /W4 /WX + NativeSmoke + build 0/0 + **1412/1412 测**）+ linux-cross-build 全部通过 | .github/workflows/ci.yml |
 | AnimLab 完整台 | todo | 本冲刺未动（预算给了打开/关闭全链路）；anim-params.json 热加载仍是最小可用路径 | — |
 
 ## A2. 打开/关闭专项设计要点
