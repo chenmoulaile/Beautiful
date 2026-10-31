@@ -537,6 +537,24 @@ public sealed class MinimizeAnimator : IDisposable
     public void PlayMinimizeFromHook(IntPtr hwnd, BitmapSource? image, Rect sourceRect)
     {
         var durationMs = 0;
+        // alpha.18：钩子抓帧失败会送来"空帧槽"（image=null，Width=0）——原生最小化已被拦，
+        // 我们必须有一个像样的收场。先试前台帧缓存（几分钟前刚在屏上的窗口大概率有帧），
+        // 有新鲜缓存帧就照样播 genie；连缓存都没有才静默落位（无声收进任务栏，绝不播原生动画）。
+        if (image is null && !NativeMethods.IsIconic(hwnd))
+        {
+            var p0 = AnimParamsStore.Current;
+            if (_frames.TryGet(hwnd, p0.ForegroundCacheMaxAgeMs, out var cached, out var cachedRect, out var age))
+            {
+                Logger.Info($"CBT 钩子：空帧槽（钩子抓帧失败），改用前台缓存帧（龄 {age:0}ms）播 genie");
+                image = cached;
+                sourceRect = cachedRect;
+            }
+            else
+            {
+                Logger.Info($"CBT 钩子：空帧槽且无可用缓存帧（龄上限 {p0.ForegroundCacheMaxAgeMs}ms），静默落位");
+            }
+        }
+
         var canPlay = IsRunning
                       && image is not null
                       && sourceRect.Width >= MinShellSize && sourceRect.Height >= MinShellSize

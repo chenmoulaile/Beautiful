@@ -98,6 +98,8 @@ public partial class NotificationCenterWindow : Window
         Closed += (_, _) =>
         {
             _lastClosedUtc = DateTime.UtcNow;
+            _slidePhase = SlidePhase.None;
+            UnhookSlide();
             _clockTimer.Stop();
             if (_service is not null)
             {
@@ -109,13 +111,13 @@ public partial class NotificationCenterWindow : Window
                 _current = null;
             }
         };
-        Deactivated += (_, _) => Close();
+        Deactivated += (_, _) => AnimateClose();
         PreviewKeyDown += (_, e) =>
         {
             if (e.Key == Key.Escape)
             {
                 e.Handled = true;
-                Close();
+                AnimateClose();
             }
         };
     }
@@ -127,7 +129,7 @@ public partial class NotificationCenterWindow : Window
     {
         if (_current is { IsLoaded: true })
         {
-            _current.Close();
+            _current.AnimateClose();   // alpha.18：对称滑出，不再是硬切消失
             return;
         }
 
@@ -191,26 +193,102 @@ public partial class NotificationCenterWindow : Window
             a.Work.Top + (a.Work.Bottom - a.Work.Top) / 2.0);
     }
 
-    /// <summary>
-    /// 从右侧滑入（Big Sur 通知中心是"从边缘推出来"的）：位移 20 DIP + 淡入，180ms。
-    /// 只动 RenderTransform，不重排布局；结束后清掉变换，避免影响后续命中测试。
-    /// </summary>
-    private void PlaySlideIn()
-    {
-        var transform = new TranslateTransform(20, 0);
-        RenderTransform = transform;
-        Opacity = 0;
+    // ---------- 滑入/滑出（alpha.18 重做） ----------
 
-        var slide = new System.Windows.Media.Animation.DoubleAnimation(0, TimeSpan.FromMilliseconds(180))
+    private enum SlidePhase { None, In, Out }
+
+    private SlidePhase _slidePhase = SlidePhase.None;
+    private int _finalLeftPx, _topPx, _widthPx = -1, _heightPx;
+    private double _slideFromPx;
+    private int _slideDurationMs = 1;
+    private Action? _slideCompleted;
+    private Stopwatch? _slideWatch;
+    private bool _slideHooked;
+
+    /// <summary>
+    /// 从屏幕右缘外推入（Big Sur 通知中心的真实语义：窗口本体从边缘推出来）。
+    /// alpha.18 重做：旧版只把内容平移 20px——窗口背景不透明，20px 位移肉眼不可见，
+    /// 观感等于"突然出现/卡在那里"（真机反馈原话）。窗口级 SetWindowPos 逐帧推进：
+    /// 尺寸不变不触发 WPF 重排，DWM 合成下平滑；320ms easeOutCubic（起步快、落位缓）。
+    /// </summary>
+    private void PlaySlideIn() => StartSlide(SlidePhase.In, 320);
+
+    /// <summary>对称滑出后关闭（Esc / 点面板外 / 时钟二次点击）。直接 Close 的路径不受影响。</summary>
+    public void AnimateClose()
+    {
+        if (_slidePhase == SlidePhase.Out) return;   // 已在滑出
+        if (!IsLoaded || !_positioned)
         {
-            EasingFunction = new System.Windows.Media.Animation.QuadraticEase
-            {
-                EasingMode = System.Windows.Media.Animation.EasingMode.EaseOut
-            }
-        };
-        var fade = new System.Windows.Media.Animation.DoubleAnimation(1, TimeSpan.FromMilliseconds(140));
-        transform.BeginAnimation(TranslateTransform.XProperty, slide);
-        BeginAnimation(OpacityProperty, fade);
+            try { Close(); } catch (InvalidOperationException) { /* 已在关闭中 */ }
+            return;
+        }
+
+        StartSlide(SlidePhase.Out, 220, () =>
+        {
+            try { Close(); } catch (InvalidOperationException) { /* 已在关闭中 */ }
+        });
+    }
+
+    private void StartSlide(SlidePhase phase, int durationMs, Action? completed = null)
+    {
+        var handle = new System.Windows.Interop.WindowInteropHelper(this).Handle;
+        if (handle == IntPtr.Zero || _widthPx <= 0)
+        {
+            completed?.Invoke();
+            return;
+        }
+
+        _slideFromPx = NativeMethods.GetWindowRect(handle, out var r) ? r.Left : _finalLeftPx + _widthPx;
+        _slideDurationMs = Math.Max(1, durationMs);
+        _slideCompleted = completed;
+        _slidePhase = phase;
+        _slideWatch = Stopwatch.StartNew();
+        if (!_slideHooked)
+        {
+            _slideHooked = true;
+            CompositionTarget.Rendering += OnSlideFrame;
+        }
+    }
+
+    private void OnSlideFrame(object? sender, EventArgs e)
+    {
+        if (_slidePhase == SlidePhase.None || _slideWatch is null)
+        {
+            UnhookSlide();
+            return;
+        }
+
+        var t = _slideWatch.Elapsed.TotalMilliseconds / _slideDurationMs;
+        var target = _slidePhase == SlidePhase.In ? _finalLeftPx : _finalLeftPx + _widthPx;
+        if (t >= 1.0)
+        {
+            SetSlideLeft(target);
+            UnhookSlide();
+            _slidePhase = SlidePhase.None;
+            var done = _slideCompleted;
+            _slideCompleted = null;
+            done?.Invoke();
+            return;
+        }
+
+        var p = 1.0 - Math.Pow(1.0 - t, 3);          // easeOutCubic
+        SetSlideLeft((int)Math.Round(_slideFromPx + (target - _slideFromPx) * p));
+    }
+
+    private void SetSlideLeft(int leftPx)
+    {
+        var handle = new System.Windows.Interop.WindowInteropHelper(this).Handle;
+        if (handle == IntPtr.Zero) return;
+        NativeMethods.SetWindowPos(handle, new IntPtr(-1), leftPx, _topPx, 0, 0,
+            NativeMethods.SwpNoactivate | NativeMethods.SwpNozorder | NativeMethods.SwpNosize);
+    }
+
+    private void UnhookSlide()
+    {
+        if (!_slideHooked) return;
+        _slideHooked = false;
+        CompositionTarget.Rendering -= OnSlideFrame;
+        _slideWatch = null;
     }
 
     // ---------- 定位 ----------
@@ -239,13 +317,17 @@ public partial class NotificationCenterWindow : Window
         var scale = monitor.DpiScale > 0 ? monitor.DpiScale : 1.0;
         var widthPx = (int)Math.Round(PanelWidthDip * scale);
         var heightPx = monitor.Work.Height;
-        var leftPx = monitor.Work.Right - widthPx;
-        var topPx = monitor.Work.Top;
+        _finalLeftPx = monitor.Work.Right - widthPx;
+        _topPx = monitor.Work.Top;
+        _widthPx = widthPx;
+        _heightPx = heightPx;
 
         var handle = new System.Windows.Interop.WindowInteropHelper(this).Handle;
         if (handle != IntPtr.Zero)
         {
-            NativeMethods.SetWindowPos(handle, new IntPtr(-1), leftPx, topPx, widthPx, heightPx,
+            // alpha.18：先落在【屏幕右缘外】——Show() 到滑入开播之间窗口不能露脸，
+            // 否则先在最终位置闪一帧再跳回屏外（闪烁）。由 PlaySlideIn 负责推入。
+            NativeMethods.SetWindowPos(handle, new IntPtr(-1), monitor.Work.Right, _topPx, widthPx, heightPx,
                 NativeMethods.SwpNoactivate | NativeMethods.SwpNozorder);
         }
 

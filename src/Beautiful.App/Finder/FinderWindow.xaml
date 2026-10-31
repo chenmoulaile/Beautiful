@@ -377,6 +377,7 @@
                          DisplayMemberPath="Label"
                          ItemContainerStyle="{StaticResource SidebarItem}"
                          ScrollViewer.HorizontalScrollBarVisibility="Disabled"
+                         finder:SmoothScrollBehavior.Enabled="True"
                          SelectionChanged="Sidebar_SelectionChanged"/>
             </Border>
 
@@ -387,7 +388,9 @@
                           ScrollViewer.HorizontalScrollBarVisibility="Disabled"
                           ScrollViewer.CanContentScroll="True"
                           VirtualizingStackPanel.IsVirtualizing="True"
-                          VirtualizingStackPanel.VirtualizationMode="Recycling">
+                          VirtualizingStackPanel.VirtualizationMode="Recycling"
+                          VirtualizingPanel.ScrollUnit="Pixel"
+                          finder:SmoothScrollBehavior.Enabled="True">
                     <ListView.ItemContainerStyle>
                         <Style TargetType="ListViewItem" BasedOn="{StaticResource FinderRow}">
                             <EventSetter Event="MouseDoubleClick" Handler="Row_MouseDoubleClick"/>
@@ -441,6 +444,7 @@
                               VerticalScrollBarVisibility="Disabled"
                               Background="Transparent"
                               Padding="0"
+                              finder:SmoothScrollBehavior.Enabled="True"
                               ScrollChanged="ColumnScroll_ScrollChanged">
                     <StackPanel x:Name="ColumnStack" Orientation="Horizontal"/>
                 </ScrollViewer>
@@ -450,6 +454,7 @@
                          BorderThickness="0" FontSize="11" Padding="0"
                          ScrollViewer.HorizontalScrollBarVisibility="Disabled"
                          ScrollViewer.CanContentScroll="False"
+                         finder:SmoothScrollBehavior.Enabled="True"
                          SelectionMode="Extended"
                          ItemContainerStyle="{StaticResource IconCell}"
                          MouseLeftButtonDown="IconList_MouseLeftButtonDown"

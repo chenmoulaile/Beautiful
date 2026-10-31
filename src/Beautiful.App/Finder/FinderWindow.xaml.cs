@@ -8,6 +8,7 @@ using System.Windows.Controls;
 using System.Windows.Input;
 using System.Windows.Interop;
 using System.Windows.Media;
+using System.Windows.Media.Animation;
 using System.Windows.Threading;
 using Beautiful.App.Interop;
 using Beautiful.App.Services;
@@ -838,6 +839,14 @@ public partial class FinderWindow : Window
         FileList.ItemsSource = _visibleRows;
         IconList.ItemsSource = _visibleRows;
 
+        // alpha.18：目录内容就位 = "轻轻落上来"（淡入 + 6px 上滑，140ms），
+        // 不再是硬切（真机反馈：访达不够还原、太生硬）。搜索过滤不播——
+        // 打字时每个字符都重刷内容，连续淡入会闪。
+        if (!_searchActive)
+        {
+            PlayContentTransition();
+        }
+
         // 搜索结果必须显示"在哪个文件夹"：同名文件散落各处时，没有位置列等于没法用。
         if (LocationColumn is not null)
         {
@@ -859,6 +868,37 @@ public partial class FinderWindow : Window
         {
             RefreshGallery();
         }
+    }
+
+    /// <summary>目录内容就位后的过渡：淡入 + 6px 上滑（macOS 手感），不触发布局重排。</summary>
+    private void PlayContentTransition()
+    {
+        PlayFadeSlide(FileList);
+        PlayFadeSlide(IconList);
+    }
+
+    private static void PlayFadeSlide(UIElement? element)
+    {
+        if (element is null || element.Visibility != Visibility.Visible) return;
+        var tf = element.RenderTransform as TranslateTransform;
+        if (tf is null || tf.IsFrozen)
+        {
+            tf = new TranslateTransform();
+            element.RenderTransform = tf;
+        }
+
+        tf.BeginAnimation(TranslateTransform.YProperty, null);
+        tf.Y = 6;
+        var fade = new DoubleAnimation(1, TimeSpan.FromMilliseconds(140))
+        {
+            EasingFunction = new QuadraticEase { EasingMode = EasingMode.EaseOut }
+        };
+        var slide = new DoubleAnimation(0, TimeSpan.FromMilliseconds(160))
+        {
+            EasingFunction = new QuadraticEase { EasingMode = EasingMode.EaseOut }
+        };
+        element.BeginAnimation(UIElement.OpacityProperty, fade);
+        tf.BeginAnimation(TranslateTransform.YProperty, slide);
     }
 
     private void UpdateStatus()

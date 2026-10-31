@@ -24,7 +24,7 @@ public partial class MainWindow : Window
 {
     // ---------- 参数文件（轻量版：与主程序同路径规则/同 JSON 口径，不引 App 工程） ----------
 
-    private string _paramsPath;
+    private string _paramsPath = "";   // alpha.18：构造期 TryStep 内赋值，声明时给安全初值（可空性 + 失败降级）
     private FileSystemWatcher? _watcher;
     private System.Windows.Threading.DispatcherTimer? _reloadDebounce;
     private bool _suppressWatch;
@@ -59,21 +59,43 @@ public partial class MainWindow : Window
 
     public MainWindow()
     {
+        // alpha.18：InitializeComponent（XAML 构造）失败没有降级可言（字段全 null），
+        // 直接抛给 App 层拿完整异常链；之后的初始化每段独立兜底——任何一段失败，
+        // 窗口都保持已建成的形态继续开着，并把原因写进状态栏（调参台绝不允许"无声失败"）。
         InitializeComponent();
-        _paramsPath = ResolveParamsPath();
-        ParamsPathText.Text = _paramsPath;
+        RunInit();
+    }
 
-        BuildDemoScene();
-        BuildFrameChart();
-        SizeChanged += (_, _) => { BuildCurvePlot(); LayoutFrameChart(); };
-
-        LoadParamsFile(initial: true);
-        BuildCurvePlot();
-        LayoutFrameChart();
-
-        CompositionTarget.Rendering += OnRendering;
-        StartWatcher();
+    private void RunInit()
+    {
+        TryStep("参数路径", () =>
+        {
+            _paramsPath = ResolveParamsPath();
+            ParamsPathText.Text = _paramsPath;
+        });
+        TryStep("演示舞台", BuildDemoScene);
+        TryStep("帧时间图", BuildFrameChart);
+        TryStep("尺寸联动", () => SizeChanged += (_, _) => { BuildCurvePlot(); LayoutFrameChart(); });
+        TryStep("参数加载", () => LoadParamsFile(initial: true));
+        TryStep("曲线面板", BuildCurvePlot);
+        TryStep("帧图布局", LayoutFrameChart);
+        TryStep("渲染钩子", () => CompositionTarget.Rendering += OnRendering);
+        TryStep("参数监视", StartWatcher);
         SetStatus($"就绪 · GenieSlices={GenieSlices}", ok: true);
+    }
+
+    private void TryStep(string name, Action step)
+    {
+        try
+        {
+            step();
+        }
+        catch (Exception ex)
+        {
+            App.WriteCrashLog(new Exception($"AnimLab 初始化段[{name}]失败", ex));
+            try { SetStatus($"{name}失败：{ex.GetBaseException().Message}", ok: false); }
+            catch { /* 状态栏也挂了就只剩日志 */ }
+        }
     }
 
     private static string ResolveParamsPath()

@@ -131,11 +131,14 @@ static BOOL EnsureLocalResources(void)
     return g_ack != NULL;
 }
 
-/* ---- 画面是否"值得播"：扫一遍像素，纯色（抓到白板/黑板）判废 ---- */
+/* ---- 画面是否"值得播"（alpha.18 修复，真机反馈：原生最小化动画还在）。
+   旧版把"整帧同色"判废——空记事本/空文档窗口是纯白的，恰好整帧同色，
+   于是最常见的测试窗口永远走不到拦截，用户看到的就是原生动画。
+   纯白/纯色是【合法窗口内容】，只有"全零"（BGRA 全 0 = DIB 未写入的失败特征）才判废；
+   PrintWindow 的返回值仍是第一道权威信号，这里只是补一层失败兜底。 ---- */
 static BOOL FrameHasContent(const BYTE* pixels, UINT32 stride, UINT32 width, UINT32 height)
 {
     const UINT32 step = 24;                       /* 抽样即可 */
-    BYTE r0 = pixels[2], g0 = pixels[1], b0 = pixels[0];
     UINT32 x, y;
     for (y = 0; y < height; y += step)
     {
@@ -143,10 +146,37 @@ static BOOL FrameHasContent(const BYTE* pixels, UINT32 stride, UINT32 width, UIN
         for (x = 0; x < width; x += step)
         {
             const BYTE* px = row + (SIZE_T)x * 4;
-            if (px[0] != b0 || px[1] != g0 || px[2] != r0) return TRUE;
+            if (px[0] != 0 || px[1] != 0 || px[2] != 0 || px[3] != 0) return TRUE;
         }
     }
     return FALSE;
+}
+
+/* ---- 空帧槽（alpha.18）：抓帧失败但拦截仍要生效的信令。
+   只写槽头（Width=0）+ 发号，绝不写像素。宿主读到 ReadySeq==Seq 且 Width=0，
+   走"缓存帧/静默落位"接管——原生动画照样被吃掉。调用方已持 g_cs。 ---- */
+static void MarkEmptySlot(HWND hwnd, int slot, UINT32 kind, DWORD pid, const RECT* rect)
+{
+    BH_SHARED* s = g_shared;
+    if (s == NULL) return;
+    const UINT32 next = g_localSeq + 1;
+    BYTE* dst = (BYTE*)s + sizeof(BH_SHARED)
+              + (SIZE_T)slot * (BH_SLOT_HEADER + (SIZE_T)s->SlotBytes);
+    BH_SLOT* sh = (BH_SLOT*)dst;
+    sh->ReadySeq = 0;          /* 先清旧号，防上一帧残留被当作新帧读 */
+    sh->Width  = 0;
+    sh->Height = 0;
+    sh->Stride = 0;
+    sh->Hwnd   = (UINT64)(UINT_PTR)hwnd;
+    sh->Kind   = kind;
+    sh->Pid    = pid;
+    sh->Left   = rect->left;
+    sh->Top    = rect->top;
+    sh->Right  = rect->right;
+    sh->Bottom = rect->bottom;
+    sh->ReadySeq = next;       /* 后发号：先写数据后可见 */
+    s->Seq       = next;
+    g_localSeq   = next;
 }
 
 /* ---- 就地抓帧到第 slot 个槽（调用方已持 g_cs）。show 槽只写头不抓像素 ---- */
@@ -292,8 +322,14 @@ static LRESULT CALLBACK CbtProc(int code, WPARAM wParam, LPARAM lParam)
                         && g_csOk && TryEnterCriticalSection(&g_cs))
                     {
                         const int slot = (int)((g_localSeq + 1) & 1);
-                        if (CaptureIntoSlot(hwnd, slot, BH_KIND_MINIMIZE, pid, &rect)
-                            && NotifyHost(BH_KIND_MINIMIZE, pid, &rect, TRUE))
+                        /* alpha.18：抓帧成功与否都必须拦。旧版抓帧失败直接放行，
+                           原生动画照播（真机反馈原话）。现在失败时写空帧槽（Width=0）
+                           照样通知宿主接管——宿主用缓存帧播 genie 或静默落位，
+                           原生动画永远被吃掉；宿主死了 PostMessage 自然失败 → 放行，
+                           安全红线不变。 */
+                        if (!CaptureIntoSlot(hwnd, slot, BH_KIND_MINIMIZE, pid, &rect))
+                            MarkEmptySlot(hwnd, slot, BH_KIND_MINIMIZE, pid, &rect);
+                        if (NotifyHost(BH_KIND_MINIMIZE, pid, &rect, TRUE))
                         {
                             LeaveCriticalSection(&g_cs);
                             return 1;   /* 阻断：原生最小化动画不会发生 */
