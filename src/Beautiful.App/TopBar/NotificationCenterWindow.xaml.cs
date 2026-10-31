@@ -154,15 +154,18 @@ public partial class NotificationCenterWindow : Window
 
     /// <summary>
     /// 从右侧滑入（Big Sur 通知中心是"从边缘推出来"的）：位移 20 DIP + 淡入，180ms。
-    /// 只动 RenderTransform，不重排布局；结束后清掉变换，避免影响后续命中测试。
+    /// 【为什么不能用 RenderTransform】WPF 的 <see cref="Window"/> 根本不支持 RenderTransform
+    /// （赋值即抛 <c>InvalidOperationException: Transform is not valid for Window</c>，真机弹
+    /// "发生界面异常"——v0.16 借 CI 截图取证定位）。窗口级滑入改走 Left + Opacity 双动画；
+    /// 动画结束后清动画并把 Left 钉回目标值，避免动画引用残留影响后续 SetWindowPos 落位。
     /// </summary>
     private void PlaySlideIn()
     {
-        var transform = new TranslateTransform(20, 0);
-        RenderTransform = transform;
+        var targetLeft = Left;
+        Left = targetLeft + 20;
         Opacity = 0;
 
-        var slide = new System.Windows.Media.Animation.DoubleAnimation(0, TimeSpan.FromMilliseconds(180))
+        var slide = new System.Windows.Media.Animation.DoubleAnimation(targetLeft, TimeSpan.FromMilliseconds(180))
         {
             EasingFunction = new System.Windows.Media.Animation.QuadraticEase
             {
@@ -170,7 +173,14 @@ public partial class NotificationCenterWindow : Window
             }
         };
         var fade = new System.Windows.Media.Animation.DoubleAnimation(1, TimeSpan.FromMilliseconds(140));
-        transform.BeginAnimation(TranslateTransform.XProperty, slide);
+        slide.Completed += (_, _) =>
+        {
+            BeginAnimation(LeftProperty, null);
+            Left = targetLeft;
+            BeginAnimation(OpacityProperty, null);
+            Opacity = 1;
+        };
+        BeginAnimation(LeftProperty, slide);
         BeginAnimation(OpacityProperty, fade);
     }
 

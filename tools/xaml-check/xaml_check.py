@@ -70,6 +70,15 @@ danger_patterns = [
     (r'\.Wait\(\)', "[danger] .Wait() 可能死锁"),
     (r'GetAwaiter\(\)\.GetResult\(\)', "[danger] 同步阻塞异步"),
 ]
+# Window 子类禁止 RenderTransform 赋值（WPF Window 不支持，赋值即抛
+# "Transform is not valid for Window"——v0.16 真机实锤，控件/元素不受限）
+for x in xamls:
+    cs = x[:-5] + ".xaml.cs"
+    if not os.path.exists(cs):
+        continue
+    ctext = open(cs, encoding="utf-8-sig").read()
+    if re.search(r'partial\s+class\s+\w+\s*:\s*Window\b', ctext) and re.search(r'(?<![\w.])(this\.)?RenderTransform\s*=[^=]', ctext):
+        errors.append(f"[window-transform] {os.path.relpath(cs, ROOT)}: Window 子类中直接给 RenderTransform 赋值（运行时必抛）")
 allcs = glob.glob(os.path.join(ROOT, "src", "**", "*.cs"), recursive=True)
 for cs in allcs:
     text = open(cs, encoding="utf-8-sig", errors="replace").read()
