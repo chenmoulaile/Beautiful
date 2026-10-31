@@ -11,15 +11,30 @@ New-Item -ItemType Directory -Force -Path $OutDir | Out-Null
 
 # 【关键】runner 会话默认 disconnected → DWM 停止合成 → CopyFromScreen 拿到旧帧。
 # 把会话重定向到物理控制台，保住实时合成（alpha.15 实证：不加这句，截图全是启动前的旧桌面）。
-$currentUser = $env:USERNAME
-query user 2>$null | Out-String | Write-Host
-$sessionId = (query user 2>$null | Select-String $currentUser) -replace '.*\s(\d+)\s*$', '$1'
-if ($sessionId -match '^\d+$') {
+# alpha.16 修：quser 的 ID 在【第三列】（行尾是 LOGONTIME，上个版本按行尾数字解析必然落空）。
+quser 2>$null | Out-String | Write-Host
+$sessionId = $null
+foreach ($line in (quser 2>$null)) {
+    $cols = ($line -replace '^>\s*', '' ) -split '\s+'
+    if ($cols.Length -ge 3 -and $cols[0] -eq $env:USERNAME -and $cols[2] -match '^\d+$') {
+        $sessionId = $cols[2]; break
+    }
+}
+if (-not $sessionId) {
+    # 兜底：不认用户名（列错位）时取任何数字 ID 的行
+    foreach ($line in (quser 2>$null)) {
+        $cols = ($line -replace '^>\s*', '' ) -split '\s+'
+        if ($cols.Length -ge 3 -and $cols[2] -match '^\d+$' -and $cols[0] -ne 'USERNAME') {
+            $sessionId = $cols[2]; break
+        }
+    }
+}
+if ($sessionId) {
     Write-Host "redirect session $sessionId -> console"
     tscon $sessionId /dest:console 2>&1 | Write-Host
     Start-Sleep -Seconds 2
 } else {
-    Write-Host "WARN: no interactive session found for $currentUser"
+    Write-Host "WARN: no interactive session found for $($env:USERNAME)（截图可能为旧帧）"
 }
 
 Add-Type -AssemblyName System.Windows.Forms
@@ -105,3 +120,4 @@ finally {
     }
 }
 Write-Host "SCREENSHOT-OK"
+exit 0   # 显式归零：quser 的非零 $LASTEXITCODE 不得污染 CI 结果（alpha.15 RUN#2 实证）
