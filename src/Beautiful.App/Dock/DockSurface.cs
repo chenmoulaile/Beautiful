@@ -85,6 +85,10 @@ public sealed class DockSurface : Canvas
     private const double BounceDurationSeconds = 0.6;
     private const double BounceAmplitudeRatio = 0.5;
 
+    /// <summary>持续弹跳的超时（秒）：应用起了但不弹窗（托盘应用/启动失败）不该永远弹下去。
+    /// macOS 的实际行为是约 7-8 次后自动停；10s 是同量级的工程上限。</summary>
+    private const double BounceSustainedMaxSeconds = 10;
+
     /// <summary>
     /// 弹跳幅度上限（DIP）：BounceOffset 峰值 ≈1.194A（见 Core 注释），A=20 时峰值上移 23.9 DIP，
     /// 小于最小条带顶部余量场景的可用高度（MinStripHeadroomDip 22 + Surface 上边距 6 + 行内居中余量 ≥10），
@@ -140,6 +144,8 @@ public sealed class DockSurface : Canvas
     private double[] _heights = Array.Empty<double>();
     private double[] _bounceRemaining = Array.Empty<double>(); // 启动弹跳剩余时长（秒；0=空闲）
     private double[] _bounceY = Array.Empty<double>();         // 本帧弹跳纵向偏移（DIP，负=上移）
+    private bool[] _bounceSustained = Array.Empty<bool>();     // 持续弹跳（macOS 启动语义：弹到首窗出现或超时）
+    private double[] _bounceSustainedElapsed = Array.Empty<double>(); // 持续弹跳已耗时（秒，超时收口）
 
     /// <summary>
     /// 放大场输入：仅**可见且可放大**的项参与（隐藏胶囊不占位也不产生"幽灵鼓包"；分隔符占位宽但
@@ -946,6 +952,7 @@ public sealed class DockSurface : Canvas
             _baseLefts = new double[n]; _widths = new double[n];
             _heights = new double[n]; _lefts = new double[n]; _layoutLefts = new double[n];
             _bounceRemaining = new double[n]; _bounceY = new double[n];   // 弹跳随树作废（下标映射已失效）
+            _bounceSustained = new bool[n]; _bounceSustainedElapsed = new double[n];
             Array.Fill(_cur, 1.0);
             Array.Fill(_tgt, 1.0);
         }
@@ -960,6 +967,8 @@ public sealed class DockSurface : Canvas
             _layoutLefts = EnsureLength(_layoutLefts, n, 0.0);
             _bounceRemaining = EnsureLength(_bounceRemaining, n, 0.0);
             _bounceY = EnsureLength(_bounceY, n, 0.0);
+            _bounceSustained = EnsureLength(_bounceSustained, n, false);
+            _bounceSustainedElapsed = EnsureLength(_bounceSustainedElapsed, n, 0.0);
         }
         _structureDirty = false;
 
@@ -1061,7 +1070,40 @@ public sealed class DockSurface : Canvas
         var i = _items.IndexOf(item);
         if (i < 0 || i >= _bounceRemaining.Length) return;
         _bounceRemaining[i] = BounceDurationSeconds;
+        _bounceSustained[i] = false;                               // 单次弹跳显式覆盖持续态
         Wake();
+    }
+
+    /// <summary>
+    /// 启动弹跳的 macOS 完整语义（v2.2 §4.3"Dock 启动联动"）：图标<b>反复弹跳</b>直到
+    /// 该应用的首窗出现（<see cref="StopSustainedBounce"/> 收口，当前这一次弹完自然落地）
+    /// 或超时（<see cref="BounceSustainedMaxSeconds"/> 秒：应用起了但不弹窗/启动失败不该永远弹下去）。
+    /// 单击已运行应用（ToggleOrActivate）不走这里——那条路径用的是单次 <see cref="StartBounce"/>。
+    /// </summary>
+    public void StartSustainedBounce(DockItem item)
+    {
+        if (!DockSeparatorPlan.IsInteractive(item.Kind)) return;
+        var i = _items.IndexOf(item);
+        if (i < 0 || i >= _bounceRemaining.Length) return;
+        _bounceRemaining[i] = BounceDurationSeconds;
+        _bounceSustained[i] = true;
+        _bounceSustainedElapsed[i] = 0.0;
+        Wake();
+    }
+
+    /// <summary>首窗已出现：停止持续弹跳（当前这一次弹完自然落地，不硬切）。</summary>
+    public void StopSustainedBounce(DockItem item)
+    {
+        var i = _items.IndexOf(item);
+        if (i < 0 || i >= _bounceSustained.Length) return;
+        _bounceSustained[i] = false;
+    }
+
+    /// <summary>该条目是否在持续弹跳中（DockWindow 按首窗事件匹配收口时用）。</summary>
+    public bool IsSustainedBouncing(DockItem item)
+    {
+        var i = _items.IndexOf(item);
+        return i >= 0 && i < _bounceSustained.Length && _bounceSustained[i];
     }
 
     /// <summary>
@@ -1082,6 +1124,19 @@ public sealed class DockSurface : Canvas
             var remaining = _bounceRemaining[i] - dt;
             if (remaining <= 0.0)
             {
+                if (_bounceSustained[i])
+                {
+                    // 持续弹跳：一次弹完再起一次，直到首窗收口或超时（超时即静默落地，不写刷屏日志）
+                    _bounceSustainedElapsed[i] += BounceDurationSeconds;
+                    if (_bounceSustainedElapsed[i] < BounceSustainedMaxSeconds)
+                    {
+                        _bounceRemaining[i] = BounceDurationSeconds;
+                        _bounceY[i] = AnimationMath.BounceOffset(0.0, Math.Min(IconSize * BounceAmplitudeRatio, BounceMaxAmplitudeDip));
+                        idle = false;
+                        continue;
+                    }
+                    _bounceSustained[i] = false;
+                }
                 _bounceRemaining[i] = 0.0;
                 _bounceY[i] = 0.0;
                 continue;
