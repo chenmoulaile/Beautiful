@@ -2,7 +2,7 @@
 
 Windows 11 的 macOS 桌面还原壳：悬浮 Dock（Big Sur 风）+ macOS 菜单栏 + Alt+Tab 应用切换器 + 悬停窗口预览 + Spotlight 启动器 + 控制中心 + 访达。WPF + .NET 8，自包含发布，中文界面。
 
-> 版本 `4.0.0-alpha.12`。界面截图不入库（`logs/`、`docs/` 已 gitignore），观感以发布包实跑为准。
+> 版本 `4.0.0-alpha.13`。界面截图不入库（`logs/`、`docs/` 已 gitignore），观感以发布包实跑为准。
 > 完成度一律以**实测**为准：没跑过的写"未验证"，不写"已支持"。
 
 ## 现在能用的
@@ -14,7 +14,19 @@ Windows 11 的 macOS 桌面还原壳：悬浮 Dock（Big Sur 风）+ macOS 菜�
 - 行尾小组件：时钟 + 天气（wttr.in，15 分钟缓存，离线显示 `--°`）。
 - 右键菜单：固定/取消固定、打开文件位置、属性、更换图标（自定义 PNG/ICO，只存本地路径）。
 - 隐藏方式三档：常显 / 自动隐藏（离开 0.5s 滑下只露 4px，触底滑回）/ 半透明（离开时 45%，移上去恢复）。
-- **实验**：停靠边可切左/右（竖排面板 + 悬停放大 1.12，无高斯放大场/倒影，且不占工作区）；新窗口淡入（`AnimateWindow`，跨进程不保证生效）。
+- **实验**：停靠边可切左/右（竖排面板 + 悬停放大 1.12，无高斯放大场/倒影，且不占工作区）。新窗口淡入已由下方「打开 / 关闭」的 ghost 版接管（alpha.13），AW_BLEND 旧路径仅在 ghost 版被关闭时兜底。
+
+**打开 / 关闭（v4.0-alpha.13）**
+- 打开（默认开）：EVENT_OBJECT_SHOW 触发，占位帧设计——替身先以全透明占住窗口矩形，
+  PrintWindow 后台重试 8ms×12，就绪当帧换入真画面起播（200ms easeOutQuint，0.94→1.0 + 前段快速淡入）；
+  只有"第一次显示"是打开，hide/show 回归不重播（macOS 语义）。实验形态 `fromIcon`（从 Dock 图标飞出）默认关。
+- 关闭（**默认不播=macOS 忠实**）：DESTROY 触发，画面取 2Hz 前台缓存帧，龄超 1s（`CloseCacheMaxAgeMs`）判废；
+  设置显式打开才播（150ms 收拢→92% 淡出）。
+- 自家窗口（设置/关于本机）一律真动画：内容收拢后真正 Close，不受上面的开关约束。
+- Dock 启动弹跳：点未运行应用 = 图标**反复弹跳**至首窗出现收口（或 10s 超时）；
+  单击已运行应用仍是单次弹跳。
+- 挂载自检行扩为四钩子（MINIMIZE/LOCATION/SHOW/DESTROY）+ 打开/关闭设置实值；
+  打开批量沿用门禁（同进程 1s 内 >3 窗只播首个）；旧 AW_BLEND 实验路径在 ghost 版开启时自动让位。
 
 **动画（v4.0-alpha.12，macOS genie）**
 - 四条触发路径（Dock 点击 / 标题栏按钮 / Win+↓ / 任务栏）的最小化与还原动画；Dock 点击走"ShowWindow 前同步预抓"，其余三条靠前台帧缓存兜底（2Hz 采样、700ms 新鲜龄、1500ms 判废、1 全 4 半 LRU）。
@@ -69,7 +81,9 @@ dotnet build -c Release          # 0 警告 0 错误
 dotnet test tests/Beautiful.Core.Tests
 ```
 
-当前：**build 0 警告 / 0 错误；test 1390 通过 / 0 失败**。
+当前：**build 0 警告 / 0 错误；test 1412 总，Windows 上全通过**。
+（注：在 Linux/macOS 上用 `-p:EnableWindowsTargeting=true` 交叉编译可以过；
+单测有 48 个平台/区域差异用例只在 Windows 绿，CI 门禁 `ci.yml` 每次推送在 windows-latest 全套把关。）
 
 ## 结构与边界
 
