@@ -57,7 +57,8 @@ for f in AnimLab.exe AnimLab.dll AnimLab.runtimeconfig.json; do
   [ -f "$src" ] && cp "$src" "$WORK/app/" || { echo "ERROR: AnimLab 产物缺 $f"; exit 1; }
 done
 
-# 5) 交付说明
+# 5) 交付说明（简版在 zip 根目录；完整测试清单随包）
+cp "$ROOT/docs/TEST-CHECKLIST.md" "$WORK/app/测试清单.md"
 cat > "$WORK/app/README-交付说明.txt" <<EOF
 Beautiful $VER — Windows 桌面包
 ════════════════════════════════════════════
@@ -82,6 +83,9 @@ Beautiful $VER — Windows 桌面包
     缺失时主程序自动降级为纯 C# 形态，界面、Dock、Finder 与全部动画照常工作，
     仅原生捕获/托桥类增强能力不可用。
   · 首次启动若被 SmartScreen 提示：点"仍要运行"（本包未做代码签名）。
+
+【测试清单】
+  详见本目录"测试清单.md"（含最小化 genie / 时钟通知中心 / 动画观感的逐项验证）。
 
 【AnimLab 调参台】
   直接双击运行：演示/编辑 AnimLab 目录下 config\anim-params.json；

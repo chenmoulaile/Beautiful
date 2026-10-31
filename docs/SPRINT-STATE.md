@@ -1,12 +1,22 @@
-# SPRINT-STATE（v3.0 冲刺检查点 · v4.0.0-alpha.14）
+# SPRINT-STATE（v3.0 冲刺检查点 · v4.0.0-alpha.15）
 
-- 冲刺开始：2026-10-31 / 最后更新：2026-10-31（P1 冲刺：AnimLab + 交叉交付管线）
-- 分支：`agent/alpha.13-p0` → 本冲刺续推于同分支（所有者授权 agent 自主维护；main 停在 `2b93a28` = alpha.12）
-- 开发环境：**非 Windows 机器**（Linux 交叉编译 `-p:EnableWindowsTargeting=true`）
-- 门禁：本地 build 0 警告 0 错误（App + AnimLab）；test 1419 总，Linux 46 个平台/区域差异用例红（= 上轮基线 48 − 已修时钟 2 测），**无回归**；Windows 端以 `ci.yml`（windows-latest 全套）为准
-- 规格版本：docs/specs/v3.0-autonomous-sprint.md（§Q3 AnimLab + 所有者交付管线要求）
+- 冲刺开始：2026-10-31 / 最后更新：2026-10-31（P2 冲刺：最小化链路修复 + 观感调参 + 运行期截图取证）
+- 分支：`agent/alpha.15-p2`（续接 alpha.14；main 停在 `2b93a28` = alpha.12）
+- 所有者反馈驱动：① 最小化动画完全不可用（真机实锤：MINIMIZESTART 到手已 iconic，判废线 1500ms 导致缓存帧全部被拒）② 打开/关闭动画"太快/几乎没有"（默认参数观感量级错误）③ 时钟点击报错（链路静态审查未找到堆点，交运行期截图取证）④ download 交付形态收紧（zip + 内含测试清单）
+- 门禁：build 0W0E（App+AnimLab）；test 1420 总 / Linux 46 基线红无回归；xaml_check 0 error；CI 终审
 
-## 队列状态（本冲刺）
+## 队列状态（本冲刺 P2）
+
+| 任务 | 状态 | 证据 | 备注 |
+|---|---|---|---|
+| P2-1 最小化 genie 修复 | done | `MinimizeCacheMaxAgeMs`（默认 9s，钳 1s~30s）：MINIMIZESTART 事件路径改用宽松缓存龄；补 clamp + 日志 | 根因：事件到手时 IsIconic=True（代码注释早就预判"真机一次没播过就是这么来的"），1500ms 判废线把静止期窗口的缓存帧全部拒掉 → 放宽后点最小化按钮也能收进 Dock |
+| P2-2 动画观感调参 | done | Open 200→**320ms**、起始 0.94→**0.88**；Close 150→**220ms**、终态 0.92→**0.86**（属性默认 + Normalized fallback 同步 + 测试） | 修掉"Normalized fallback 与属性默认脱节"的一致性隐患（历史默认 200/0.94 残留在 clamp fallback） |
+| P2-3 运行期截图取证 | done | `screenshot.yml`：windows-latest 启动 app → 全屏截图×3 → 模拟点击时钟 → logs 无"未处理异常"断言 → artifact 回流 | 解决"agent 看不到真机观感"的结构性缺口；`scripts/ci-screenshot.ps1` |
+| P2-4 深度静态检查 | done | `tools/xaml-check/xaml_check.py`：x:Class 对齐 / 事件处理器存在性（跨 partial 文件）/ StaticResource 键解析 / .Result 危险模式 —— **25 xaml / 203 cs 全过 0 error**；3 处 .Result 经人工核审均为 ContinueWith 续体安全 | 时钟报错链路逐环审查：CalendarFlyout/NotificationCenterWindow/FluentPopupHost/SettingsService/NotificationService 静态均防御到位 → 疑点转向运行期（截图取证 job 兼任） |
+| P2-5 交付形态收紧 | done | `测试清单.md`（A~G 七节，B/C 标★重点项）随包；README-交付说明指向清单 | |
+| P2-6 版本与文档 | done | bump alpha.15、SPRINT-STATE | |
+
+## 沿用上冲刺（P0/P1 全 done，详见 alpha.13/14 检查点）
 
 | 任务 | 状态 | 证据 | 备注 |
 |---|---|---|---|
