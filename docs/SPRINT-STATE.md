@@ -37,6 +37,6 @@
 
 ## 下一个动作（中断续跑从这里开始）
 
-- 提交 → 推送分支 → CI windows-latest 终审（0W0E + 1387 基线 + NativeSmoke + 截图取证）
+- ~~推送 → CI 终审~~ **done**：RUN 41212736169 windows-gate + linux-cross-build 全绿（native /W4 /WX、NativeSmoke、HookDll 探针 x64 PE+四导出、0W0E、测试门禁过）
 - 真机验收：zip 内 测试清单.txt（B 节开窗真替换 / C 节关闭真替换为本轮核心）
 - 所有者回传：设置→动画→【复制诊断信息】的结果（本轮新增取证方式）
