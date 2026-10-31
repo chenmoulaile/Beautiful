@@ -16,20 +16,26 @@ Windows 11 的 macOS 桌面还原壳：悬浮 Dock（Big Sur 风）+ macOS 菜�
 - 隐藏方式三档：常显 / 自动隐藏（离开 0.5s 滑下只露 4px，触底滑回）/ 半透明（离开时 45%，移上去恢复）。
 - **实验**：停靠边可切左/右（竖排面板 + 悬停放大 1.12，无高斯放大场/倒影，且不占工作区）。新窗口淡入已由下方「打开 / 关闭」的 ghost 版接管（alpha.13），AW_BLEND 旧路径仅在 ghost 版被关闭时兜底。
 
-**打开 / 关闭（v4.0-alpha.13）**
+**打开 / 关闭（v4.0-alpha.15）**
 - 打开（默认开）：EVENT_OBJECT_SHOW 触发，占位帧设计——替身先以全透明占住窗口矩形，
-  PrintWindow 后台重试 8ms×12，就绪当帧换入真画面起播（200ms easeOutQuint，0.94→1.0 + 前段快速淡入）；
+  PrintWindow 后台重试 8ms×12，就绪当帧换入真画面起播（360ms easeOutQuint，0.90→1.0；
+  **alpha.15 起真窗口 DWM Cloak，替身成为真入场而非叠在已可见窗口上的重影**；Cloak 不可用时自动回退淡入模式）；
   只有"第一次显示"是打开，hide/show 回归不重播（macOS 语义）。实验形态 `fromIcon`（从 Dock 图标飞出）默认关。
-- 关闭（**默认不播=macOS 忠实**）：DESTROY 触发，画面取 2Hz 前台缓存帧，龄超 1s（`CloseCacheMaxAgeMs`）判废；
-  设置显式打开才播（150ms 收拢→92% 淡出）。
+- 关闭（**alpha.15 起默认开**）：DESTROY 触发，画面取 2Hz 前台缓存帧，龄超 1s（`CloseCacheMaxAgeMs`）判废；
+  260ms 收拢→92% 淡出；追索 mac "关闭干脆消失"语义可在设置里关回。
+- 时长/比例全部在 `config/anim-params.json` 热加载（alpha.15 起时长类参数对运行中的主程序**即时生效**）；
+  设置页"动画速度"滑条同样即时生效（alpha.15 接线）。
 - 自家窗口（设置/关于本机）一律真动画：内容收拢后真正 Close，不受上面的开关约束。
 - Dock 启动弹跳：点未运行应用 = 图标**反复弹跳**至首窗出现收口（或 10s 超时）；
   单击已运行应用仍是单次弹跳。
-- 挂载自检行扩为四钩子（MINIMIZE/LOCATION/SHOW/DESTROY）+ 打开/关闭设置实值；
+- 挂载自检行扩为五钩子（MINIMIZE/LOCATION/SHOW/DESTROY/FOREGROUND）+ 打开/关闭设置实值；
   打开批量沿用门禁（同进程 1s 内 >3 窗只播首个）；旧 AW_BLEND 实验路径在 ghost 版开启时自动让位。
 
-**动画（v4.0-alpha.12，macOS genie）**
-- 四条触发路径（Dock 点击 / 标题栏按钮 / Win+↓ / 任务栏）的最小化与还原动画；Dock 点击走"ShowWindow 前同步预抓"，其余三条靠前台帧缓存兜底（2Hz 采样、700ms 新鲜龄、1500ms 判废、1 全 4 半 LRU）。
+**动画（v4.0-alpha.15，macOS genie）**
+- 四条触发路径（Dock 点击 / 标题栏按钮 / Win+↓ / 任务栏）的最小化与还原动画；Dock 点击走"ShowWindow 前同步预抓"，
+  其余三条靠前台帧缓存兜底（2Hz 采样、700ms 新鲜龄、1500ms 判废、1 全 4 半 LRU）；
+  **alpha.15 新增：EVENT_SYSTEM_FOREGROUND 钩子——窗口成为前台时立即补抓一帧**（250ms 节流），
+  "刚切到窗口就最小化"不再因缓存无帧而整段不播（真机矩阵里 caption 按钮两连未播的根因）。
 - 全部时长/比例在 `config/anim-params.json`，**改文件即热加载**（首次运行自动生成默认表）；逐字段的"为什么"见 `Core/Animation/AnimParams.cs`。
 - 门禁（Core AnimPolicy，纯函数+单测）：风暴抑制（200ms 内 4 个最小化整批不播）、并发幽灵 ≤3、同进程 300ms 节流、排除清单、全屏零轮询不播、速度倍率 0.5-2.0。
 - 保真度两档（诚实声明）：**我方触发（Dock）= 完整编排档**（预捕获）；**系统触发 = 事后补偿档**（事件到手时窗口已 iconic，播缓存帧），允许 <100ms 过渡痕迹。MyDockFinder/Lume 靠注入拿完整编排权，本程序不注入，差距如实写。
