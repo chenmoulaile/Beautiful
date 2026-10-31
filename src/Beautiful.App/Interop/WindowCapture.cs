@@ -164,6 +164,25 @@ internal static class WindowCapture
         return true;
     }
 
+    /// <summary>
+    /// 只走 native/PrintWindow 两条内容路，<b>绝不退屏幕抠图</b>。给 CBT-SHOW 真替换路径用：
+    /// 真窗口此刻已被钩子 Cloak 摘出合成树，屏幕上那一块是"窗口出现之前"的旧画面——
+    /// 屏幕退路抓回来的是背景而不是窗口。PrintWindow 对 Cloak 窗口仍会驱动应用自己渲染
+    /// （WM_PRINT 与合成无关），纯色判废后如实返回 null（宿主会立即 Uncloak 放行原生显示）。
+    /// </summary>
+    public static BitmapSource? CapturePrintWindowOnly(IntPtr hwnd)
+    {
+        if (hwnd == IntPtr.Zero) return null;
+        if (!GetWindowRect(hwnd, out var rect)) return null;
+        var width = rect.Right - rect.Left;
+        var height = rect.Bottom - rect.Top;
+        if (width <= 0 || height <= 0 || width > 16384 || height > 16384) return null;
+
+        var viaNative = CaptureViaNative(hwnd, width, height);
+        if (viaNative is not null) return viaNative;
+        return CaptureViaPrintWindow(hwnd, width, height);
+    }
+
     private static BitmapSource? CaptureViaPrintWindow(IntPtr hwnd, int width, int height)
     {
         var windowDc = GetWindowDC(hwnd);

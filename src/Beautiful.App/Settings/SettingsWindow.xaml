@@ -653,6 +653,15 @@
                         </StackPanel>
                         <TextBlock Style="{StaticResource HintText}"
                                    Text="mesh 走 WPF 3D 纹理网格，在缺少硬件加速的环境可能画不出来；strips 是任何环境都能画的保底形态。下一次最小化/还原生效。"/>
+
+                        <!-- alpha.17：诊断与取证——真机反馈三连（通知中心炸/动画没播/钩子挂没挂）
+                             的落地入口：状态行 + 一键复制 + 日志目录，用户不再需要翻文件系统。 -->
+                        <TextBlock x:Name="AnimDiagnosticsText" Style="{StaticResource HintText}" Margin="0,14,0,0"
+                                   TextWrapping="Wrap" Text="动画诊断：启动中…"/>
+                        <StackPanel Orientation="Horizontal" Margin="0,8,0,0">
+                            <Button Content="复制诊断信息" Width="110" Height="28" Click="CopyDiagnostics_Click"/>
+                            <Button Content="打开日志文件夹" Width="110" Height="28" Margin="10,0,0,0" Click="OpenLogsFolder_Click"/>
+                        </StackPanel>
                     </StackPanel>
                 </Border>
 

@@ -1000,6 +1000,11 @@ public sealed class MinimizeAnimator : IDisposable
             if (name != "未知") _firstWindowShown.Invoke(name);
         }
 
+        // alpha.17：钩子层可用 = 每一次 SHOW 都会被 CBT 层在首帧上屏前 Cloak 接管（真替换）。
+        // 事后路径整体短路——若这里再播，就是在已可见窗口上叠加第二层动画（用户点名不要的形态）。
+        // 首窗报告与 pid 记账必须保留（Dock 启动弹跳与关闭动画的 pid 台账都靠它们）。
+        if (HookBridge.Available) return;
+
         if (!Admit(hwnd, AnimKind.Open, "OBJECTSHOW", out var durationMs, out _)) return;
 
         var p = AnimParamsStore.Current;
@@ -1099,7 +1104,9 @@ public sealed class MinimizeAnimator : IDisposable
 
     /// <summary>DWM Cloak：把真窗口从合成树里摘掉（不销毁、不隐藏，Win8+ 对普通顶层窗口可靠）。
     /// 失败（老系统/属性被拒）返回 false，调用方退回 alpha.14 的"重影"模式。</summary>
-    private static bool SetCloak(IntPtr hwnd, bool cloaked)
+    /// <remarks>internal：CBT-SHOW 路径的 Cloak 由钩子层就地完成，宿主端（MinimizeHookClient）
+    /// 只负责 Uncloak——验活/看门狗/退出收摊三处都要调它。</remarks>
+    internal static bool SetCloak(IntPtr hwnd, bool cloaked)
     {
         try
         {
@@ -1110,6 +1117,78 @@ public sealed class MinimizeAnimator : IDisposable
         {
             return false;
         }
+    }
+
+    /// <summary>
+    /// CBT-SHOW 真替换入口（alpha.17）：钩子已在目标进程内、首帧上屏之前把真窗口 Cloak 并交权，
+    /// 本方法以<b>不透明替身</b>从 <see cref="OpenAnimMath.Start"/> 的 90% 缩放起播到 100% 落位，
+    /// 演完先 Uncloak 真窗口（终帧与真窗口完全重合，无跳变）再收替身。
+    /// 返回是否接管：false = 门禁拒绝/参数不合法（调用方必须立即 Uncloak 放行原生显示）。
+    /// 与事后路径（<see cref="PlayOpen"/>）互斥——钩子可用时后者整体短路，不存在双动画。
+    /// </summary>
+    public bool PlayOpenFromHook(IntPtr hwnd, BitmapSource image, Rect sourceRect)
+    {
+        if (!IsRunning || Busy)
+        {
+            Logger.Info(AnimReport.Skipped("CBT-SHOW", "无", IsRunning ? "上一条动画未结束（单替身闸门）" : "动画子系统未启用"));
+            return false;
+        }
+        if (image is null || sourceRect.Width < MinShellSize || sourceRect.Height < MinShellSize)
+        {
+            Logger.Info(AnimReport.Skipped("CBT-SHOW", "钩子帧", "帧/矩形不合法"));
+            return false;
+        }
+        if (!Admit(hwnd, AnimKind.Open, "CBT-SHOW", out var durationMs, out _)) return false;
+
+        var p = AnimParamsStore.Current;
+        LogGeometry("CBT-SHOW", "钩子帧", hwnd, sourceRect, IconRectFor(sourceRect, _dockTarget(hwnd)));
+        Logger.Info($"打开动画（CBT-SHOW 真替换）：0x{hwnd.ToInt64():X} 钩子已 Cloak 真窗口，替身起播 "
+                    + $"{image.PixelWidth}×{image.PixelHeight} 落位={durationMs}ms");
+
+        var ghost = new GhostLayer(image, 1, sourceRect);
+        _ghost = ghost;
+        _lastLayer = "钩子帧";
+        ghost.Show();
+        var startFrame = OpenAnimMath.Start(p.OpenStartScale);
+        ghost.Apply(new List<(GenieRect, double)> { (startFrame.Rect, 1.0) });
+        RunClock(durationMs, "CBT-SHOW", "openInPlace", "钩子帧", 0, t =>
+        {
+            var f = OpenAnimMath.Frame(t, p.OpenStartScale);
+            ghost.Apply(new List<(GenieRect, double)> { (f.Rect, 1.0) });
+        }, () =>
+        {
+            SetCloak(hwnd, false);   // 先还真窗口再收替身：终帧与真窗口重合，Uncloak 藏在替身下面
+            if (_cloakedWindow == hwnd) _cloakedWindow = IntPtr.Zero;
+            _ghost = null;
+            ghost.Close();
+        });
+        return true;
+    }
+
+    /// <summary>
+    /// CBT-DESTROY 关闭路径（alpha.17）：钩子在窗口销毁前抓下最后一帧（不阻断销毁），
+    /// 本方法用这帧播"收拢消失"替身——比 alpha.15 的前台缓存帧新（零龄），也比它诚实：
+    /// 画面就是用户按关闭键那一瞬间。设置项 CloseAnimation 关闭时直接返回（钩子层那帧白抓，
+    /// 但开关状态由 Flags bit1 同步给钩子，正常情况下钩子根本不会拦）。
+    /// </summary>
+    public void PlayCloseFromHook(IntPtr hwnd, uint pid, BitmapSource image, Rect sourceRect)
+    {
+        if (!SettingsService.Current.CloseAnimation) return;   // 钩子侧已同步开关；双保险静默
+        if (!IsRunning || Busy) return;
+        if (sourceRect.Width < MinShellSize || sourceRect.Height < MinShellSize)
+        {
+            Logger.Info(AnimReport.Skipped("CBT-DESTROY", "钩子帧", "矩形不合法"));
+            return;
+        }
+        if (!Admit(hwnd, AnimKind.Close, "CBT-DESTROY", out var durationMs, out _, pid)) return;
+
+        Logger.Info($"关闭动画（CBT-DESTROY 钩子帧）：pid={pid} 收拢={durationMs}ms "
+                    + $"{image.PixelWidth}×{image.PixelHeight}");
+        StartGhost(image, sourceRect, durationMs, t =>
+        {
+            var f = CloseAnimMath.Frame(t, AnimParamsStore.Current.CloseEndScale);
+            return new List<(GenieRect, double)> { (f.Rect, f.Opacity) };
+        }, "CBT-DESTROY", "closeFade", "钩子帧", 0);
     }
 
     /// <summary>捕获就绪后的换帧与起播：占位 → 真帧 → Cloak 真窗口 → 时钟。核对 ghost 身份（期间可能被收摊）。</summary>
@@ -1163,6 +1242,9 @@ public sealed class MinimizeAnimator : IDisposable
     private void PlayClose(IntPtr hwnd)
     {
         if (!SettingsService.Current.CloseAnimation) return;   // 默认关：用户显式开启才播（静默，不刷日志）
+        // alpha.17：钩子可用时关闭走 CBT-DESTROY 钩子帧（销毁前新帧，零龄）；缓存帧路径整体短路，
+        // 避免同一销毁播两遍（事后 OBJECTDESTROY 与钩子帧必然都到）。
+        if (HookBridge.Available) return;
         if (!IsRunning || Busy) return;
         // 只演"我们见过 SHOW"的窗口：DESTROY 对所有顶层窗口都发（含 tooltip/临时窗），
         // 没有 pid 记账的一律不管——它们没进过缓存，也没有排除清单可查。

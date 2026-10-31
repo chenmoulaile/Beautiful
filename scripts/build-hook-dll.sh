@@ -26,7 +26,7 @@ echo "── clang 编译（MS SEH）..."
 
 echo "── mingw gcc 链接（静态 CRT，零依赖）..."
 x86_64-w64-mingw32-gcc -shared -o "$OUT" "$TMP/beautiful_hook.o" \
-  -static -lkernel32 -luser32 -lgdi32
+  -static -lkernel32 -luser32 -lgdi32 -ldwmapi
 
 echo "── 产物校验..."
 python3 - "$OUT" <<'PY'

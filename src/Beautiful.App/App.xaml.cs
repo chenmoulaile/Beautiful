@@ -55,6 +55,32 @@ public partial class App : Application
         else NativeMethods.ShowWindow(hwnd, NativeMethods.SwMinimize);
     }
 
+    /// <summary>
+    /// 诊断信息一键汇总（alpha.17，设置页"复制诊断信息"消费）：把"动画没播/通知中心炸了/
+    /// 钩子挂没挂"三类真机反馈的第一手判定行收进剪贴板——用户不再需要翻日志文件，
+    /// 报障时贴这段就够了。内容全部是元信息（状态行/设置实值/版本），不含通知正文。
+    /// </summary>
+    internal static string BuildDiagnosticsText()
+    {
+        var self = Current as App;
+        var s = SettingsService.Current;
+        var lines = new List<string>
+        {
+            $"Beautiful v{typeof(App).Assembly.GetName().Version?.ToString(3)}",
+            $"动画子系统：{self?._animator?.MountStatus ?? "未装配"}",
+            $"钩子层：{self?._hookClient?.Status ?? "未装配（回退事后路径）"}",
+            $"设置实值：最小化={s.MinimizeAnimation} 打开={s.OpenAnimation} 关闭={s.CloseAnimation} "
+                + $"打开形态={s.OpenAnimStyle} 引擎={s.GenieEngine} 速度={s.AnimationSpeed:0.##}",
+            $"抑制系统动画：{s.AnimSuppressSystemAnim}",
+            $"通知服务：{(self?._notifications is { } n
+                ? $"启动={n.Started} 授权={n.Access} 状态={n.StatusText} 历史={n.Store.Count} 条"
+                : "未构造")}",
+            $"环境开关：BEAUTIFUL_NO_ANIMATION={Environment.GetEnvironmentVariable("BEAUTIFUL_NO_ANIMATION") ?? "(未设)"}",
+            $"配置与日志：{AppContext.BaseDirectory}",
+        };
+        return string.Join(Environment.NewLine, lines);
+    }
+
     /// <summary>系统最小化动画接管（v3.0 §Q2-2）：退出必须还原用户原来的 SPI_SETANIMATION 值。</summary>
     private Animation.SystemAnimationSuppressor? _animSuppressor;
 

@@ -85,6 +85,7 @@ public partial class SettingsWindow : Window
         AboutFontText.Text = Beautiful.Core.Design.FontResolution.Describe(FontProbe.Current);
         AboutConfigText.Text = $"配置与日志：{AppContext.BaseDirectory}";
         VersionLine.Text = $"Beautiful v{ProductVersion()} · {Beautiful.Core.Design.FontResolution.Describe(FontProbe.Current)} · 配置与日志在 {AppContext.BaseDirectory}";
+        AnimDiagnosticsText.Text = BuildDiagnosticsSummary();
     }
 
     // 自家窗口一律真动画（v2.2 §4.4）：设置窗口拥有自己的循环，关闭时先收拢再真 Close。
@@ -118,6 +119,52 @@ public partial class SettingsWindow : Window
     {
         var v = typeof(App).Assembly.GetCustomAttribute<AssemblyInformationalVersionAttribute>()?.InformationalVersion;
         return string.IsNullOrWhiteSpace(v) ? "未知" : v.Split('+')[0];
+    }
+
+    // ---------- 诊断与取证（alpha.17） ----------
+
+    /// <summary>诊断行（单行摘要）：构造期取一次，复制/打开日志的反馈也写在这里。</summary>
+    private static string BuildDiagnosticsSummary()
+    {
+        try
+        {
+            return App.BuildDiagnosticsText().Replace(Environment.NewLine, "  ·  ");
+        }
+        catch (Exception ex)
+        {
+            return $"动画诊断：汇总失败（{ex.GetType().Name}）";
+        }
+    }
+
+    private void CopyDiagnostics_Click(object sender, RoutedEventArgs e)
+    {
+        try
+        {
+            System.Windows.Clipboard.SetDataObject(App.BuildDiagnosticsText(), true);
+            AnimDiagnosticsText.Text = "动画诊断：已复制到剪贴板，直接粘贴给开发者即可";
+        }
+        catch (Exception ex)
+        {
+            // 剪贴板可能被别的进程锁住：如实降级，引导走日志目录
+            AnimDiagnosticsText.Text = $"动画诊断：复制失败（{ex.GetType().Name}），请打开日志文件夹取证";
+        }
+    }
+
+    private void OpenLogsFolder_Click(object sender, RoutedEventArgs e)
+    {
+        try
+        {
+            var dir = System.IO.Path.Combine(AppContext.BaseDirectory, "logs");
+            System.IO.Directory.CreateDirectory(dir);
+            System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo("explorer.exe", $"\"{dir}\"")
+            {
+                UseShellExecute = true
+            });
+        }
+        catch (Exception ex)
+        {
+            Logger.Warn($"打开日志目录失败：{ex.Message}");
+        }
     }
 
     /// <summary>固定应用路径列表（ListBox 绑定；变更即写 dock.json 并触发 Dock 重载）。</summary>

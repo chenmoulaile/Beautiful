@@ -69,7 +69,7 @@ public partial class NotificationCenterWindow : Window
         ApplyClock();
 
         _clockTimer = new DispatcherTimer(TimeSpan.FromSeconds(20), DispatcherPriority.Background,
-            (_, _) => ApplyClock(), Dispatcher);
+            (_, _) => SafeApplyClock(), Dispatcher);
         _clockTimer.Start();
 
         if (_service is not null)
@@ -79,10 +79,20 @@ public partial class NotificationCenterWindow : Window
 
         Loaded += (_, _) =>
         {
-            PositionAtRightEdge();
-            Rebuild();
-            PanelScroll.ScrollToTop();
-            PlaySlideIn();
+            // alpha.17：Loaded 之后的一切都不在点击的 try/catch 保护圈内，任何环境性异常
+            // 都会升级成全局"发生界面异常"弹框（真机反馈：通知中心"又炸了"）。逐段兑底：
+            // 定位/重画/滑入任一段失败，面板都保持基础形态可用，服务启动照常。
+            try
+            {
+                PositionAtRightEdge();
+                Rebuild();
+                PanelScroll.ScrollToTop();
+                PlaySlideIn();
+            }
+            catch (Exception ex)
+            {
+                Logger.Error("通知中心：初始化失败（面板保持基础形态）", ex);
+            }
             _ = EnsureServiceStartedAsync();
         };
         Closed += (_, _) =>
@@ -273,7 +283,7 @@ public partial class NotificationCenterWindow : Window
     {
         if (_service is null || _service.Started)
         {
-            Rebuild();
+            SafeRebuild();
             return;
         }
 
@@ -287,7 +297,7 @@ public partial class NotificationCenterWindow : Window
             // 这里必须接住——面板已经打开，不能让一次服务启动失败把整个面板炸掉。
             Logger.Error("通知中心：服务启动异常（面板保持打开，显示未授权态）", ex);
         }
-        Rebuild();
+        SafeRebuild();
     }
 
     private void OnServiceUpdated(object? sender, EventArgs e)
@@ -299,11 +309,37 @@ public partial class NotificationCenterWindow : Window
 
         if (!Dispatcher.CheckAccess())
         {
-            Dispatcher.BeginInvoke(new Action(Rebuild));
+            Dispatcher.BeginInvoke(new Action(SafeRebuild));
             return;
         }
 
-        Rebuild();
+        SafeRebuild();
+    }
+
+    /// <summary>事件路径的重画入口：服务层轮询/推送都可能把异常带进这里（在点击保护圈之外），
+    /// 单次重画失败只记日志，面板与定时器都保住。</summary>
+    private void SafeRebuild()
+    {
+        try
+        {
+            Rebuild();
+        }
+        catch (Exception ex)
+        {
+            Logger.Error("通知中心：重画失败（面板保持现状）", ex);
+        }
+    }
+
+    private void SafeApplyClock()
+    {
+        try
+        {
+            ApplyClock();
+        }
+        catch (Exception ex)
+        {
+            Logger.Error("通知中心：时钟刷新失败", ex);
+        }
     }
 
     /// <summary>整块重画（卡片数量有限、结构简单，重建比增量维护更不容易错）。</summary>
@@ -317,9 +353,19 @@ public partial class NotificationCenterWindow : Window
         CountText.Text = items.Count == 0 ? string.Empty : $"{items.Count} 条";
         ClearButton.IsEnabled = items.Count > 0;
 
+        var failed = 0;
         foreach (var item in items)
         {
-            CardsHost.Children.Add(BuildCard(item));
+            try
+            {
+                CardsHost.Children.Add(BuildCard(item));
+            }
+            catch (Exception ex)
+            {
+                // 单张卡片的投影异常（字符/资源/模板）不该把整个面板拖下；跳过并计数
+                failed++;
+                Logger.Warn($"通知中心：卡片构建跳过 {ex.GetType().Name} {ex.Message}");
+            }
         }
 
         var readable = _service is { Access: NotificationAccess.Allowed };
@@ -329,6 +375,11 @@ public partial class NotificationCenterWindow : Window
             EmptyTitle.Text = readable ? "没有新通知" : "无法读取通知";
             EmptyDetail.Text = readable ? "" : status;
             OpenSettingsButton.Visibility = readable ? Visibility.Collapsed : Visibility.Visible;
+        }
+
+        if (failed > 0)
+        {
+            CountText.Text = $"{items.Count} 条（{failed} 条异常跳过）";
         }
     }
 

@@ -291,28 +291,37 @@ internal static class NotificationBannerHost
         for (var i = Open.Count - 1; i >= 0; i--)
         {
             var window = Open[i];
-            window.UpdateLayout();   // SizeToContent 的高度要等布局跑完才准
-            var widthPx = (int)Math.Round(window.ActualWidth * scale);
-            var heightPx = (int)Math.Round(window.BannerHeight * scale);
-            if (widthPx <= 0 || heightPx <= 0)
+            // alpha.17：重排由"别的横幅关闭/新横幅到达"触发，任何一条的布局异常都不该把
+            // 其余横幅与调用方（通知服务的事件链）一起拖下——逐条隔离。
+            try
             {
-                continue;
+                window.UpdateLayout();   // SizeToContent 的高度要等布局跑完才准
+                var widthPx = (int)Math.Round(window.ActualWidth * scale);
+                var heightPx = (int)Math.Round(window.BannerHeight * scale);
+                if (widthPx <= 0 || heightPx <= 0)
+                {
+                    continue;
+                }
+
+                var leftPx = monitor.Work.Right - widthPx - (int)Math.Round(EdgeMarginDip * scale);
+                var stackIndex = Open.Count - 1 - i;   // 最新的一条在最上面
+                var topPx = monitor.Work.Top + (int)Math.Round(topDip * scale)
+                            + (int)Math.Round(stackIndex * ((window.BannerHeight + GapDip) * scale));
+
+                var handle = new System.Windows.Interop.WindowInteropHelper(window).Handle;
+                if (handle == IntPtr.Zero)
+                {
+                    continue;
+                }
+
+                // SWP_NOSIZE(0x1)：尺寸交给 WPF 的 SizeToContent，这里只摆位置
+                NativeMethods.SetWindowPos(handle, new IntPtr(-1), leftPx, topPx, 0, 0,
+                    NativeMethods.SwpNoactivate | NativeMethods.SwpNozorder | 0x0001);
             }
-
-            var leftPx = monitor.Work.Right - widthPx - (int)Math.Round(EdgeMarginDip * scale);
-            var stackIndex = Open.Count - 1 - i;   // 最新的一条在最上面
-            var topPx = monitor.Work.Top + (int)Math.Round(topDip * scale)
-                        + (int)Math.Round(stackIndex * ((window.BannerHeight + GapDip) * scale));
-
-            var handle = new System.Windows.Interop.WindowInteropHelper(window).Handle;
-            if (handle == IntPtr.Zero)
+            catch (Exception ex)
             {
-                continue;
+                Logger.Warn($"通知横幅：单条重排失败（{ex.GetType().Name} {ex.Message}），跳过该条");
             }
-
-            // SWP_NOSIZE(0x1)：尺寸交给 WPF 的 SizeToContent，这里只摆位置
-            NativeMethods.SetWindowPos(handle, new IntPtr(-1), leftPx, topPx, 0, 0,
-                NativeMethods.SwpNoactivate | NativeMethods.SwpNozorder | 0x0001);
         }
     }
 }
