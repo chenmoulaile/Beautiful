@@ -601,6 +601,20 @@
                                   Checked="AnimSuppressSystemAnim_Changed" Unchecked="AnimSuppressSystemAnim_Changed"/>
                         <TextBlock Style="{StaticResource HintText}"
                                    Text="只在本次运行内临时接管 SPI_SETANIMATION，退出时还原成原来的值；重启生效。关掉后系统动画与 genie 会同时播放。"/>
+                        <CheckBox x:Name="OpenAnimationCheck" Content="新窗口 macOS 式打开动画（原位落位）"
+                                  Margin="0,8,0,0" Checked="OpenAnimation_Changed" Unchecked="OpenAnimation_Changed"/>
+                        <StackPanel Orientation="Horizontal" Margin="0,8,0,0">
+                            <TextBlock Text="打开形态" Style="{StaticResource RowLabel}" Width="72"/>
+                            <ComboBox x:Name="OpenAnimStyleBox" Width="220" VerticalAlignment="Center"
+                                      SelectionChanged="OpenAnimStyle_Changed">
+                                <ComboBoxItem Content="inPlace（原位落位，推荐）" Tag="inPlace"/>
+                                <ComboBoxItem Content="fromIcon（从 Dock 图标飞出，实验）" Tag="fromIcon"/>
+                            </ComboBox>
+                        </StackPanel>
+                        <CheckBox x:Name="CloseAnimationCheck" Content="关闭窗口动画（macOS 默认不播：关闭是干脆地消失）"
+                                  Margin="0,8,0,0" Checked="CloseAnimation_Changed" Unchecked="CloseAnimation_Changed"/>
+                        <TextBlock Style="{StaticResource HintText}"
+                                   Text="打开动画用占位帧消除首帧白板（8ms×12 捕获重试，就绪当帧换入起播）；关闭动画走前台缓存帧，缓存龄超 1s 判废不播。设置/关于本机等自家窗口一律真动画，不受上面的开关影响。"/>
                         <StackPanel Orientation="Horizontal" Margin="0,12,0,0">
                             <TextBlock Text="效果" Style="{StaticResource RowLabel}" Width="72"/>
                             <ComboBox x:Name="MinimizeEffectBox" Width="220" VerticalAlignment="Center"
