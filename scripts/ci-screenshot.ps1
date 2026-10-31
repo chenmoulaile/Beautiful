@@ -83,15 +83,20 @@ try {
 
     # 2) 点顶栏时钟（顶栏横跨屏幕顶部，时钟在右端）
     $b = [System.Windows.Forms.Screen]::PrimaryScreen.Bounds
-    Click-At -x ($b.Width - 70) -y 10
-    Start-Sleep -Seconds 3           # 通知中心滑入 + 可能的异常弹窗出现
+    # 时钟文本在顶栏右侧 x≈width-240~-180（右侧还有音量/WiFi/控制中心/通知四个图标，共~170px）
+    Click-At -x ($b.Width - 240) -y 12
+    Start-Sleep -Seconds 4           # 通知中心滑入 + 可能的异常弹窗出现
     Save-Shot '02-clock-flyout.png'
 
-    # 3) Esc 关面板，再点一次验证"再点收起"语义
-    Start-Sleep -Seconds 1
-    Click-At -x ($b.Width - 70) -y 10
+    # 3) 再点一次验证"再点收起"语义，然后点 Dock 图标取证启动弹跳
+    Click-At -x ($b.Width - 240) -y 12
     Start-Sleep -Seconds 2
     Save-Shot '03-after-toggle.png'
+
+    # 4) Dock 图标点击（底部胶囊中部）→ 启动弹跳/窗口启动取证
+    Click-At -x ([int]($b.Width / 2 - 100)) -y ($b.Height - 40)
+    Start-Sleep -Seconds 2
+    Save-Shot '04-dock-launch.png'
 }
 finally {
     # 4) 日志取证：未处理异常 → CI 红；Dock/顶栏就绪行缺失 → CI 红
