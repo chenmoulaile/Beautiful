@@ -33,3 +33,7 @@ installer/out/
 .superpowers/
 # 本地 AI 工作区（会话记忆/临时产物，不入公开仓库）
 .workbuddy-ai/
+bin/
+obj/
+build/
+*.user

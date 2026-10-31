@@ -81,9 +81,9 @@ dotnet build -c Release          # 0 警告 0 错误
 dotnet test tests/Beautiful.Core.Tests
 ```
 
-当前：**build 0 警告 / 0 错误；test 1412 总，Windows 上全通过**。
+当前：**build 0 警告 / 0 错误；test 1419 总，Windows 上全通过**（Linux 上 46 个平台/区域差异用例红为已知基线）。
 （注：在 Linux/macOS 上用 `-p:EnableWindowsTargeting=true` 交叉编译可以过；
-单测有 48 个平台/区域差异用例只在 Windows 绿，CI 门禁 `ci.yml` 每次推送在 windows-latest 全套把关。）
+CI 门禁 `ci.yml` 每次推送在 windows-latest 全套把关。）
 
 ## 结构与边界
 
@@ -99,3 +99,15 @@ dotnet test tests/Beautiful.Core.Tests
 
 推送 `v*` 标签触发 `.github/workflows/release.yml` 构建 zip 与安装包（CI 独占 Release 资产）。
 `v4.0.0-alpha.2` 起 CI 未触发、构建机也没有 Inno Setup，故 alpha 系列只提供免安装 zip。
+
+### 免 Windows 机器的交叉交付包（v4.0.0-alpha.14 起）
+
+非 Windows 开发机可直接产出桌面 zip（self-contained，解压即用，无需装 .NET）：
+
+```bash
+bash scripts/package-release.sh [输出目录]   # 交叉编译 → PE 校验 → 组装 zip
+```
+
+产物：`Beautiful-<版本>-win64.zip`（Beautiful.exe + AnimLab.exe 调参台 + 全套运行时 + 交付说明）。
+不含 C++ 原生层（Beautiful.Native.dll 需 MSVC，由 CI 构建线负责），缺失时主程序自动降级为纯 C# 形态。
+验证口径：交叉编译 0 警告 0 错误 + PE 头校验（x64 GUI）+ 全量单测（Linux 基线红集合无回归）+ CI windows-latest 终审。
