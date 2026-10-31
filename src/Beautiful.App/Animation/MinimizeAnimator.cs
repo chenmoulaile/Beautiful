@@ -45,6 +45,7 @@ public sealed class MinimizeAnimator : IDisposable
     private const uint EventObjectDestroy = 0x8001;
     private const uint EventObjectShow = 0x8002;
     private const uint EventObjectLocationChange = 0x8004;
+    private const uint EventSystemForeground = 0x0003;
     private const uint ObjidWindow = 0;
     private const uint WinEventOutOfContext = 0x00000000;
     private const uint WinEventSkipOwnProcess = 0x00000002;
@@ -66,16 +67,21 @@ public sealed class MinimizeAnimator : IDisposable
     private IntPtr _locationHook = IntPtr.Zero;
     private IntPtr _showHook = IntPtr.Zero;
     private IntPtr _destroyHook = IntPtr.Zero;
+    private IntPtr _foregroundHook = IntPtr.Zero;
 
     private GhostLayer? _ghost;
     private GenieMeshGhost? _meshGhost;
     private bool _disabledByEnvironment;
 
+    /// <summary>当前被 Cloak 的真窗口（最多一个，单替身闸门保证）：退出/收摊时必须 Uncloak，
+    /// 否则真窗口会被永久藏起来（比动画本身严重得多的故障）。</summary>
+    private IntPtr _cloakedWindow;
+
     /// <summary>前台帧缓存（兜底捕获层）。采样在后台线程，查询在 UI 线程。</summary>
     private readonly ForegroundFrameCache _frames = new();
 
     /// <summary>放行门禁（风暴/并发/节流/排除/全屏）。</summary>
-    private readonly AnimPolicy _policy = new(AnimParamsStore.Current);
+    private readonly AnimPolicy _policy = new(AnimParams.Default);
 
     /// <summary>hwnd → 上一次的 (矩形, 是否最大化)。只为识别"从非最大化跳到最大化"那一下。</summary>
     private readonly Dictionary<IntPtr, (RECT Rect, bool Zoomed)> _lastRect = new();
@@ -130,10 +136,30 @@ public sealed class MinimizeAnimator : IDisposable
         _destroyHook = NativeMethods.SetWinEventHook(
             EventObjectDestroy, EventObjectDestroy, IntPtr.Zero, _proc,
             0, 0, WinEventOutOfContext | WinEventSkipOwnProcess);
+        // alpha.15：前台变化即补采一帧（绕过 2Hz 轮询节流）。
+        // 【为什么】事件路径到手时窗口已 iconic，画面只能靠缓存；而缓存只伺候 2Hz 前台采样，
+        // "刚切到窗口就最小化"必然无帧不播（真机矩阵：caption 按钮两连未播即此因）。
+        // 前台切换是"这个窗口接下来可能被最小化"的最强前兆，此刻抓一张性价比最高。
+        _foregroundHook = NativeMethods.SetWinEventHook(
+            EventSystemForeground, EventSystemForeground, IntPtr.Zero, _proc,
+            0, 0, WinEventOutOfContext | WinEventSkipOwnProcess);
 
         ApplyExclusions();
+        // alpha.15 接线（两处"参数没接上"缺陷）：
+        // ① 策略时长从构造时快照改为跟随热加载（改 anim-params.json 即时生效）；
+        // ② 设置页"动画速度"滑条（AnimationSpeed）与参数表倍率相乘后进策略——
+        //    alpha.14 里这个滑条没有任何消费方，拖到 0.5× 也不变慢。
+        AnimParamsStore.ParamsChanged += OnParamsChanged;
+        OnParamsChanged(AnimParamsStore.Current);
         BuildMountStatus();
         StartFrameSampler();
+    }
+
+    /// <summary>热加载/保存 → 重新合成参数推进策略。AnimSpeed 语义与 SpeedMultiplier 同向（越大越快）。</summary>
+    private void OnParamsChanged(AnimParams parameters)
+    {
+        var speed = Math.Clamp(SettingsService.Current.AnimationSpeed, 0.5, 2.0);
+        _policy.UpdateParams(parameters with { SpeedMultiplier = parameters.SpeedMultiplier * speed });
     }
 
     /// <summary>动画子系统未启用的原因（设置页/诊断块用）；null = 正常运行。</summary>
@@ -157,6 +183,7 @@ public sealed class MinimizeAnimator : IDisposable
         var locOk = _locationHook != IntPtr.Zero;
         var showOk = _showHook != IntPtr.Zero;
         var destroyOk = _destroyHook != IntPtr.Zero;
+        var foreOk = _foregroundHook != IntPtr.Zero;
 
         if (!hooksOk)
         {
@@ -171,6 +198,7 @@ public sealed class MinimizeAnimator : IDisposable
         if (!locOk) degraded.Add("LOCATIONCHANGE 钩子失败（最大化动画不可用）");
         if (!showOk) degraded.Add("OBJECTSHOW 钩子失败（打开动画不可用）");
         if (!destroyOk) degraded.Add("OBJECTDESTROY 钩子失败（关闭动画不可用）");
+        if (!foreOk) degraded.Add("FOREGROUND 钩子失败（事件路径最小化命中率降低）");
         if (!s.MinimizeAnimation) degraded.Add("设置项 MinimizeAnimation 为关");
         if (!s.OpenAnimation) degraded.Add("设置项 OpenAnimation 为关");
         if (effectiveEngine != requestedEngine) degraded.Add($"引擎 {requestedEngine} 不可用已回退 {effectiveEngine}");
@@ -179,7 +207,8 @@ public sealed class MinimizeAnimator : IDisposable
                       + $"LOCATION={(locOk ? $"0x{_locationHook.ToInt64():X}" : "失败")} "
                       + $"SHOW={(showOk ? $"0x{_showHook.ToInt64():X}" : "失败")} "
                       + $"DESTROY={(destroyOk ? $"0x{_destroyHook.ToInt64():X}" : "失败")} "
-                      + $"设置=开 打开={(s.OpenAnimation ? "开" : "关")} 关闭={(s.CloseAnimation ? "开（非默认）" : "关（默认）")} "
+                      + $"FOREGROUND={(foreOk ? $"0x{_foregroundHook.ToInt64():X}" : "失败")} "
+                      + $"设置=开 打开={(s.OpenAnimation ? "开" : "关")} 关闭={(s.CloseAnimation ? "开" : "关")} "
                       + $"请求引擎={requestedEngine} 生效引擎={effectiveEngine} "
                       + $"前台缓存=开 参数[{p.ToLogLine()}]"
                       + (degraded.Count > 0 ? $" 降级：{string.Join("；", degraded)}" : "");
@@ -217,6 +246,12 @@ public sealed class MinimizeAnimator : IDisposable
             if (hwnd == IntPtr.Zero) return;
             if (idObject != (int)ObjidWindow || idChild != 0) return;   // 只关心顶层窗口本身，不管子元素
 
+            if (evt == EventSystemForeground)
+            {
+                // 只做投递：真正的抓帧在线程池（PrintWindow 阻塞几十 ms，原生回调里绝不许）
+                _dispatcher.BeginInvoke(() => CaptureForegroundNow(hwnd), DispatcherPriority.Background);
+                return;
+            }
             if (evt == EventSystemMinimizeStart)
             {
                 _dispatcher.BeginInvoke(() => PlayMinimize(hwnd, "MINIMIZESTART"), DispatcherPriority.Render);
@@ -480,6 +515,68 @@ public sealed class MinimizeAnimator : IDisposable
         StartGenie(image, sourceRect, icon, durationMs, reverse: false, "Dock", "预抓帧", 0);
     }
 
+    /// <summary>前台补采的在飞标志（0 = 空闲）：同一时刻至多一张，防 alt-tab 风暴叠抓。</summary>
+    private IntPtr _foregroundCaptureInFlight;
+
+    /// <summary>前台补采的绝对节流（单调毫秒）：连按 alt-tab 时至多 4 张/秒。</summary>
+    private long _lastForegroundCaptureMs = long.MinValue;
+
+    /// <summary>
+    /// alpha.15：EVENT_SYSTEM_FOREGROUND 到手后的补采——绕过 2Hz 轮询的节流，
+    /// 但保留三道闸：已有新鲜帧就跳过、绝对节流 250ms、全屏零捕获（与采样器同一纪律）。
+    /// 【它救的是哪条命】标题栏按钮/Win+↓/任务栏三条最小化路径到手时窗口已 iconic，
+    /// 画面全靠缓存；"刚切到窗口就最小化"在纯 2Hz 轮询下必然无帧不播。
+    /// </summary>
+    private void CaptureForegroundNow(IntPtr hwnd)
+    {
+        if (!IsRunning || hwnd == IntPtr.Zero) return;
+        _ = NativeMethods.GetWindowThreadProcessId(hwnd, out var pid);
+        if (pid == 0 || pid == (uint)Environment.ProcessId) return;   // 自己的表面不进缓存
+        if (NativeMethods.IsIconic(hwnd) || !NativeMethods.IsWindowVisible(hwnd)) return;
+        if (IsFullscreenForeground()) return;
+
+        var p = AnimParamsStore.Current;
+        if (_frames.TryGet(hwnd, p.ForegroundCacheMaxAgeMs, out _, out _, out _)) return;   // 已有新鲜帧
+
+        var now = NowMs();
+        if (now - _lastForegroundCaptureMs < 250) return;
+        _lastForegroundCaptureMs = now;
+        if (Interlocked.CompareExchange(ref _foregroundCaptureInFlight, hwnd, IntPtr.Zero) != IntPtr.Zero) return;
+
+        _ = Task.Run(() =>
+        {
+            try
+            {
+                for (var i = 1; i <= 4; i++)
+                {
+                    if (NativeMethods.IsIconic(hwnd)) return;   // 抓的过程中被最小化了：交给事件路径
+                    var image = WindowCapture.Capture(hwnd, out var layer);
+                    if (image is not null)
+                    {
+                        if (NativeMethods.GetWindowRect(hwnd, out var rect))
+                        {
+                            _frames.Put(hwnd, image, ToRect(rect));
+                            Logger.Info($"前台补采：0x{hwnd.ToInt64():X} 层={layer} "
+                                        + $"{image.PixelWidth}×{image.PixelHeight}（FOREGROUND 事件触发）");
+                        }
+                        return;
+                    }
+                    Thread.Sleep(8);
+                }
+                Logger.Info(AnimReport.Skipped("前台补采", "重试", "FOREGROUND 捕获重试耗尽",
+                    $"hwnd=0x{hwnd.ToInt64():X}"));
+            }
+            catch (Exception ex)
+            {
+                Logger.Warn($"前台补采异常（已隔离）：{ex.GetType().Name} {ex.Message}");
+            }
+            finally
+            {
+                Interlocked.Exchange(ref _foregroundCaptureInFlight, IntPtr.Zero);
+            }
+        });
+    }
+
     /// <summary>
     /// 还原方向：窗口此刻已经可见，替身从图标那一行"流出来"长回原尺寸。
     /// 只装最小化不装还原的话，点开窗口是瞬间出现的，反而把动画衬得更假。
@@ -541,7 +638,8 @@ public sealed class MinimizeAnimator : IDisposable
                 source, layer, engine, ageMs);
             return;
         }
-        StartMesh(image, ToLamp(windowRect), ToLamp(iconRect), durationMs, reverse, source, layer, ageMs);
+        StartMesh(image, ToLamp(windowRect), ToLamp(iconRect),
+            AnimParamsStore.Current.LampSplit, durationMs, reverse, source, layer, ageMs);
     }
 
     /// <summary>
@@ -626,9 +724,10 @@ public sealed class MinimizeAnimator : IDisposable
 
     /// <summary>
     /// 用纹理网格跑一版 genie。<paramref name="reverse"/> = 还原方向（进度从 1 倒放到 0）。
+    /// <paramref name="split"/> = 两阶段分界（参数表 LampSplit，alpha.15 接线：之前这个参数无消费方）。
     /// </summary>
     private void StartMesh(BitmapSource image, LampGeometry windowRect, LampGeometry iconRect,
-        int durationMs, bool reverse, string source, string layer, double ageMs)
+        double split, int durationMs, bool reverse, string source, string layer, double ageMs)
     {
         GenieMeshGhost? ghost = null;
         try
@@ -648,12 +747,12 @@ public sealed class MinimizeAnimator : IDisposable
         }
 
         _meshGhost = ghost;
-        ghost.Apply(reverse ? 1.0 : 0.0, windowRect, iconRect);
+        ghost.Apply(reverse ? 1.0 : 0.0, windowRect, iconRect, split);
         ghost.Show();
         ghost.Place();
 
         RunClock(durationMs, source, "mesh", layer, ageMs,
-            t => ghost.Apply(reverse ? 1.0 - t : t, windowRect, iconRect),
+            t => ghost.Apply(reverse ? 1.0 - t : t, windowRect, iconRect, split),
             () =>
             {
                 _meshGhost = null;
@@ -827,7 +926,7 @@ public sealed class MinimizeAnimator : IDisposable
                 {
                     var waited = NowMs() - startedMs;
                     _dispatcher.BeginInvoke(
-                        () => StartOpenClock(ghost, image, sourceRect, durationMs, layer, waited, i, "OBJECTSHOW", "openInPlace"),
+                        () => StartOpenClock(hwnd, ghost, image, sourceRect, durationMs, layer, waited, i, "OBJECTSHOW", "openInPlace"),
                         DispatcherPriority.Render);
                     return;
                 }
@@ -892,8 +991,23 @@ public sealed class MinimizeAnimator : IDisposable
         });
     }
 
-    /// <summary>捕获就绪后的换帧与起播：占位 → 真帧 → 时钟。核对 ghost 身份（期间可能被收摊）。</summary>
-    private void StartOpenClock(GhostLayer ghost, BitmapSource image, Rect sourceRect, int durationMs,
+    /// <summary>DWM Cloak：把真窗口从合成树里摘掉（不销毁、不隐藏，Win8+ 对普通顶层窗口可靠）。
+    /// 失败（老系统/属性被拒）返回 false，调用方退回 alpha.14 的"重影"模式。</summary>
+    private static bool SetCloak(IntPtr hwnd, bool cloaked)
+    {
+        try
+        {
+            var v = cloaked ? 1 : 0;
+            return NativeMethods.DwmSetWindowAttribute(hwnd, NativeMethods.DwmwaCloak, ref v, sizeof(int)) == 0;
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
+    /// <summary>捕获就绪后的换帧与起播：占位 → 真帧 → Cloak 真窗口 → 时钟。核对 ghost 身份（期间可能被收摊）。</summary>
+    private void StartOpenClock(IntPtr hwnd, GhostLayer ghost, BitmapSource image, Rect sourceRect, int durationMs,
         string layer, long waitedMs, int attempts, string source, string engine)
     {
         if (_ghost != ghost)
@@ -904,16 +1018,31 @@ public sealed class MinimizeAnimator : IDisposable
         var p = AnimParamsStore.Current;
         ghost.SwapImage(image);
         ghost.SetContentVisible(true);
-        var startFrame = OpenAnimMath.Frame(0.0, p.OpenStartScale);
-        ghost.Apply(new List<(GenieRect, double)> { (startFrame.Rect, startFrame.Opacity) });
+
+        // alpha.15：Cloak 真窗口——alpha.14 里真窗口从不隐藏，替身只是叠在已可见窗口上的
+        // 一层淡入重影（用户反馈"打开动画几乎没有"的最大单一原因）。现在：先让替身以
+        // 不透明帧占住窗口（从 90% 缩放起），再 Cloak；动画结束时先 Uncloak 再收替身
+        // （终帧与真窗口完全重合，Uncloak 发生在不透明替身下面，无跳变）。
+        // Cloak 失败 → 回退重影模式（透明度曲线照旧）。
+        var cloaked = SetCloak(hwnd, true);
+        if (cloaked) _cloakedWindow = hwnd;
+        var startFrame = OpenAnimMath.Start(p.OpenStartScale);
+        ghost.Apply(new List<(GenieRect, double)> { (startFrame.Rect, cloaked ? 1.0 : startFrame.Opacity) });
+        if (cloaked)
+            Logger.Info("打开动画：真窗口已 Cloak（替身入场模式）");
         Logger.Info($"打开动画：占位帧就绪 层={layer} 重试={attempts} 耗时={waitedMs:0}ms "
                     + $"{image.PixelWidth}×{image.PixelHeight} 落位={durationMs}ms");
         RunClock(durationMs, source, engine, layer, 0, t =>
         {
             var f = OpenAnimMath.Frame(t, p.OpenStartScale);
-            ghost.Apply(new List<(GenieRect, double)> { (f.Rect, f.Opacity) });
+            ghost.Apply(new List<(GenieRect, double)> { (f.Rect, cloaked ? 1.0 : f.Opacity) });
         }, () =>
         {
+            if (cloaked)
+            {
+                SetCloak(hwnd, false);   // 先还真窗口再收替身：顺序反了会闪一帧空白
+                if (_cloakedWindow == hwnd) _cloakedWindow = IntPtr.Zero;
+            }
             _ghost = null;
             ghost.Close();
         });
@@ -1032,14 +1161,16 @@ public sealed class MinimizeAnimator : IDisposable
 
     public void Dispose()
     {
+        AnimParamsStore.ParamsChanged -= OnParamsChanged;   // 静态事件：不退订会把整个动画器钉死在内存里
         _sampleTimer?.Stop();
         _sampleTimer = null;
         if (_minimizeHook != IntPtr.Zero) NativeMethods.UnhookWinEvent(_minimizeHook);
         if (_locationHook != IntPtr.Zero) NativeMethods.UnhookWinEvent(_locationHook);
         if (_showHook != IntPtr.Zero) NativeMethods.UnhookWinEvent(_showHook);
         if (_destroyHook != IntPtr.Zero) NativeMethods.UnhookWinEvent(_destroyHook);
+        if (_foregroundHook != IntPtr.Zero) NativeMethods.UnhookWinEvent(_foregroundHook);
         _minimizeHook = _locationHook = IntPtr.Zero;
-        _showHook = _destroyHook = IntPtr.Zero;
+        _showHook = _destroyHook = _foregroundHook = IntPtr.Zero;
         _proc = null;
         _lastRect.Clear();
         _processNames.Clear();
@@ -1047,6 +1178,11 @@ public sealed class MinimizeAnimator : IDisposable
         _openAttempted.Clear();
         _firstWindowSeenPids.Clear();
         _frames.Clear();
+        if (_cloakedWindow != IntPtr.Zero)
+        {
+            SetCloak(_cloakedWindow, false);   // 中途收摊：被 Cloak 的真窗口必须还真（红线）
+            _cloakedWindow = IntPtr.Zero;
+        }
         _meshGhost?.Dispose();
         _meshGhost = null;
         CloseGhost();

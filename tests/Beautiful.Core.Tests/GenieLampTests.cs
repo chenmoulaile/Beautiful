@@ -164,4 +164,53 @@ public class GenieLampTests
             Assert.Equal(a.Y, b.Y, 12);
         }
     }
+
+    // ---------- alpha.15：split 可调分界重载（AnimParams.LampSplit 接线） ----------
+
+    [Fact]
+    public void 默认分界与旧签名完全一致()
+    {
+        // 旧调用方（测试/渲染）不传 split 时行为必须逐位不变
+        for (var p = 0.0; p <= 1.0; p += 0.05)
+        {
+            for (var ty = 0.0; ty <= 1.0; ty += 0.25)
+            {
+                var a = GenieLamp.Vertex(0.5, ty, p, Win, Icon);
+                var b = GenieLamp.Vertex(0.5, ty, p, Win, Icon, GenieLamp.Split);
+                Assert.Equal(a.X, b.X, 12);
+                Assert.Equal(a.Y, b.Y, 12);
+            }
+        }
+    }
+
+    [Fact]
+    public void 分界移动会改变中间进度的高度()
+    {
+        // split 越小 = 拉长阶段越短 = 同一进度下收拢得越狠（越接近图标那一行）。
+        // 图标在窗口下方，"更收拢" = 顶点 y 更大（贴向 icon.Y）；逐项推导：
+        // height = fullHeight·(1-j)，j(p=0.5) 随 split 减小而增大 → height 减小 →
+        // y = Win.Y + ty·height + (icon.Y - Win.Y - height) = icon.Y - (1-ty)·height → y 增大。
+        const double mid = 0.5;   // 落在 0.15 与 0.30 两个分界的"收拢段"内
+        var (_, ySmall) = GenieLamp.Vertex(0.5, 0.5, mid, Win, Icon, 0.15);
+        var (_, yDefault) = GenieLamp.Vertex(0.5, 0.5, mid, Win, Icon, GenieLamp.Split);
+        Assert.True(ySmall > yDefault,
+            $"split=0.15 时 y={ySmall:0.##} 应比 split=0.30 时 y={yDefault:0.##} 更贴近图标行（收拢更早更狠）");
+    }
+
+    [Theory]
+    [InlineData(0.0)]     // 越下界 → 钳回 0.05
+    [InlineData(0.03)]
+    [InlineData(0.97)]    // 越上界 → 钳回 0.95
+    [InlineData(1.5)]
+    [InlineData(double.NaN)]
+    public void 越界分界被钳住且不产生NaN(double split)
+    {
+        var (x, y) = GenieLamp.Vertex(0.5, 0.5, 0.5, Win, Icon, split);
+        Assert.False(double.IsNaN(x) || double.IsNaN(y) || double.IsInfinity(x) || double.IsInfinity(y));
+        // 钳制后仍落在合法区间：0.05 与 0.95 的同进度顶点之间
+        var (xLo, yLo) = GenieLamp.Vertex(0.5, 0.5, 0.5, Win, Icon, 0.05);
+        var (xHi, yHi) = GenieLamp.Vertex(0.5, 0.5, 0.5, Win, Icon, 0.95);
+        Assert.InRange(y, Math.Min(yLo, yHi), Math.Max(yLo, yHi));
+        _ = xLo; _ = xHi; _ = x;   // x 不作断言（水平位置还受 sway 影响，区间断言留给 y）
+    }
 }

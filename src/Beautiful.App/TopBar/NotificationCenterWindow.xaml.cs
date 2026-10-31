@@ -132,6 +132,17 @@ public partial class NotificationCenterWindow : Window
         window.Activate();
     }
 
+    /// <summary>
+    /// 关闭当前面板（顶栏重载/退出时用）。alpha.15：之前顶栏 OnClosed 只收控制中心不收这里，
+    /// 重载顶栏会把通知中心留在屏上（孤儿面板）。
+    /// </summary>
+    public static void CloseCurrent()
+    {
+        if (_current is not { IsLoaded: true }) return;
+        try { _current.Close(); }
+        catch (InvalidOperationException) { /* 已在关闭中 */ }
+    }
+
     /// <summary>诊断/截图入口用的窗口句柄（未打开返回 Zero）。</summary>
     public static IntPtr GetDiagnosticsHandle()
     {
@@ -151,6 +162,24 @@ public partial class NotificationCenterWindow : Window
     }
 
     private Point? AnchorPhysical { get; init; }
+
+    /// <summary>
+    /// 兜底锚点 = 主屏工作区的物理像素中心。alpha.15 修正：<see cref="AreaForPoint"/> 吃的是
+    /// 物理像素（类型注释明说），之前这里给的是 SystemParameters 的 DIP——高 DPI 机器上
+    /// 兜底路径会把面板定位到错误的位置/显示器。物理坐标唯一来源是 <see cref="MonitorGeometry"/>。
+    /// </summary>
+    private static Point PrimaryCenterPhysical()
+    {
+        // 主屏 = 屏幕虚拟桌面原点所在那块：直接探原点；探不到再探 (1,1)（负坐标副屏拓扑）。
+        var area = MonitorGeometry.AreaForPoint(0, 0) ?? MonitorGeometry.AreaForPoint(1, 1);
+        if (area is not { } a)
+        {
+            return new Point(0, 0);   // 不可知：原点即物理 (0,0)，面板会落在主屏左上（可接受兜底）
+        }
+        return new Point(
+            a.Work.Left + (a.Work.Right - a.Work.Left) / 2.0,
+            a.Work.Top + (a.Work.Bottom - a.Work.Top) / 2.0);
+    }
 
     /// <summary>
     /// 从右侧滑入（Big Sur 通知中心是"从边缘推出来"的）：位移 20 DIP + 淡入，180ms。
@@ -187,9 +216,7 @@ public partial class NotificationCenterWindow : Window
             return;
         }
 
-        var anchor = AnchorPhysical ?? new Point(
-            (SystemParameters.PrimaryScreenWidth / 2) * 1.0,
-            (SystemParameters.PrimaryScreenHeight / 2) * 1.0);
+        var anchor = AnchorPhysical ?? PrimaryCenterPhysical();
 
         var area = MonitorGeometry.AreaForPoint((int)anchor.X, (int)anchor.Y);
         if (area is null)
@@ -250,7 +277,16 @@ public partial class NotificationCenterWindow : Window
             return;
         }
 
-        await _service.StartAsync();
+        try
+        {
+            await _service.StartAsync();
+        }
+        catch (Exception ex)
+        {
+            // StartAsync 内部已有兜底，但 WinRT 投影的意外形态（类型加载/线程模型）可能从 await 侧漏出；
+            // 这里必须接住——面板已经打开，不能让一次服务启动失败把整个面板炸掉。
+            Logger.Error("通知中心：服务启动异常（面板保持打开，显示未授权态）", ex);
+        }
         Rebuild();
     }
 

@@ -337,11 +337,11 @@ public partial class MainWindow : Window
     private double RowDouble(string name, double fallback) =>
         _rows.FirstOrDefault(r => r.Name == name) is { } row && double.TryParse(row.Box.Text, System.Globalization.CultureInfo.InvariantCulture, out var v) ? v : fallback;
 
-    private int AnimParamsStore_OpenDurationMs() => RowInt("OpenDurationMs", 200);
-    private int AnimParamsStore_CloseDurationMs() => RowInt("CloseDurationMs", 150);
+    private int AnimParamsStore_OpenDurationMs() => RowInt("OpenDurationMs", 360);   // alpha.15 与 AnimParams.Default 同步
+    private int AnimParamsStore_CloseDurationMs() => RowInt("CloseDurationMs", 260);
     private int AnimParamsStore_GenieDurationMs() => RowInt("GenieDurationMs", 500);
     private int AnimParamsStore_MorphDurationMs() => RowInt("MorphDurationMs", 240);
-    private double AnimOpenStartScale() => RowDouble("OpenStartScale", 0.94);
+    private double AnimOpenStartScale() => RowDouble("OpenStartScale", 0.90);
     private double AnimCloseEndScale() => RowDouble("CloseEndScale", 0.92);
     private double AnimSpeed() => Math.Max(0.05, RowDouble("SpeedMultiplier", 1.0));
 

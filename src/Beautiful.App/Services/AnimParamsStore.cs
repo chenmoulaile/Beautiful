@@ -1,4 +1,5 @@
 using System.IO;
+using System.Linq;
 using Beautiful.Core.Animation;
 using Beautiful.Core.Settings;
 
@@ -26,6 +27,14 @@ public static class AnimParamsStore
 
     /// <summary>当前生效参数（读取无锁，写入在锁内整体替换引用——引用赋值对读线程是原子可见的）。</summary>
     public static AnimParams Current => _current;
+
+    /// <summary>
+    /// 参数热加载/保存后触发（参数为<b>已生效</b>的那份）。alpha.15 接线：
+    /// <see cref="Beautiful.Core.Animation.AnimPolicy"/> 持有的是构造时快照，
+    /// 不订阅这个事件的话，改 anim-params.json 里的时长永远不生效（alpha.14 的实际缺陷）。
+    /// 触发自任意线程（FileSystemWatcher/AnimLab），订阅方自己负责 marshal。
+    /// </summary>
+    public static event Action<AnimParams>? ParamsChanged;
 
     /// <summary>参数文件完整路径（诊断行与 AnimLab 共用）。</summary>
     public static string FilePath =>
@@ -56,6 +65,7 @@ public static class AnimParamsStore
                     Logger.Info($"动画参数：已加载 {_current.ToLogLine()}");
                 else
                     Logger.Warn($"动画参数：{FilePath} 解析失败（{error}），本次使用默认值");
+                RaiseParamsChanged();
             }
             catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or NotSupportedException)
             {
@@ -80,6 +90,7 @@ public static class AnimParamsStore
                 {
                     _current = parsed;
                     Logger.Info($"动画参数：热加载 {_current.ToLogLine()}");
+                    RaiseParamsChanged();
                 }
                 else
                 {
@@ -105,6 +116,7 @@ public static class AnimParamsStore
                 File.WriteAllText(FilePath, parameters.Normalized().ToJson());
                 _current = parameters.Normalized();
                 Logger.Info($"动画参数：已保存 {_current.ToLogLine()}");
+                RaiseParamsChanged();
             }
             catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or NotSupportedException)
             {
@@ -141,5 +153,20 @@ public static class AnimParamsStore
         if ((now - _lastReload).TotalMilliseconds < 150) return;
         _lastReload = now;
         Reload();
+    }
+
+    /// <summary>锁内触发（订阅方异常只记日志，不让一个坏订阅拖垮热加载）。</summary>
+    private static void RaiseParamsChanged()
+    {
+        var handlers = ParamsChanged;
+        if (handlers is null) return;
+        foreach (var handler in handlers.GetInvocationList().Cast<Action<AnimParams>>())
+        {
+            try { handler(_current); }
+            catch (Exception ex)
+            {
+                Logger.Warn($"动画参数：订阅方处理异常（已隔离）：{ex.GetType().Name} {ex.Message}");
+            }
+        }
     }
 }

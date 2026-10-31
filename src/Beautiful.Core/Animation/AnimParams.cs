@@ -39,11 +39,12 @@ public sealed record AnimParams
 
     // ---------- 打开 ----------
 
-    /// <summary>打开（in-place scale + fade）时长。</summary>
-    public int OpenDurationMs { get; init; } = 200;
+    /// <summary>打开（in-place scale + fade）时长。alpha.15：200→360，macOS 参考量级 ~0.4s；
+    /// 200ms 加上捕获起播延迟后肉眼几乎捕捉不到过程（用户反馈"太快或几乎没有"）。</summary>
+    public int OpenDurationMs { get; init; } = 360;
 
     /// <summary>打开起始缩放：0.94 → 1.0。macOS 的窗口出现是"轻轻落位"，不是"弹出来"。</summary>
-    public double OpenStartScale { get; init; } = 0.94;
+    public double OpenStartScale { get; init; } = 0.90;
 
     /// <summary>从 Dock 图标飞出的时长（默认关，见 <c>OpenAnimStyle</c>）。</summary>
     public int FromIconDurationMs { get; init; } = 300;
@@ -54,7 +55,7 @@ public sealed record AnimParams
     // ---------- 关闭 ----------
 
     /// <summary>关闭退场时长。退场一律快于入场。</summary>
-    public int CloseDurationMs { get; init; } = 150;
+    public int CloseDurationMs { get; init; } = 260;
 
     /// <summary>关闭终态缩放（缩到 92% 再消失，避免"硬切"）。</summary>
     public double CloseEndScale { get; init; } = 0.92;
@@ -160,11 +161,11 @@ public sealed record AnimParams
             RestoreDurationMs = ClampInt(RestoreDurationMs, 100, 2000, 450),
             MorphDurationMs = ClampInt(MorphDurationMs, 80, 1500, 240),
             SettleDurationMs = ClampInt(SettleDurationMs, 60, 1000, 180),
-            OpenDurationMs = ClampInt(OpenDurationMs, 80, 1200, 200),
-            OpenStartScale = ClampDouble(OpenStartScale, 0.5, 1.0, 0.94),
+            OpenDurationMs = ClampInt(OpenDurationMs, 80, 1200, 360),
+            OpenStartScale = ClampDouble(OpenStartScale, 0.5, 1.0, 0.90),
             FromIconDurationMs = ClampInt(FromIconDurationMs, 80, 1200, 300),
             FromIconStartScale = ClampDouble(FromIconStartScale, 0.05, 1.0, 0.3),
-            CloseDurationMs = ClampInt(CloseDurationMs, 60, 1000, 150),
+            CloseDurationMs = ClampInt(CloseDurationMs, 60, 1000, 260),
             CloseEndScale = ClampDouble(CloseEndScale, 0.5, 1.0, 0.92),
             CloseCacheMaxAgeMs = ClampInt(CloseCacheMaxAgeMs, 100, 5000, 1000),
             CaptureRetryMs = ClampInt(CaptureRetryMs, 1, 100, 8),

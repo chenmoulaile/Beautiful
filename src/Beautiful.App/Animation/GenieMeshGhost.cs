@@ -32,11 +32,14 @@ namespace Beautiful.App.Animation;
 /// </summary>
 internal sealed class GenieMeshGhost : IDisposable
 {
-    /// <summary>纵向行数：24 行足够平滑（参考实现的区间是 8-96）。</summary>
-    private const int Rows = GenieMesh.DefaultRows;
+    /// <summary>
+    /// 纵向行数。alpha.15：24→16——mesh 引擎真机 P95 80–146ms，500ms 只剩 10-19 帧（幻灯片感）；
+    /// 顶点/三角形数直接决定每帧重排成本，16 行在"脖子平滑"与帧预算之间取折中（参考实现区间 8-96）。
+    /// </summary>
+    private const int Rows = 16;
 
-    /// <summary>横向列数：脖子是竖向变化的，横向 8 列就够，省顶点。</summary>
-    private const int Columns = 8;
+    /// <summary>横向列数：脖子是竖向变化的，横向 6 列就够，省顶点（alpha.15：8→6，同上）。</summary>
+    private const int Columns = 6;
 
     private readonly Window _window = new();
     private readonly MeshGeometry3D _mesh = new();
@@ -92,7 +95,10 @@ internal sealed class GenieMeshGhost : IDisposable
     /// 按进度刷新一次网格。
     /// </summary>
     /// <param name="progress">0=完整窗口，1=塌进图标；还原方向由调用方倒着传。</param>
-    public void Apply(double progress, LampGeometry windowRect, LampGeometry iconRect)
+    /// <param name="windowRect">源窗口矩形（物理像素）。</param>
+    /// <param name="iconRect">目标图标矩形（物理像素）。</param>
+    /// <param name="split">两阶段分界（参数表 LampSplit；省略 = 参考实现默认 0.30）。</param>
+    public void Apply(double progress, LampGeometry windowRect, LampGeometry iconRect, double split = GenieLamp.Split)
     {
         // 画布 = 源矩形与图标列的并集（再加一点余量给正弦摆动），每帧重算一次就够
         var minX = Math.Min(windowRect.X, iconRect.X) - windowRect.Width * 0.2;
@@ -107,7 +113,7 @@ internal sealed class GenieMeshGhost : IDisposable
             for (var c = 0; c <= Columns; c++)
             {
                 var (tx, ty) = GenieMesh.VertexParameter(r, c, Rows, Columns);
-                var (x, y) = GenieLamp.Vertex(tx, ty, progress, windowRect, iconRect);
+                var (x, y) = GenieLamp.Vertex(tx, ty, progress, windowRect, iconRect, split);
                 // 屏幕物理像素 → 本窗口内的 DIP（窗口已经摆到 _canvas 的原点上）
                 positions[GenieMesh.VertexIndex(r, c, Columns)] = new Point3D(
                     (x - _canvas.X) / _scale, (y - _canvas.Y) / _scale, 0);

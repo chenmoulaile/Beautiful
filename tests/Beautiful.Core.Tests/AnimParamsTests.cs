@@ -16,11 +16,11 @@ public class AnimParamsTests
         Assert.Equal(450, p.RestoreDurationMs);
         Assert.Equal(240, p.MorphDurationMs);
         Assert.Equal(180, p.SettleDurationMs);
-        Assert.Equal(200, p.OpenDurationMs);
-        Assert.Equal(0.94, p.OpenStartScale, 6);
+        Assert.Equal(360, p.OpenDurationMs);   // alpha.15：200→360（用户反馈"太快或几乎没有"）
+        Assert.Equal(0.90, p.OpenStartScale, 6);   // alpha.15：0.94→0.90
         Assert.Equal(300, p.FromIconDurationMs);
         Assert.Equal(0.3, p.FromIconStartScale, 6);
-        Assert.Equal(150, p.CloseDurationMs);
+        Assert.Equal(260, p.CloseDurationMs);   // alpha.15：150→260
         Assert.Equal(0.92, p.CloseEndScale, 6);
         Assert.Equal(700, p.ForegroundCacheMaxAgeMs);
         Assert.Equal(500, p.ForegroundRefreshMs);
@@ -133,5 +133,16 @@ public class AnimParamsTests
         Assert.Contains("genie=500ms", line);
         Assert.Contains("split=0.30", line);
         Assert.Contains("风暴=4/200ms", line);
+    }
+
+    [Fact]
+    public void 越界时长回落到新默认值()
+    {
+        // alpha.15 默认值变更后，兜底值也必须同步（ClampInt 的第三参），
+        // 否则手写 0 的 JSON 会回退到旧默认，与"默认值就是参数表"矛盾。
+        var bad = new AnimParams { OpenDurationMs = 0, CloseDurationMs = 0, OpenStartScale = 0 }.Normalized();
+        Assert.Equal(360, bad.OpenDurationMs);
+        Assert.Equal(260, bad.CloseDurationMs);
+        Assert.Equal(0.90, bad.OpenStartScale, 6);
     }
 }

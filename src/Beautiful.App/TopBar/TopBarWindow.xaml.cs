@@ -196,6 +196,7 @@ public partial class TopBarWindow : AcrylicWindow
         _trayStripSource = null;
         _controlCenterHost?.Close(); // 控制中心随顶栏一起收起（重载/退出时不得留一个无主的弹层）
         FluentMenu.CloseCurrent(); // 防弹层残留（重载/退出时）
+        NotificationCenterWindow.CloseCurrent(); // 通知中心随顶栏收起（alpha.15：之前重载顶栏会留一个孤儿面板）
         base.OnClosed(e);
     }
 
@@ -926,10 +927,6 @@ public partial class TopBarWindow : AcrylicWindow
     // ---------- 时钟点击：通知中心 / 日历浮层 ----------
 
     /// <summary>
-    /// 时钟左键：默认打开通知中心（Phase 4-T5）；设置里关掉后回退月历浮层。
-    /// 面板自己处理"再点一次收起"（见 NotificationCenterWindow 的关闭时间戳）。
-    /// </summary>
-    /// <summary>
     /// 输入法指示（P4-T10）：1s 一次读 <see cref="System.Windows.Input.InputLanguageManager"/>。
     /// 语言切换是通过焦点窗口生效的，没有"语言变化"事件可订阅（InputLanguageChanged 只在自家窗口收到），
     /// 所以轮询是最省事且不会漏的方式；一次读取是纯内存操作，1s 一拍几乎无成本。
@@ -965,27 +962,52 @@ public partial class TopBarWindow : AcrylicWindow
         }
     }
 
+    /// <summary>
+    /// 时钟左键：默认打开通知中心（Phase 4-T5）；设置里关掉后回退月历浮层。
+    /// 面板自己处理"再点一次收起"（见 NotificationCenterWindow 的关闭时间戳）。
+    /// <para>
+    /// alpha.15：套上与 <see cref="OpenInputSettings"/> 同款的兜底——这是顶栏附属面板里唯一一条
+    /// 没有本地 try/catch 的链路，任何环境性异常都会升级成全局"发生界面异常"弹框
+    /// （用户反馈：点时钟报错）。现在：异常记日志并回退月历浮层，时钟永不白点。
+    /// </para>
+    /// </summary>
     private void OpenClockFlyout()
     {
-        if (!SettingsService.Current.NotificationCenterEnabled || _clockButton is null)
+        try
         {
-            OpenCalendar();
-            return;
-        }
+            if (!SettingsService.Current.NotificationCenterEnabled || _clockButton is null)
+            {
+                OpenCalendar();
+                return;
+            }
 
-        var p = _clockButton.PointToScreen(new Point(0, _clockButton.ActualHeight));
-        NotificationCenterWindow.ShowOrToggle(Services.NotificationService.Current, p);
+            var p = _clockButton.PointToScreen(new Point(0, _clockButton.ActualHeight));
+            NotificationCenterWindow.ShowOrToggle(Services.NotificationService.Current, p);
+        }
+        catch (Exception ex)
+        {
+            Logger.Error("时钟点击：通知中心打开失败，回退月历浮层", ex);
+            OpenCalendar();
+        }
     }
 
     private void OpenCalendar()
     {
-        if (_clockButton is null) return;
-        var p = _clockButton.PointToScreen(new Point(0, _clockButton.ActualHeight));
-        var host = new FluentPopupHost { Content = new CalendarFlyout() };
-        // 与 FluentMenu 同源存活语义：弹层持有前台激活即保活（否则光标仍停在上方时钟按钮、
-        // 落在弹层矩形外 → 默认看门狗 80ms 内即自关）。失活（点别处）后回退矩形判定自然关闭。
-        host.KeepAliveProbe = () => host.IsActive || host.CursorInInflated(FluentPopupHost.RectInflate);
-        host.ShowAt(new Point(p.X, p.Y));
+        try
+        {
+            if (_clockButton is null) return;
+            var p = _clockButton.PointToScreen(new Point(0, _clockButton.ActualHeight));
+            var host = new FluentPopupHost { Content = new CalendarFlyout() };
+            // 与 FluentMenu 同源存活语义：弹层持有前台激活即保活（否则光标仍停在上方时钟按钮、
+            // 落在弹层矩形外 → 默认看门狗 80ms 内即自关）。失活（点别处）后回退矩形判定自然关闭。
+            host.KeepAliveProbe = () => host.IsActive || host.CursorInInflated(FluentPopupHost.RectInflate);
+            host.ShowAt(new Point(p.X, p.Y));
+        }
+        catch (Exception ex)
+        {
+            // 日历浮层也失败就不再回退（防递归/防连环弹框）：记日志、静默，时钟本身仍可用
+            Logger.Error("时钟点击：月历浮层打开失败", ex);
+        }
     }
 
     // ---------- 控制中心（v3 T7） ----------

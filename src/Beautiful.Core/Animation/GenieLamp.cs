@@ -29,7 +29,7 @@ public static class GenieLamp
     private const double Pi = System.Math.PI;
 
     /// <summary>
-    /// 单个顶点映射。
+    /// 单个顶点映射（默认分界，与参考实现一致）。
     /// </summary>
     /// <param name="tx">顶点在源窗口内的水平归一坐标（0=左缘，1=右缘）。</param>
     /// <param name="ty">垂直归一坐标（0=上缘，1=下缘，即离图标最近的那一行）。</param>
@@ -38,11 +38,21 @@ public static class GenieLamp
     /// <param name="icon">目标图标矩形；<see cref="LampGeometry.Height"/> 不参与运算。</param>
     public static (double X, double Y) Vertex(
         double tx, double ty, double progress, LampGeometry window, LampGeometry icon)
+        => Vertex(tx, ty, progress, window, icon, Split);
+
+    /// <summary>
+    /// 单个顶点映射（可调分界）。split 来自参数表 <see cref="AnimParams.LampSplit"/>：
+    /// 调小 = 更早开始收拢（过程感集中在前段），调大 = 拉长阶段占比更高。
+    /// </summary>
+    /// <param name="split">两阶段分界（0..1 开区间，内部钳到 0.05..0.95）。</param>
+    public static (double X, double Y) Vertex(
+        double tx, double ty, double progress, LampGeometry window, LampGeometry icon, double split)
     {
         var p = Clamp01(progress);
+        var s = Math.Clamp(double.IsNaN(split) ? Split : split, 0.05, 0.95);
 
-        var k = p <= Split ? p / Split : 1.0;
-        var j = p > Split ? (p - Split) / (1.0 - Split) : 0.0;
+        var k = p <= s ? p / s : 1.0;
+        var j = p > s ? (p - s) / (1.0 - s) : 0.0;
 
         var expandHeight = icon.Y - window.Y - window.Height;
         var fullHeight = (icon.Y - window.Y) - expandHeight * (1.0 - k);
@@ -69,9 +79,13 @@ public static class GenieLamp
     /// 单独暴露是因为"下缘比上缘窄"正是 genie 的脖子，这条不变量必须能被断言。
     /// </summary>
     public static double RowWidth(double ty, double progress, LampGeometry window, LampGeometry icon)
+        => RowWidth(ty, progress, window, icon, Split);
+
+    /// <summary>同上（可调分界重载，见 <see cref="Vertex(double,double,double,LampGeometry,LampGeometry,double)"/>）。</summary>
+    public static double RowWidth(double ty, double progress, LampGeometry window, LampGeometry icon, double split)
     {
-        var right = Vertex(1.0, ty, progress, window, icon).X;
-        var left = Vertex(0.0, ty, progress, window, icon).X;
+        var right = Vertex(1.0, ty, progress, window, icon, split).X;
+        var left = Vertex(0.0, ty, progress, window, icon, split).X;
         return right - left;
     }
 

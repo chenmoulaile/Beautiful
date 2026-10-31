@@ -237,11 +237,12 @@ public sealed record AppSettings
     public bool OpenAnimation { get; init; } = true;
 
     /// <summary>
-    /// 是否播放关闭动画（v2.2 §4.4，<b>默认关</b>）：macOS 的关闭就是干脆地消失，
-    /// 默认不播是忠实而非没做完。开启后走前台缓存帧 + fade/scale→92%（150ms）；
+    /// 是否播放关闭动画（alpha.15 改默认<b>开</b>）：v2.2 原按"macOS 关闭干脆消失"默认关，
+    /// 但所有者反馈整体动画观感偏弱，260ms 的缓存帧退场是连续运动线索的一部分，改默认开；
+    /// 忠实 mac 语义的用户可在设置里关回。开启后走前台缓存帧 + fade/scale→92%；
     /// 自家窗口（设置/关于本机/面板）不受本项约束，一律真动画。
     /// </summary>
-    public bool CloseAnimation { get; init; } = false;
+    public bool CloseAnimation { get; init; } = true;
 
     /// <summary>
     /// 打开动画的形态："inplace"（默认）= 原位缩放落位；"fromicon" = 从 Dock 图标飞出
