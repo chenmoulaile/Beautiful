@@ -396,7 +396,9 @@ public sealed class MinimizeAnimator : IDisposable
         {
             // 事件走系统队列送达时状态早已翻转（真机实测：回调里 IsIconic=True、rect=-16000,-16000）。
             // 画面只能取前台缓存里替这个窗口留的那一帧；龄超过判废线就如实说"没画面"。
-            if (_frames.TryGet(hwnd, p.ForegroundCacheDiscardMs, out var cached, out var cachedRect, out var age)
+            // 前台窗口静止期画面基本不变：判废线用宽松的 MinimizeCacheMaxAgeMs（默认 9s），
+            // 旧几秒的帧远比"干脆不播"好（v0.15：原 1500ms 线导致真机一次都不播，见 AnimReport.Skipped）。
+            if (_frames.TryGet(hwnd, p.MinimizeCacheMaxAgeMs, out var cached, out var cachedRect, out var age)
                 && cached is not null && cachedRect.Width >= MinShellSize)
             {
                 var verdict = _policy.Usability((long)age);

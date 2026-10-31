@@ -16,15 +16,16 @@ public class AnimParamsTests
         Assert.Equal(450, p.RestoreDurationMs);
         Assert.Equal(240, p.MorphDurationMs);
         Assert.Equal(180, p.SettleDurationMs);
-        Assert.Equal(200, p.OpenDurationMs);
-        Assert.Equal(0.94, p.OpenStartScale, 6);
+        Assert.Equal(320, p.OpenDurationMs);
+        Assert.Equal(0.88, p.OpenStartScale, 6);
         Assert.Equal(300, p.FromIconDurationMs);
         Assert.Equal(0.3, p.FromIconStartScale, 6);
-        Assert.Equal(150, p.CloseDurationMs);
-        Assert.Equal(0.92, p.CloseEndScale, 6);
+        Assert.Equal(220, p.CloseDurationMs);
+        Assert.Equal(0.86, p.CloseEndScale, 6);
         Assert.Equal(700, p.ForegroundCacheMaxAgeMs);
         Assert.Equal(500, p.ForegroundRefreshMs);
         Assert.Equal(1500, p.ForegroundCacheDiscardMs);
+        Assert.Equal(9000, p.MinimizeCacheMaxAgeMs);
         Assert.Equal(3, p.MaxConcurrentGhosts);
         Assert.Equal(200, p.StormWindowMs);
         Assert.Equal(4, p.StormCount);
@@ -133,5 +134,26 @@ public class AnimParamsTests
         Assert.Contains("genie=500ms", line);
         Assert.Contains("split=0.30", line);
         Assert.Contains("风暴=4/200ms", line);
+    }
+
+    [Fact]
+    public void 非法值回退到当前默认而不是历史默认()
+    {
+        // v0.15 调过默认（Open 320/0.88、Close 220/0.86）后，Normalized 的 fallback 必须
+        // 与属性默认同源——否则配置里写个 0/-1 会悄悄回退到旧观感（200/0.94）。
+        // 注：ClampInt/Double 语义 = 非法值(≤0/NaN/∞)回退默认，正数越界钳到区间边界。
+        var n = new AnimParams
+        {
+            OpenDurationMs = 0,
+            OpenStartScale = double.NaN,
+            CloseDurationMs = -5,
+            CloseEndScale = 0,
+            MinimizeCacheMaxAgeMs = 0,
+        }.Normalized();
+        Assert.Equal(320, n.OpenDurationMs);
+        Assert.Equal(0.88, n.OpenStartScale, 6);
+        Assert.Equal(220, n.CloseDurationMs);
+        Assert.Equal(0.86, n.CloseEndScale, 6);
+        Assert.Equal(9000, n.MinimizeCacheMaxAgeMs);
     }
 }

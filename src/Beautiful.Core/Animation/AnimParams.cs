@@ -39,11 +39,11 @@ public sealed record AnimParams
 
     // ---------- 打开 ----------
 
-    /// <summary>打开（in-place scale + fade）时长。</summary>
-    public int OpenDurationMs { get; init; } = 200;
+    /// <summary>打开（in-place scale + fade）时长（v0.15 贴真机观感：200 太快，用户反馈"要么太快了，要么几乎没有"）。</summary>
+    public int OpenDurationMs { get; init; } = 320;
 
-    /// <summary>打开起始缩放：0.94 → 1.0。macOS 的窗口出现是"轻轻落位"，不是"弹出来"。</summary>
-    public double OpenStartScale { get; init; } = 0.94;
+    /// <summary>打开起始缩放：0.88 → 1.0。变化量 12% 才有可感知的"落位"，0.94 的 6% 几乎看不见。</summary>
+    public double OpenStartScale { get; init; } = 0.88;
 
     /// <summary>从 Dock 图标飞出的时长（默认关，见 <c>OpenAnimStyle</c>）。</summary>
     public int FromIconDurationMs { get; init; } = 300;
@@ -53,11 +53,11 @@ public sealed record AnimParams
 
     // ---------- 关闭 ----------
 
-    /// <summary>关闭退场时长。退场一律快于入场。</summary>
-    public int CloseDurationMs { get; init; } = 150;
+    /// <summary>关闭（缩小+淡出）时长（v0.15：150 太快，观感"几乎没有"）。退场一律快于入场。</summary>
+    public int CloseDurationMs { get; init; } = 220;
 
-    /// <summary>关闭终态缩放（缩到 92% 再消失，避免"硬切"）。</summary>
-    public double CloseEndScale { get; init; } = 0.92;
+    /// <summary>关闭终态缩放：0.86 才有"收走"的观感（0.92 只缩了 8%，几乎察觉不到）。</summary>
+    public double CloseEndScale { get; init; } = 0.86;
 
     /// <summary>
     /// 关闭动画可用的缓存帧最大龄（v2.2 §4.4："缓存龄<1000ms 才播"的 token 落点）。
@@ -79,6 +79,13 @@ public sealed record AnimParams
 
     /// <summary>判废龄：缓存旧于此值直接当没有（1500ms 是"用户已经换了焦点"的量级）。</summary>
     public int ForegroundCacheDiscardMs { get; init; } = 1500;
+
+    /// <summary>
+    /// 最小化补播专用缓存龄（v0.15）：MINIMIZESTART 事件到手时窗口早已 iconic，只能拿缓存帧补播；
+    /// 前台窗口在静止期画面基本不变，旧几秒的帧远比"干脆不播"好（MyDock 的实际行为）。
+    /// 默认 9000ms —— 用户看着窗口发呆几秒再点最小化也能收进 Dock。
+    /// </summary>
+    public int MinimizeCacheMaxAgeMs { get; init; } = 9000;
 
     /// <summary>前台缓存刷新间隔（2Hz）。再快等于拿 PrintWindow 拖垮 UI 线程。</summary>
     public int ForegroundRefreshMs { get; init; } = 500;
@@ -160,13 +167,14 @@ public sealed record AnimParams
             RestoreDurationMs = ClampInt(RestoreDurationMs, 100, 2000, 450),
             MorphDurationMs = ClampInt(MorphDurationMs, 80, 1500, 240),
             SettleDurationMs = ClampInt(SettleDurationMs, 60, 1000, 180),
-            OpenDurationMs = ClampInt(OpenDurationMs, 80, 1200, 200),
-            OpenStartScale = ClampDouble(OpenStartScale, 0.5, 1.0, 0.94),
+            OpenDurationMs = ClampInt(OpenDurationMs, 80, 1200, 320),
+            OpenStartScale = ClampDouble(OpenStartScale, 0.5, 1.0, 0.88),
             FromIconDurationMs = ClampInt(FromIconDurationMs, 80, 1200, 300),
             FromIconStartScale = ClampDouble(FromIconStartScale, 0.05, 1.0, 0.3),
-            CloseDurationMs = ClampInt(CloseDurationMs, 60, 1000, 150),
-            CloseEndScale = ClampDouble(CloseEndScale, 0.5, 1.0, 0.92),
+            CloseDurationMs = ClampInt(CloseDurationMs, 60, 1000, 220),
+            CloseEndScale = ClampDouble(CloseEndScale, 0.5, 1.0, 0.86),
             CloseCacheMaxAgeMs = ClampInt(CloseCacheMaxAgeMs, 100, 5000, 1000),
+            MinimizeCacheMaxAgeMs = ClampInt(MinimizeCacheMaxAgeMs, 1000, 30000, 9000),
             CaptureRetryMs = ClampInt(CaptureRetryMs, 1, 100, 8),
             CaptureRetryCount = ClampInt(CaptureRetryCount, 1, 100, 12),
             ForegroundCacheMaxAgeMs = ClampInt(ForegroundCacheMaxAgeMs, 100, 5000, 700),
