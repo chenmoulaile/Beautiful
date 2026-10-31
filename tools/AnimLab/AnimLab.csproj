@@ -1,0 +1,14 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net8.0-windows</TargetFramework>
+    <UseWPF>true</UseWPF>
+    <RootNamespace>Beautiful.AnimLab</RootNamespace>
+    <AssemblyName>AnimLab</AssemblyName>
+    <!-- AnimLab 是所有者调参工具：独立小窗口，不接管桌面，可在任何开发机（含 Wine）运行。
+         版本号继承仓库根 Directory.Build.props（与主程序单一来源）。 -->
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\Beautiful.Core\Beautiful.Core.csproj" />
+  </ItemGroup>
+</Project>
