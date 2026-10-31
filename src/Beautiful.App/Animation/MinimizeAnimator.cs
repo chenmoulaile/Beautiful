@@ -42,6 +42,8 @@ public sealed class MinimizeAnimator : IDisposable
 {
     private const uint EventSystemMinimizeStart = 0x0016;
     private const uint EventSystemMinimizeEnd = 0x0017;
+    private const uint EventObjectDestroy = 0x8001;
+    private const uint EventObjectShow = 0x8002;
     private const uint EventObjectLocationChange = 0x8004;
     private const uint ObjidWindow = 0;
     private const uint WinEventOutOfContext = 0x00000000;
@@ -62,6 +64,8 @@ public sealed class MinimizeAnimator : IDisposable
     private NativeMethods.WinEventDelegate? _proc;
     private IntPtr _minimizeHook = IntPtr.Zero;
     private IntPtr _locationHook = IntPtr.Zero;
+    private IntPtr _showHook = IntPtr.Zero;
+    private IntPtr _destroyHook = IntPtr.Zero;
 
     private GhostLayer? _ghost;
     private GenieMeshGhost? _meshGhost;
@@ -79,12 +83,28 @@ public sealed class MinimizeAnimator : IDisposable
     /// <summary>pid → 进程名。排除清单与日志都要它；每 3-4 分钟才有新 pid，缓存足够。</summary>
     private readonly Dictionary<uint, string> _processNames = new();
 
+    /// <summary>已播过打开动画的窗口：只有"第一次显示"是打开，hide/show 回归不是（macOS 语义）。</summary>
+    private readonly HashSet<IntPtr> _openAttempted = new();
+
+    /// <summary>
+    /// hwnd → pid 记账（关闭动画的排除/节流依据）：EVENT_OBJECT_DESTROY 到手时句柄已销毁，
+    /// 查不到 pid；SHOW 是唯一能可靠记下它的时机。无论打开动画开没开都记（O(1)，不播也不亏）。
+    /// </summary>
+    private readonly Dictionary<IntPtr, uint> _knownPids = new();
+
+    /// <summary>已报过"首窗出现"的 pid：Dock 启动弹跳联动每个进程只收口一次。</summary>
+    private readonly HashSet<uint> _firstWindowSeenPids = new();
+
+    /// <summary>首窗出现回调（DockWindow.NotifyFirstWindowShown；null = 无联动）。</summary>
+    private readonly Action<string>? _firstWindowShown;
+
     private DispatcherTimer? _sampleTimer;
     private string _exclusionSnapshot = "";
 
-    public MinimizeAnimator(Func<IntPtr, Rect?> dockTargetProvider)
+    public MinimizeAnimator(Func<IntPtr, Rect?> dockTargetProvider, Action<string>? onFirstWindowShown = null)
     {
         _dockTarget = dockTargetProvider;
+        _firstWindowShown = onFirstWindowShown;
         _dispatcher = Dispatcher.CurrentDispatcher;
         _disabledByEnvironment = Environment.GetEnvironmentVariable("BEAUTIFUL_NO_ANIMATION") == "1";
         if (_disabledByEnvironment)
@@ -103,6 +123,12 @@ public sealed class MinimizeAnimator : IDisposable
             0, 0, WinEventOutOfContext | WinEventSkipOwnProcess);
         _locationHook = NativeMethods.SetWinEventHook(
             EventObjectLocationChange, EventObjectLocationChange, IntPtr.Zero, _proc,
+            0, 0, WinEventOutOfContext | WinEventSkipOwnProcess);
+        _showHook = NativeMethods.SetWinEventHook(
+            EventObjectShow, EventObjectShow, IntPtr.Zero, _proc,
+            0, 0, WinEventOutOfContext | WinEventSkipOwnProcess);
+        _destroyHook = NativeMethods.SetWinEventHook(
+            EventObjectDestroy, EventObjectDestroy, IntPtr.Zero, _proc,
             0, 0, WinEventOutOfContext | WinEventSkipOwnProcess);
 
         ApplyExclusions();
@@ -129,6 +155,8 @@ public sealed class MinimizeAnimator : IDisposable
         var effectiveEngine = EffectiveEngine(requestedEngine);
         var hooksOk = _minimizeHook != IntPtr.Zero;
         var locOk = _locationHook != IntPtr.Zero;
+        var showOk = _showHook != IntPtr.Zero;
+        var destroyOk = _destroyHook != IntPtr.Zero;
 
         if (!hooksOk)
         {
@@ -141,12 +169,18 @@ public sealed class MinimizeAnimator : IDisposable
         DisabledReason = null;
         var degraded = new List<string>();
         if (!locOk) degraded.Add("LOCATIONCHANGE 钩子失败（最大化动画不可用）");
+        if (!showOk) degraded.Add("OBJECTSHOW 钩子失败（打开动画不可用）");
+        if (!destroyOk) degraded.Add("OBJECTDESTROY 钩子失败（关闭动画不可用）");
         if (!s.MinimizeAnimation) degraded.Add("设置项 MinimizeAnimation 为关");
+        if (!s.OpenAnimation) degraded.Add("设置项 OpenAnimation 为关");
         if (effectiveEngine != requestedEngine) degraded.Add($"引擎 {requestedEngine} 不可用已回退 {effectiveEngine}");
 
         MountStatus = $"动画子系统已挂载：MINIMIZE=0x{_minimizeHook.ToInt64():X} "
                       + $"LOCATION={(locOk ? $"0x{_locationHook.ToInt64():X}" : "失败")} "
-                      + $"设置=开 请求引擎={requestedEngine} 生效引擎={effectiveEngine} "
+                      + $"SHOW={(showOk ? $"0x{_showHook.ToInt64():X}" : "失败")} "
+                      + $"DESTROY={(destroyOk ? $"0x{_destroyHook.ToInt64():X}" : "失败")} "
+                      + $"设置=开 打开={(s.OpenAnimation ? "开" : "关")} 关闭={(s.CloseAnimation ? "开（非默认）" : "关（默认）")} "
+                      + $"请求引擎={requestedEngine} 生效引擎={effectiveEngine} "
                       + $"前台缓存=开 参数[{p.ToLogLine()}]"
                       + (degraded.Count > 0 ? $" 降级：{string.Join("；", degraded)}" : "");
         Logger.Info(MountStatus);
@@ -212,6 +246,14 @@ public sealed class MinimizeAnimator : IDisposable
                 }
                 _lastRect[hwnd] = (rect, zoomed);
             }
+            else if (evt == EventObjectShow)
+            {
+                _dispatcher.BeginInvoke(() => PlayOpen(hwnd), DispatcherPriority.Render);
+            }
+            else if (evt == EventObjectDestroy)
+            {
+                _dispatcher.BeginInvoke(() => PlayClose(hwnd), DispatcherPriority.Render);
+            }
         }
         catch
         {
@@ -251,7 +293,7 @@ public sealed class MinimizeAnimator : IDisposable
     /// 请求放行。<b>放行后调用方必须 <see cref="AnimPolicy.Complete"/></b>（在 <see cref="RunClock"/>
     /// 的收尾里统一做），否则并发槽会漏，几轮之后所有动画都会被"并发上限"挡住。
     /// </summary>
-    private bool Admit(IntPtr hwnd, AnimKind kind, string source, out int durationMs, out uint pid)
+    private bool Admit(IntPtr hwnd, AnimKind kind, string source, out int durationMs, out uint pid, uint knownPid = 0)
     {
         durationMs = 0;
         pid = 0;
@@ -268,7 +310,8 @@ public sealed class MinimizeAnimator : IDisposable
         }
 
         ApplyExclusions();
-        _ = NativeMethods.GetWindowThreadProcessId(hwnd, out pid);
+        // 关闭路径的句柄已销毁：GetWindowThreadProcessId 返回 0，改用 SHOW 时记账的 pid
+        if (NativeMethods.GetWindowThreadProcessId(hwnd, out pid) == 0 && knownPid != 0) pid = knownPid;
         var name = ProcessName(pid);
         var fullscreen = IsFullscreenForeground();
 
@@ -715,6 +758,211 @@ public sealed class MinimizeAnimator : IDisposable
         }, "LOCATIONCHANGE", "morph", layer, 0);
     }
 
+    // ---------- 打开 / 关闭（v4.0.0-alpha.13，v2.2 §4.3/§4.4） ----------
+
+    /// <summary>
+    /// 打开（EVENT_OBJECT_SHOW，系统触发路径）：窗口此刻已可见但<b>首帧通常还没画完</b>，
+    /// 这段空窗就是"白板裸窗"暴露的时间。占位帧设计把它吃掉：ghost 先以 t=0（全透明，
+    /// 与 <see cref="OpenAnimMath.Start"/> 同帧）占住窗口矩形，后台捕获重试（8ms×12）就绪后
+    /// 当帧换入真画面、开始播时钟；捕获彻底失败 → 撤占位、如实写日志，窗口照常（系统行为）。
+    /// <para>
+    /// 【为什么只演"第一次显示"】macOS 的打开动画发生在窗口生命周期的创建时刻；
+    /// hide/show 回归（托盘应用回显）在 mac 上没有入场动画，演了反而假。
+    /// </para>
+    /// </summary>
+    private void PlayOpen(IntPtr hwnd)
+    {
+        // pid 记账先于一切设置判断：关闭动画的排除/节流全靠它，SHOW 是唯一可靠时机
+        if (_knownPids.Count > 1024) _knownPids.Clear();
+        if (NativeMethods.GetWindowThreadProcessId(hwnd, out var pid) != 0 && pid != 0) _knownPids[hwnd] = pid;
+
+        if (!SettingsService.Current.OpenAnimation) return;   // 用户显式关掉：SHOW 高频，静默早退不刷日志
+        if (!IsRunning || Busy) return;
+        if (_openAttempted.Contains(hwnd)) return;
+        if (_openAttempted.Count > 512) _openAttempted.Clear();
+        _openAttempted.Add(hwnd);
+
+        var ownPid = (uint)Environment.ProcessId;
+        if (!WindowEligibility.IsEligibleWindow(hwnd, ownPid)) return;
+        if (!NativeMethods.GetWindowRect(hwnd, out var rect)) return;
+        var sourceRect = ToRect(rect);
+        if (sourceRect.Width < MinShellSize || sourceRect.Height < MinShellSize) return;   // 下拉框/提示条不演
+
+        // 首窗收口（Dock 启动弹跳联动）：每个进程只报一次；自家窗口不报（Dock 自己的弹层）
+        if (pid != 0 && pid != ownPid && _firstWindowSeenPids.Add(pid) && _firstWindowShown is not null)
+        {
+            var name = ProcessName(pid);
+            if (name != "未知") _firstWindowShown.Invoke(name);
+        }
+
+        if (!Admit(hwnd, AnimKind.Open, "OBJECTSHOW", out var durationMs, out _)) return;
+
+        var p = AnimParamsStore.Current;
+        if (string.Equals(SettingsService.Current.OpenAnimStyle, "fromicon", StringComparison.OrdinalIgnoreCase))
+        {
+            PlayOpenFromIcon(hwnd, sourceRect, p, durationMs);
+            return;
+        }
+        PlayOpenInPlace(hwnd, sourceRect, p, durationMs);
+    }
+
+    /// <summary>in-place（默认）：占位帧 → 捕获重试 → 换入真帧 → 200ms easeOutQuint 落位。</summary>
+    private void PlayOpenInPlace(IntPtr hwnd, Rect sourceRect, AnimParams p, int durationMs)
+    {
+        var ghost = new GhostLayer(PlaceholderTexture(), 1, sourceRect);
+        _ghost = ghost;
+        ghost.Show();
+        ghost.SetContentVisible(false);   // 占位阶段不画任何东西：不遮挡真窗口，只占住合成层的位置
+
+        var startedMs = NowMs();
+        var attempts = Math.Max(1, p.CaptureRetryCount);
+        var retryMs = Math.Max(1, p.CaptureRetryMs);
+        _ = Task.Run(() =>
+        {
+            // PrintWindow 在线程池跑（与前台帧采样同款纪律：抓一张大窗要几十毫秒，不能占 UI 线程）
+            for (var i = 1; i <= attempts; i++)
+            {
+                var image = WindowCapture.Capture(hwnd, out var layer);
+                if (image is not null)
+                {
+                    var waited = NowMs() - startedMs;
+                    _dispatcher.BeginInvoke(
+                        () => StartOpenClock(ghost, image, sourceRect, durationMs, layer, waited, i, "OBJECTSHOW", "openInPlace"),
+                        DispatcherPriority.Render);
+                    return;
+                }
+                Thread.Sleep(retryMs);
+            }
+            _dispatcher.BeginInvoke(() =>
+            {
+                if (_ghost == ghost) { _ghost = null; }
+                try { ghost.Close(); } catch (InvalidOperationException) { /* 已关：占位也是尽力而为 */ }
+                _policy.Complete(AnimKind.Open);
+                Logger.Info(AnimReport.Skipped("OBJECTSHOW", "重试", "占位帧捕获重试耗尽",
+                    $"重试={attempts}×{retryMs}ms 窗口照常显示"));
+            }, DispatcherPriority.Render);
+        });
+    }
+
+    /// <summary>
+    /// fromIcon（实验，<b>默认关</b>）：替身画布 = 窗口 ∪ Dock 图标的联合矩形，
+    /// 画面从图标矩形长到窗口矩形（单条带 + 整块缩放；无捕获重试——实验项不做完整编排，
+    /// 捕获失败即如实不播）。缺图标矩形（应用不在 Dock）退化 in-place。
+    /// </summary>
+    private void PlayOpenFromIcon(IntPtr hwnd, Rect sourceRect, AnimParams p, int durationMs)
+    {
+        var icon = _dockTarget(hwnd);
+        if (icon is not { } d || d.Width <= 0)
+        {
+            Logger.Info(AnimReport.Skipped("OBJECTSHOW", "无", "fromIcon 缺 Dock 图标矩形，退化 in-place"));
+            PlayOpenInPlace(hwnd, sourceRect, p, durationMs);
+            return;
+        }
+
+        var image = Capture(hwnd, "OBJECTSHOW");
+        if (image is null)
+        {
+            _policy.Complete(AnimKind.Open);
+            return;
+        }
+
+        var canvas = Rect.Union(sourceRect, d);
+        var from = new GenieRect(
+            (d.Left - canvas.Left) / canvas.Width, (d.Top - canvas.Top) / canvas.Height,
+            d.Width / canvas.Width, Math.Max(0.02, d.Height / canvas.Height));
+        var to = new GenieRect(
+            (sourceRect.Left - canvas.Left) / canvas.Width, (sourceRect.Top - canvas.Top) / canvas.Height,
+            sourceRect.Width / canvas.Width, sourceRect.Height / canvas.Height);
+        var flyDuration = p.Scaled(p.FromIconDurationMs);
+        var fadeShare = OpenAnimMath.FadeShare;
+
+        var ghost = new GhostLayer(image, 1, canvas);
+        _ghost = ghost;
+        ghost.Show();
+        RunClock(flyDuration, "OBJECTSHOW", "openFromIcon", _lastLayer, 0, t =>
+        {
+            var e = AnimCurve.EaseOutQuint(t);
+            var r = GenieMath.ZoomLerp(from, to, e);
+            var opacity = AnimCurve.EaseOutQuad(AnimCurve.Clamp01(t / fadeShare));
+            ghost.Apply(new List<(GenieRect, double)> { (r, opacity) });
+        }, () =>
+        {
+            _ghost = null;
+            ghost.Close();
+        });
+    }
+
+    /// <summary>捕获就绪后的换帧与起播：占位 → 真帧 → 时钟。核对 ghost 身份（期间可能被收摊）。</summary>
+    private void StartOpenClock(GhostLayer ghost, BitmapSource image, Rect sourceRect, int durationMs,
+        string layer, long waitedMs, int attempts, string source, string engine)
+    {
+        if (_ghost != ghost)
+        {
+            _policy.Complete(AnimKind.Open);
+            return;   // 占位期间被收摊（Dispose/竞速）：槽必须还，动画放弃
+        }
+        var p = AnimParamsStore.Current;
+        ghost.SwapImage(image);
+        ghost.SetContentVisible(true);
+        var startFrame = OpenAnimMath.Frame(0.0, p.OpenStartScale);
+        ghost.Apply(new List<(GenieRect, double)> { (startFrame.Rect, startFrame.Opacity) });
+        Logger.Info($"打开动画：占位帧就绪 层={layer} 重试={attempts} 耗时={waitedMs:0}ms "
+                    + $"{image.PixelWidth}×{image.PixelHeight} 落位={durationMs}ms");
+        RunClock(durationMs, source, engine, layer, 0, t =>
+        {
+            var f = OpenAnimMath.Frame(t, p.OpenStartScale);
+            ghost.Apply(new List<(GenieRect, double)> { (f.Rect, f.Opacity) });
+        }, () =>
+        {
+            _ghost = null;
+            ghost.Close();
+        });
+    }
+
+    /// <summary>
+    /// 关闭（EVENT_OBJECT_DESTROY，默认<b>不播</b>——macOS 的关闭就是干脆地消失，README 已写明这是忠实）。
+    /// <see cref="AnimParams.CloseAnimation"/> 所在设置显式打开才播；DESTROY 到手时窗口已销毁，
+    /// 画面只能取前台帧缓存替它留的那张，龄超过 <see cref="AnimParams.CloseCacheMaxAgeMs"/> 判废不播。
+    /// 自家窗口（设置/关于本机）不走这里——它们拥有自己的窗口循环，由 <see cref="OwnWindowAnimator"/> 真动画。
+    /// </summary>
+    private void PlayClose(IntPtr hwnd)
+    {
+        if (!SettingsService.Current.CloseAnimation) return;   // 默认关：用户显式开启才播（静默，不刷日志）
+        if (!IsRunning || Busy) return;
+        // 只演"我们见过 SHOW"的窗口：DESTROY 对所有顶层窗口都发（含 tooltip/临时窗），
+        // 没有 pid 记账的一律不管——它们没进过缓存，也没有排除清单可查。
+        if (!_knownPids.TryGetValue(hwnd, out var pid)) return;
+
+        var p = AnimParamsStore.Current;
+        if (!_frames.TryGet(hwnd, p.CloseCacheMaxAgeMs, out var cached, out var cachedRect, out var age)
+            || cached is null || cachedRect.Width < MinShellSize || cachedRect.Height < MinShellSize)
+        {
+            Logger.Info(AnimReport.Skipped("OBJECTDESTROY", "缓存", "关闭动画无可用缓存帧",
+                $"pid={pid} 龄线={p.CloseCacheMaxAgeMs}ms 缓存条数={_frames.Count}"));
+            return;
+        }
+
+        if (!Admit(hwnd, AnimKind.Close, "OBJECTDESTROY", out var durationMs, out _, pid)) return;
+
+        var verdict = _policy.Usability((long)age);
+        Logger.Info($"关闭动画：缓存帧 龄={age:0}ms 判定={verdict} pid={pid} 收拢={durationMs}ms");
+        StartGhost(cached, cachedRect, durationMs, t =>
+        {
+            var f = CloseAnimMath.Frame(t, p.CloseEndScale);
+            return new List<(GenieRect, double)> { (f.Rect, f.Opacity) };
+        }, "OBJECTDESTROY", "closeFade", "缓存", age);
+    }
+
+    /// <summary>占位纹理：1×1 近白（Pbgra32）。占位阶段内容不可见，这张只是让 ImageBrush 有合法纹理。</summary>
+    private static BitmapSource PlaceholderTexture()
+    {
+        // B,G,R,A（预乘）：0xF3 = 近白的"主题卡底"
+        byte[] pixel = [0xF3, 0xF3, 0xF3, 0xFF];
+        var bmp = BitmapSource.Create(1, 1, 96, 96, PixelFormats.Pbgra32, null, pixel, 4);
+        bmp.Freeze();
+        return bmp;
+    }
+
     private void StartGhost(BitmapSource image, Rect screenPhysical, int durationMs,
         Func<double, List<(GenieRect Rect, double Opacity)>> sampler,
         string source, string engine, string layer, double ageMs)
@@ -788,10 +1036,16 @@ public sealed class MinimizeAnimator : IDisposable
         _sampleTimer = null;
         if (_minimizeHook != IntPtr.Zero) NativeMethods.UnhookWinEvent(_minimizeHook);
         if (_locationHook != IntPtr.Zero) NativeMethods.UnhookWinEvent(_locationHook);
+        if (_showHook != IntPtr.Zero) NativeMethods.UnhookWinEvent(_showHook);
+        if (_destroyHook != IntPtr.Zero) NativeMethods.UnhookWinEvent(_destroyHook);
         _minimizeHook = _locationHook = IntPtr.Zero;
+        _showHook = _destroyHook = IntPtr.Zero;
         _proc = null;
         _lastRect.Clear();
         _processNames.Clear();
+        _knownPids.Clear();
+        _openAttempted.Clear();
+        _firstWindowSeenPids.Clear();
         _frames.Clear();
         _meshGhost?.Dispose();
         _meshGhost = null;
@@ -884,6 +1138,28 @@ public sealed class MinimizeAnimator : IDisposable
                 band.Visibility = rect.Height <= 0 || rect.Width <= 0 ? Visibility.Collapsed : Visibility.Visible;
             }
             for (var i = count; i < _bands.Length; i++) _bands[i].Visibility = Visibility.Collapsed;
+        }
+
+        /// <summary>
+        /// 换入真帧纹理（打开动画：占位帧 → 捕获就绪的真画面）。条带结构与视口切分不变，
+        /// 只换 ImageBrush 的图——重建整棵树会让首帧多一趟布局，竞态窗口里能省则省。
+        /// </summary>
+        public void SwapImage(BitmapSource image)
+        {
+            foreach (var band in _bands)
+            {
+                if (band.Fill is ImageBrush brush) brush.ImageSource = image;
+            }
+        }
+
+        /// <summary>
+        /// 占位阶段隐藏全部条带（真窗口不被遮挡、命中测试不拦截）；换入真帧后恢复。
+        /// Apply 每帧会按矩形重新写 Visibility，恢复后无需再调本方法。
+        /// </summary>
+        public void SetContentVisible(bool visible)
+        {
+            var v = visible ? Visibility.Visible : Visibility.Collapsed;
+            foreach (var band in _bands) band.Visibility = v;
         }
     }
 }

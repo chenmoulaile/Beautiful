@@ -140,7 +140,11 @@ public partial class App : Application
                     // 必须在动画器构造之前 Load：构造期就要用它算挂载自检行与首帧时长。
                     Services.AnimParamsStore.Load();
 
-                    _animator = new Animation.MinimizeAnimator(hwnd => _dock?.IconRectPhysical(hwnd));
+                    // v4.0.0-alpha.13：第二个注入 = 首窗出现回调（Dock 启动弹跳的收口联动）。
+                    // _dock 此刻尚未创建，与上方 dockTarget 同款惰性闭包：回调到手里时 _dock 已就绪。
+                    _animator = new Animation.MinimizeAnimator(
+                        hwnd => _dock?.IconRectPhysical(hwnd),
+                        name => _dock?.NotifyFirstWindowShown(name));
 
                     // v3.0 §Q2-2：接管系统"缩向任务栏"动画，消除两条动画打架。
                     // 只在本程序真的会播动画时才接管；关掉动画功能就等于把系统动画原样还给用户。

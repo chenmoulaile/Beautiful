@@ -240,7 +240,10 @@ public sealed class WindowTracker : IDisposable
         _windows.Add(item);
 
         // P5-T3（实验）：新窗口淡入。放在加入集合之后——动画失败也不影响跟踪本身。
-        if (SettingsService.Current.WindowOpenAnimation)
+        // v4.0.0-alpha.13 起：ghost 占位帧版打开动画（MinimizeAnimator 的 OBJECTSHOW 路径）
+        // 是正身；两条打开动画同时播会互相打架（AW_BLEND 改窗口透明度 vs ghost 覆盖），
+        // 所以旧 AW_BLEND 只在 ghost 版被用户关掉时兜底。
+        if (!SettingsService.Current.OpenAnimation && SettingsService.Current.WindowOpenAnimation)
         {
             WindowOpenAnimator.TryAnimate(hwnd);
         }
