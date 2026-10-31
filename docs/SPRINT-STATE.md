@@ -60,3 +60,12 @@ OV-06 打开观感 / OV-07 关闭观感 / OV-08 弹跳收口 / OV-09 自家窗�
 - test: **1419 总 / 1373 过 / 46 红**（红集合 = Linux 平台差异基线：时钟/盘符/UNC；新增 7 测全绿；Windows 终审以 CI 为准）
 - PE: **Beautiful.exe = x64 GUI 合法 PE**（含 createdump.exe 校验；self-contained 260 顶层文件 / 179MB，zip 74MB）
 - 交付包: **Beautiful-4.0.0-alpha.14-win64.zip**（Beautiful.exe + AnimLab.exe + 运行时 + README-交付说明.txt）
+
+## P3 冲刺追加记录（alpha.16，同分支续推）
+
+| 任务 | 状态 | 证据 |
+|---|---|---|
+| P3-1 截图取证四轮迭代 | done | quser 第三列解析 + 显式 exit 0；实证 runner 会话本为 console/Active（tscon 7045 属正常） |
+| P3-2 时钟报错根因修复 | done | 第四轮截图抓到 InvalidOperationException: Transform is not valid for Window（PlaySlideIn 给 Window 赋 RenderTransform）→ 改 Left+Opacity 双动画；xaml_check 新增 [window-transform] 防回归规则 |
+| P3-3 渲染复盘 | done | 第五轮截图：通知中心（大时钟/月历/今天高亮）+ 顶栏菜单镜像 + Dock 全部真机渲染正常；前三轮系误读 |
+| P3-4 交付 | done | Beautiful-4.0.0-alpha.16-win64.zip（74MB，含测试清单 H 节取证结论） |
