@@ -230,6 +230,30 @@ public sealed record AppSettings
     public static IReadOnlyList<string> KnownGenieEngines { get; } = ["mesh", "strips"];
 
     /// <summary>
+    /// 是否给新窗口加 macOS 式打开动画（v2.2 §4.3，默认开）：in-place 缩放 0.94→1.0 + 快速淡入，
+    /// 200ms easeOutQuint。首帧竞态由占位帧设计兜底（窗口矩形先以 0 透明度占住，捕获重试
+    /// 就绪当帧换入起播），关掉即回到系统行为——窗口瞬间出现。
+    /// </summary>
+    public bool OpenAnimation { get; init; } = true;
+
+    /// <summary>
+    /// 是否播放关闭动画（v2.2 §4.4，<b>默认关</b>）：macOS 的关闭就是干脆地消失，
+    /// 默认不播是忠实而非没做完。开启后走前台缓存帧 + fade/scale→92%（150ms）；
+    /// 自家窗口（设置/关于本机/面板）不受本项约束，一律真动画。
+    /// </summary>
+    public bool CloseAnimation { get; init; } = false;
+
+    /// <summary>
+    /// 打开动画的形态："inplace"（默认）= 原位缩放落位；"fromicon" = 从 Dock 图标飞出
+    /// （300ms/0.3 起，实验项，观感未与所有者校准，故默认关）。
+    /// <b>值一律小写</b>（Canonical 会归一），展示文案在设置页 ComboBox 里做。
+    /// </summary>
+    public string OpenAnimStyle { get; init; } = "inplace";
+
+    /// <summary>合法打开动画形态标识（小写）。</summary>
+    public static IReadOnlyList<string> KnownOpenAnimStyles { get; } = ["inplace", "fromicon"];
+
+    /// <summary>
     /// Dock 所在显示器：auto = 启动时光标所在显示器（解析结果按进程粘住，重排不会因鼠标划过别屏而
     /// 让 Dock 跳走）、primary = 主显示器、其余为设置面板列出的十进制序号（1 起）。
     /// </summary>
@@ -350,6 +374,7 @@ public sealed record AppSettings
         IconTreatment = Canonical(IconTreatment, "auto", KnownIconTreatments),
         GenieEngine = Canonical(GenieEngine, "mesh", KnownGenieEngines),
         MinimizeEffect = Canonical(MinimizeEffect, "genie", KnownMinimizeEffects),
+        OpenAnimStyle = Canonical(OpenAnimStyle, "inplace", KnownOpenAnimStyles),
         AnimationSpeed = Math.Clamp(AnimationSpeed, 0.5, 2.0),
         MinimizeExcludes = (MinimizeExcludes ?? string.Empty).Trim(),
         HotCornerTopLeft = Canonical(HotCornerTopLeft, "disabled", KnownHotCornerActions),

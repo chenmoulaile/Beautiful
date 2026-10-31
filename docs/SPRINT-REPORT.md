@@ -91,3 +91,57 @@
   3. 无头/后台进程触发最小化时，冷启动第一下不播（缓存无帧，有日志）；
      真实交互（先点窗口再最小化）不受影响。
   4. 风暴抑制从第 4 个窗口起生效，前 3 个已播的收不回（不做 200ms 防抖延迟，避免拖慢每一次最小化）。
+
+---
+
+# v4.0.0-alpha.13 · agent 分支冲刺报告（P0：打开/关闭动画全链路）
+
+- 分支：`agent/alpha.13-p0`（所有者授权 agent 自主推进；CI 门禁 `ci.yml` 每次推送在 windows-latest 全套把关）
+- 协议：沿用 docs/specs/v3.0-autonomous-sprint.md 的不停顿协议与门禁口径
+- 开发环境：非 Windows 机器（Linux 交叉编译哨兵 `-p:EnableWindowsTargeting=true` 与 CI 同构）；
+  **运行期目视验证不在本机做**，交 owner-verification 包（诚实声明，不伪造证据）
+- 门禁：build 0 警告 0 错误（本地交叉编译 + CI 双口径）；test 1412 总数，新增 22 测全绿；
+  Linux 本地跑有 48 个平台/区域差异用例红（时钟格式、盘符路径、UNC），Windows CI 为准——
+  失败集合与 alpha.12 基线逐条一致，无回归
+
+## A1. 完成清单（v3.0 报告 §6 建议队列的回收）
+
+| 任务 | 状态 | 一句话结果 | 证据 |
+|---|---|---|---|
+| Q4.3 打开动画（队列首位） | done | SHOW 触发 + 占位帧（8ms×12 捕获重试就绪当帧换入）+ 200ms easeOutQuint 落位；fromIcon 实验形态默认关 | OpenAnimMath + 10 测；MinimizeAnimator.PlayOpen |
+| Q4.4 关闭动画 | done | DESTROY 触发（默认不播=macOS 忠实）+ 前台缓存帧 + 龄超 CloseCacheMaxAgeMs=1000 判废 | CloseAnimMath + 12 测；PlayClose |
+| 自家窗口真动画 | done | 设置/关于本机关闭走 OwnWindowAnimator（Content 收拢 fade+scale→92%）后真 Close | OwnWindowAnimator.cs + 两窗口 OnClosing |
+| Dock 启动弹跳联动 | done | 反复弹跳至首窗 SHOW 收口（exe 基名=进程名匹配）或 10s 超时；点击/右键菜单两条启动路径同语义 | DockSurface.StartSustainedBounce / DockWindow.NotifyFirstWindowShown |
+| 设置面 | done | OpenAnimation（默认开）/ CloseAnimation（默认关）/ OpenAnimStyle 三项 + 设置页控件，SHOW/DESTROY 路径真即时 | AppSettings + SettingsWindow |
+| 旧打开动画让位 | done | ghost 版开启时 AW_BLEND 实验路径不再叠加（两条打开动画不打架） | WindowTracker.AddWindow |
+| CI 门禁 | done | ci.yml：windows-latest 全套（native /W4 /WX + NativeSmoke + build + test）+ ubuntu 交叉编译哨兵 | .github/workflows/ci.yml |
+| 首轮 CI 修复 | done | ① global.json 钉住 .NET 8（runner 预装 10 SDK，新编译器重载决议不同致 CS0023）；② build-native.cmd 改候选路径直查（runner 已迁 windows-2025-vs2026，VS 2026 Enterprise 在 %ProgramFiles%\18\Enterprise）；③ 时钟两测去时区依赖（ToLocalTime × UTC 机器） | global.json / scripts/build-native.cmd / DockWidgetTests |
+| **CI 终态** | **全绿** | RUN#4（b53fa50）：windows-gate（native /W4 /WX + NativeSmoke + build 0/0 + **1412/1412 测**）+ linux-cross-build 全部通过 | .github/workflows/ci.yml |
+| AnimLab 完整台 | todo | 本冲刺未动（预算给了打开/关闭全链路）；anim-params.json 热加载仍是最小可用路径 | — |
+
+## A2. 打开/关闭专项设计要点
+
+- **占位帧与动画起点是同一帧**：OpenAnimMath.Start(t=0) = 全透明起始帧，占位阶段与起播天然衔接，无第二套数学。
+- **首帧竞态**：SHOW 到手时窗口可见但首帧未画完（白板裸窗窗口期）；PrintWindow 在线程池重试，
+  就绪前 ghost 全透明不遮挡；捕获彻底失败 → 撤占位 + `动画未播：源=OBJECTSHOW 层=重试 因=占位帧捕获重试耗尽`。
+- **关闭的画面来源**：DESTROY 到手时句柄已销毁，唯一画面是 2Hz 前台缓存；hwnd→pid 记账在 SHOW 期完成，
+  无记账的窗口（tooltip/临时窗）一律不演。
+- **挂载自检行**扩为四钩子（MINIMIZE/LOCATION/SHOW/DESTROY）+ 打开/关闭设置实值。
+- **退出链路**：Dispose 卸四钩 + 清 pid/尝试/首窗记账表（红线：新增全局状态全部进清理链）。
+
+## A3. UNVERIFIED（owner-verification 包）
+
+| 编号 | 内容 | 说明 |
+|---|---|---|
+| OV-06 | 打开动画真机观感（记事本/Chrome/UWP/资源管理器首窗） | 预期：内容浮现 0.94→1.0 落位；日志 `打开动画：占位帧就绪…` / `动画触发：源=OBJECTSHOW…` |
+| OV-07 | 关闭动画真机观感（先开 OpenAnimation→CloseAnimation 再关窗） | 预期：缓存帧收拢消失；无缓存时 `动画未播：因=关闭动画无可用缓存帧` |
+| OV-08 | 启动弹跳至首窗收口（从 Dock 点一个未运行的应用） | 预期：图标反复弹跳、首窗出现当次弹完落地；日志 `启动弹跳收口：…` |
+| OV-09 | 自家窗口收拢退场（设置/关于本机） | 预期：内容收拢淡出后窗口消失 |
+
+## A4. 已知限制（诚实清单）
+
+1. 打开动画的 ghost 与真窗口短暂并存：淡入完成（前 45%）时真窗口可能已画出全尺寸内容，
+   0.94 起步的替身在其上有 <100ms 的轻微重影——easeOutQuint 前段极快，实际观感待 OV-06 核。
+2. fromIcon 形态无捕获重试（实验项，缺图标矩形或捕获失败即退化/不播，有日志）。
+3. 关闭动画依赖 2Hz 前台缓存：窗口从未进过前台（后台直接销毁）时不播，有日志。
+4. AnimLab 完整调参台未做（下冲刺首位候选）。

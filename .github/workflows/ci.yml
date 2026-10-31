@@ -1,0 +1,59 @@
+name: ci
+
+# 每次推送都要过的门禁（release.yml 只在打 v* 标签时才跑，日常验证靠本文件）。
+# windows-latest 是唯一权威门禁：native /W4 /WX、sln 0 警告、1390 测试全绿——
+# 与 README「构建与门禁」一节的口径一致，agent 在非 Windows 机器上开发时以此为准。
+# ubuntu 岗只做交叉编译哨兵（-p:EnableWindowsTargeting=true）：验证 WPF 在无桌面环境下
+# 仍可编译（agent 本机验证路径与 CI 同构），不跑测试——Linux runner 的区域设置会让
+# 时钟/盘符类用例出现与产品无关的红。
+on:
+  push:
+    branches: ['**']
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  windows-gate:
+    runs-on: windows-latest
+    env:
+      DOTNET_CLI_TELEMETRY_OPTOUT: 1
+      DOTNET_NOLOGO: 1
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 安装 .NET 8 SDK
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+
+      - name: 编译 native（/W4 /WX，与 release.yml 同口径）
+        shell: cmd
+        run: scripts\build-native.cmd Release
+
+      - name: NativeSmoke（无桌面部分进 CI）
+        shell: cmd
+        run: tools\NativeSmoke\bin\Release\NativeSmoke.exe src\Beautiful.Native\bin\Release\Beautiful.Native.dll
+
+      - name: 构建（0 警告 0 错误）
+        run: dotnet build Beautiful.sln -c Release
+
+      - name: 测试门禁
+        run: dotnet test tests/Beautiful.Core.Tests -c Release
+
+  linux-cross-build:
+    runs-on: ubuntu-latest
+    env:
+      DOTNET_CLI_TELEMETRY_OPTOUT: 1
+      DOTNET_NOLOGO: 1
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 安装 .NET 8 SDK
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+
+      - name: 交叉编译 WPF 解决方案（EnableWindowsTargeting 哨兵）
+        run: dotnet build Beautiful.sln -c Release -p:EnableWindowsTargeting=true

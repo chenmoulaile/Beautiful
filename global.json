@@ -1,0 +1,11 @@
+{
+  // SDK 版本钉死在 .NET 8（any band，9/10 不接受）：CI runner 预装了 .NET 10 SDK，
+  // 不钉的话 dotnet build 会选最高版 SDK，新编译器对既有代码（如 new[]{…}.Reverse()）
+  // 的重载决议不同会直接编译失败（2026-10-31 实证）。Deterministic=true 的同一条纪律：
+  // 构建产物不许依赖"哪台机器装了什么"。
+  "sdk": {
+    "version": "8.0.100",
+    "rollForward": "latestMinor",
+    "allowPrerelease": false
+  }
+}

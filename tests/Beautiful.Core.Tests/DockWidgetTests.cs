@@ -11,14 +11,17 @@ public class DockWidgetTests
     [Fact]
     public void 二十四小时制时钟补零()
     {
-        var time = new DateTimeOffset(2026, 10, 30, 9, 5, 0, TimeSpan.FromHours(8));
+        // 【为什么用本机偏移】Clock 内部做 ToLocalTime()（产品语义：小组件画本地墙钟）。
+        // 输入若钉死 UTC+8，在 UTC 机器（CI runner/sandbox）上会变成 01:05——
+        // 测试变成了"测机器时区"。改用机器自己的偏移，墙钟 9:05 在任何时区都成立。
+        var time = new DateTimeOffset(2026, 10, 30, 9, 5, 0, DateTimeOffset.Now.Offset);
         Assert.Equal("09:05", DockWidget.Clock(time, use24Hour: true));
     }
 
     [Fact]
     public void 十二小时制带上午下午()
     {
-        var afternoon = new DateTimeOffset(2026, 10, 30, 14, 5, 0, TimeSpan.FromHours(8));
+        var afternoon = new DateTimeOffset(2026, 10, 30, 14, 5, 0, DateTimeOffset.Now.Offset);
         Assert.Equal("2:05 PM", DockWidget.Clock(afternoon, use24Hour: false));
     }
 

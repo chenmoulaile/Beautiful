@@ -69,6 +69,21 @@ public partial class AboutWindow : Window
         }
     }
 
+    // 自家窗口一律真动画（v2.2 §4.4）：关于本机与设置窗口同一条收拢退场链，防重入同款。
+    private bool _closeAnimated;
+
+    protected override void OnClosing(System.ComponentModel.CancelEventArgs e)
+    {
+        if (!_closeAnimated)
+        {
+            e.Cancel = true;
+            _closeAnimated = true;
+            Beautiful.App.Animation.OwnWindowAnimator.CloseAnimated(this);
+            return;
+        }
+        base.OnClosing(e);
+    }
+
     protected override void OnSourceInitialized(EventArgs e)
     {
         base.OnSourceInitialized(e);

@@ -1345,9 +1345,15 @@ public partial class DockWindow : AcrylicWindow
                 try
                 {
                     Process.Start(new ProcessStartInfo(item.LaunchPath) { UseShellExecute = true });
-                    // 启动弹跳（Task 15）：BounceEnabled 时该项在 DockSurface 现有 vsync 循环里跑
-                    // ~600ms 的 ElasticOut 纵向弹跳；重复点击不叠加（StartBounce 重置进度）。
-                    if (SettingsService.Current.BounceEnabled) Surface.StartBounce(item);
+                    // 启动弹跳（Task 15 → v4.0.0-alpha.13 对齐 macOS 完整语义）：BounceEnabled 时
+                    // 该项**反复弹跳**，直到该应用的首窗出现（动画器 SHOW 路径回调
+                    // NotifyFirstWindowShown 按进程名匹配收口）或 10s 超时自动落地；
+                    // 重复点击不叠加（StartBounce 语义保留在单次路径上）。
+                    if (SettingsService.Current.BounceEnabled)
+                    {
+                        Surface.StartSustainedBounce(item);
+                        _sustainedBounces.Add(item);
+                    }
                 }
                 catch (Exception ex) { Logger.Warn($"启动 {item.LaunchPath} 失败: {ex.Message}"); }
                 break;
@@ -1548,7 +1554,43 @@ public partial class DockWindow : AcrylicWindow
 
     private DockContextMenuExecutor Executor => _menuExecutor ??= new DockContextMenuExecutor(
         _tracker, _vm, App.CommitWindowForeground,
-        item => { if (SettingsService.Current.BounceEnabled) Surface.StartBounce(item); });
+        item =>
+        {
+            // 菜单里的"启动/新建"同样是新进程启动：与点击路径同一条持续弹跳语义（首窗收口/超时落地）
+            if (!SettingsService.Current.BounceEnabled) return;
+            Surface.StartSustainedBounce(item);
+            _sustainedBounces.Add(item);
+        });
+
+    // ---------- 启动弹跳 ↔ 首窗收口（v2.2 §4.3"Dock 启动联动"） ----------
+
+    /// <summary>正在"持续弹跳"的条目（等待该应用首窗出现收口）。只在 UI 线程访问，无需锁。</summary>
+    private readonly HashSet<DockItem> _sustainedBounces = new();
+
+    /// <summary>
+    /// 动画器打开路径（EVENT_OBJECT_SHOW）的收口回调：某进程的<b>首个顶层窗口</b>出现了。
+    /// 与持续弹跳按"exe 基名 == 进程名"匹配（大小写不敏感）——LaunchPath 的文件基名与
+    /// Process.ProcessName 在绝大多数场景一致；UWP/单包应用的例外由 DockSurface 的 10s 超时兜底，
+    /// 不会永远弹下去。匹配成功即收口：当前这一次弹完自然落地，不硬切。
+    /// </summary>
+    public void NotifyFirstWindowShown(string processName)
+    {
+        if (_sustainedBounces.Count == 0) return;
+        foreach (var item in _sustainedBounces.ToArray())
+        {
+            if (!Surface.IsSustainedBouncing(item))
+            {
+                _sustainedBounces.Remove(item);   // 已超时落地/树重建：清掉陈旧引用
+                continue;
+            }
+            var exeName = Path.GetFileNameWithoutExtension(item.LaunchPath);
+            if (string.IsNullOrEmpty(exeName)
+                || !string.Equals(exeName, processName, StringComparison.OrdinalIgnoreCase)) continue;
+            Surface.StopSustainedBounce(item);
+            _sustainedBounces.Remove(item);
+            Logger.Info($"启动弹跳收口：{processName} 首窗已出现");
+        }
+    }
 
     /// <summary>
     /// 右键条目在光标处弹 <see cref="FluentMenu"/>（自绘高级弹层，观感与托盘/顶栏菜单一致）。

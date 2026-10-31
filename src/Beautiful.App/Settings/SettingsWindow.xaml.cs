@@ -87,6 +87,22 @@ public partial class SettingsWindow : Window
         VersionLine.Text = $"Beautiful v{ProductVersion()} · {Beautiful.Core.Design.FontResolution.Describe(FontProbe.Current)} · 配置与日志在 {AppContext.BaseDirectory}";
     }
 
+    // 自家窗口一律真动画（v2.2 §4.4）：设置窗口拥有自己的循环，关闭时先收拢再真 Close。
+    // _closeAnimated 防重入：OwnWindowAnimator 播完调 Close() 会再进一次 OnClosing，这次放行。
+    private bool _closeAnimated;
+
+    protected override void OnClosing(System.ComponentModel.CancelEventArgs e)
+    {
+        if (!_closeAnimated)
+        {
+            e.Cancel = true;
+            _closeAnimated = true;
+            Animation.OwnWindowAnimator.CloseAnimated(this);
+            return;
+        }
+        base.OnClosing(e);
+    }
+
     /// <summary>侧栏导航：把对应分组卡片滚进视野（v4 Phase 1 T7）。不重建控件、不切页，避免丢状态。</summary>
     private void SectionNav_SelectionChanged(object sender, SelectionChangedEventArgs e)
     {
@@ -176,6 +192,9 @@ public partial class SettingsWindow : Window
         AnimationSpeedSlider.Value = s.AnimationSpeed;
         AnimationSpeedLabel.Text = $"×{s.AnimationSpeed:0.0}";
         MinimizeExcludesBox.Text = s.MinimizeExcludes;
+        OpenAnimationCheck.IsChecked = s.OpenAnimation;
+        SelectByTag(OpenAnimStyleBox, s.OpenAnimStyle, "inplace");
+        CloseAnimationCheck.IsChecked = s.CloseAnimation;
         FullscreenAvoidanceCheck.IsChecked = s.FullscreenAvoidanceEnabled;
         NativeModulesCheck.IsChecked = s.NativeModules;
         NativeBlurCheck.IsChecked = s.NativeBlur;
@@ -398,6 +417,27 @@ public partial class SettingsWindow : Window
         {
             AnimSuppressSystemAnim = AnimSuppressSystemAnimCheck.IsChecked == true,
         });
+    }
+
+    private void OpenAnimation_Changed(object sender, RoutedEventArgs e)
+    {
+        if (_loading) return;
+        // 钩子在启动时装配：这里只落盘；SHOW 路径每次都读 Current，下一扇窗即生效（真即时）
+        SettingsService.UpdateAndSave(SettingsService.Current with { OpenAnimation = OpenAnimationCheck.IsChecked == true });
+    }
+
+    private void OpenAnimStyle_Changed(object sender, SelectionChangedEventArgs e)
+    {
+        if (_loading) return;
+        if (OpenAnimStyleBox.SelectedItem is ComboBoxItem item && item.Tag is string tag)
+            SettingsService.UpdateAndSave(SettingsService.Current with { OpenAnimStyle = tag });
+    }
+
+    private void CloseAnimation_Changed(object sender, RoutedEventArgs e)
+    {
+        if (_loading) return;
+        // 默认关是 macOS 忠实（v2.2 §4.4）；打开后 DESTROY 路径读 Current，下一个销毁即生效
+        SettingsService.UpdateAndSave(SettingsService.Current with { CloseAnimation = CloseAnimationCheck.IsChecked == true });
     }
 
     private void FullscreenAvoidance_Changed(object sender, RoutedEventArgs e)
