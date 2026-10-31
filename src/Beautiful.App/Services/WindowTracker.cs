@@ -147,8 +147,12 @@ public sealed class WindowTracker : IDisposable
     /// 顶替即可（见 DockWindow.ForegroundBeforeDockClick）。传 null 表示调用方没有这个信息，
     /// 退回现问前台（原行为）。
     /// </para>
+    /// <para>
+    /// <paramref name="minimizeOverride"/>（alpha.16）：最小化动作的接管者（Dock 点击路径的真替换：
+    /// 预抓帧 + 关 DWM 过渡静默落位 + genie）。传 null 走系统最小化。
+    /// </para>
     /// </summary>
-    public void ActivateOrMinimize(WindowItem item, IntPtr? foregroundHint = null)
+    public void ActivateOrMinimize(WindowItem item, IntPtr? foregroundHint = null, Action<IntPtr>? minimizeOverride = null)
     {
         EnsureUiThread();
         ObjectDisposedException.ThrowIf(_disposed, this);
@@ -157,7 +161,8 @@ public sealed class WindowTracker : IDisposable
         var front = foregroundHint ?? NativeMethods.GetForegroundWindow();
         if (front == h)
         {
-            NativeMethods.ShowWindow(h, SwMinimize);
+            if (minimizeOverride is not null) minimizeOverride(h);
+            else NativeMethods.ShowWindow(h, SwMinimize);
             Logger.Info($"窗口切换：最小化 hwnd=0x{h.ToInt64():X}（点击时它就在前台）");
         }
         else if (NativeMethods.IsIconic(h))

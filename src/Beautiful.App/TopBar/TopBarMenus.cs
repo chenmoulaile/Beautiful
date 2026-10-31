@@ -28,7 +28,7 @@ public static class TopBarMenus
     private const string GearGlyph = "\uE713", ThemeGlyph = "\uE790", ReloadGlyph = "\uE72C",
                        QuitGlyph = "\uE7E8", InfoGlyph = "\uE946", MinGlyph = "\uE73F",
                        CloseGlyph = "\uE711", FolderGlyph = "\uE8B7", DesktopGlyph = "\uE7F4",
-                       HelpGlyph = "\uE897";
+                       HelpGlyph = "\uE897", FinderGlyph = "\uE8B7";
 
     /// <summary>logo（"Beautiful" 应用菜单）：关于 / 设置… / 主题▸ / 重载 Dock / 分隔 / 退出。</summary>
     public static List<MenuItemView> BeautifulMenu(TopBarContext ctx) => new()
@@ -64,10 +64,13 @@ public static class TopBarMenus
         }).ToList();
     }
 
-    /// <summary>文件：新建窗口（无对应能力→置灰）、打开资源管理器…（真实）、分隔、关闭窗口（置灰）。</summary>
+    /// <summary>文件：新建访达窗口（真实，alpha.16 起是访达的显性入口）、打开资源管理器…（真实）、分隔、关闭窗口（置灰）。</summary>
     public static List<MenuItemView> FileMenu() => new()
     {
-        new() { Id = "new", Label = "新建窗口", Glyph = "\uE710", IsEnabled = false },
+        // alpha.16：访达有了显性入口（此前只有 Dock 右键"在访达中打开"和 --finder 参数，
+        // 用户反馈"Finder 没看到你说的东西"——功能都在，是找不到门）。
+        new() { Id = "new", Label = "新建访达窗口", Glyph = FinderGlyph,
+                Invoke = () => Finder.FinderWindow.ShowSingleton() },
         new() { Id = "open", Label = "打开资源管理器…", Glyph = FolderGlyph, Invoke = () => Launch("explorer.exe") },
         new() { Id = "sep", IsSeparator = true },
         new() { Id = "close", Label = "关闭窗口", Glyph = CloseGlyph, IsEnabled = false },
@@ -144,7 +147,7 @@ public static class TopBarMenus
             var h = active.Handle;
             items.Add(new MenuItemView { Id = "sep", IsSeparator = true });
             items.Add(new MenuItemView { Id = "min", Label = "最小化", Glyph = MinGlyph,
-                Invoke = () => NativeMethods.ShowWindow(h, NativeMethods.SwMinimize) });
+                Invoke = () => App.MinimizeWindow(h) });
             items.Add(new MenuItemView { Id = "close", Label = "关闭", Glyph = CloseGlyph,
                 Invoke = () => NativeMethods.PostMessage(h, (uint)NativeMethods.WmClose, IntPtr.Zero, IntPtr.Zero) });
         }
@@ -157,7 +160,7 @@ public static class TopBarMenus
     {
         if (tracker is null) return;
         foreach (var w in tracker.Windows)
-            NativeMethods.ShowWindow(w.Handle, NativeMethods.SwMinimize);
+            App.MinimizeWindow(w.Handle);
     }
 
     /// <summary>

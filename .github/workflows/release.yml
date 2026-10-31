@@ -41,6 +41,30 @@ jobs:
       - name: 发布自包含产物
         run: dotnet publish src/Beautiful.App -c Release -r win-x64 --self-contained true -p:PublishSingleFile=false -p:UseAppHost=true -o publish
 
+      # alpha.16：AnimLab 自包含并入同一 publish 目录（双发布同名运行时哈希一致才放行）
+      - name: AnimLab 自包含入包
+        shell: pwsh
+        run: |
+          $tmp = Join-Path $env:RUNNER_TEMP "animlab-publish"
+          dotnet publish tools/AnimLab -c Release -r win-x64 --self-contained true -o $tmp
+          foreach ($f in Get-ChildItem $tmp -File -Recurse) {
+              $rel = [System.IO.Path]::GetRelativePath($tmp, $f.FullName)
+              $dst = Join-Path "publish" $rel
+              $dir = Split-Path $dst -Parent
+              if (-not (Test-Path $dir)) { New-Item -ItemType Directory -Path $dir | Out-Null }
+              if ((Test-Path $dst) -and ((Get-FileHash $dst).Hash -ne (Get-FileHash $f.FullName).Hash)) {
+                  throw "$rel 哈希与主包不一致（运行时版本漂移？）"
+              }
+              if (-not (Test-Path $dst)) { Copy-Item $f.FullName -Destination $dst }
+          }
+
+      # alpha.16：CBT 前置钩子层随包交付（仓库内 Linux MinGW 交叉编译产物）
+      - name: HookDll 入包
+        shell: pwsh
+        run: |
+          if (-not (Test-Path "native/hook/Beautiful.Hook.dll")) { throw "Beautiful.Hook.dll 不在仓库（先跑 scripts/build-hook-dll.sh 并提交）" }
+          Copy-Item "native/hook/Beautiful.Hook.dll" -Destination "publish/"
+
       - name: 压缩
         run: Compress-Archive -Path publish/* -DestinationPath Beautiful-win-x64-${{ github.ref_name }}.zip
         shell: pwsh

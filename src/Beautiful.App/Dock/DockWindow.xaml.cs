@@ -1498,18 +1498,16 @@ public partial class DockWindow : AcrylicWindow
     /// <summary>
     /// 运行窗口条目的点击：先抓帧再切换（顺序是硬要求）。
     /// <para>
-    /// genie 的 <c>EVENT_SYSTEM_MINIMIZESTART</c> 走系统队列送达时，我们那次同步的
-    /// <c>ShowWindow(SW_MINIMIZE)</c> 早已完成、窗口已经 iconic，事件路径永远抓不到画面
-    /// （真机上动画一次没播过就是这么来的）。所以<b>趁窗口还画着先抓一帧</b>，
-    /// 切换完成后如果它真的缩下去了，就拿预抓的那份放动画。
+    /// alpha.16：整条链交给 <see cref="Animation.MinimizeAnimator.MinimizeNow"/>——
+    /// 预抓帧（窗口还画着）→ 关 DWM 过渡静默落位 → genie。原生"缩向任务栏"动画
+    /// 与 genie 打架的问题从根上解决（此前 ShowWindow 后原生动画照播，genie 只是叠上去）。
     /// </para>
     /// </summary>
     private void ToggleWindowItem(WindowItem wi, IntPtr front)
     {
-        var (image, sourceRect) = _animator?.PreCapture(wi.Handle) ?? (null, null);
-        _tracker.ActivateOrMinimize(wi, front);
-        if (image is not null && sourceRect is { } rect && NativeMethods.IsIconic(wi.Handle))
-            _animator?.PlayMinimizeFromCapture(wi.Handle, image, rect);
+        var animator = _animator;
+        _tracker.ActivateOrMinimize(wi, front,
+            minimizeOverride: animator is { IsRunning: true } ? h => animator.MinimizeNow(h) : null);
     }
 
     /// <summary>

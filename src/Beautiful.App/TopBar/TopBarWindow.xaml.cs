@@ -722,7 +722,10 @@ public partial class TopBarWindow : AcrylicWindow
         _trayStripHost.Visibility = Visibility.Visible;
     }
 
-    /// <summary>一格常驻图标：有像素贴像素，没有画占位字形（首字），tooltip 永远写应用名与来源。</summary>
+    /// <summary>
+    /// 一格常驻图标（alpha.16 改）：真实像素 > owner 进程的 exe 图标（用户点名"要图标不要字"）>
+    /// 中性圆点。文字首字母的旧占位废除——字母看起来像图标又什么都不是，是上一轮差评的直接原因。
+    /// </summary>
     private Button MakeTrayStripTile(TrayIconItem item)
     {
         object content;
@@ -731,14 +734,25 @@ public partial class TopBarWindow : AcrylicWindow
             content = new System.Windows.Controls.Image
                 { Source = img, Width = 20, Height = 20, Stretch = Stretch.Uniform };
         }
+        else if (Services.TrayIconFallback.GetOwnerIcon(item.OwnerHwnd) is { } owner)
+        {
+            content = new System.Windows.Controls.Image
+                { Source = owner, Width = 18, Height = 18, Stretch = Stretch.Uniform };
+        }
         else
         {
-            content = new TextBlock
+            // 中性圆点（不是文字）：格子仍可点、仍有 tooltip，视觉上明确"有应用在托盘"而不猜它是谁
+            var tokens = Beautiful.Core.Design.MacTokens.For(ThemeManager.IsDark);
+            var argb = Themes.MacTokenDictionary.ParseArgb(tokens.MenuBarText);
+            content = new System.Windows.Shapes.Ellipse
             {
-                Text = string.IsNullOrWhiteSpace(item.Label) ? "·" : item.Label.Trim().Substring(0, 1),
-                FontSize = 12,
-                Opacity = 0.85,
+                Width = 7,
+                Height = 7,
+                Fill = new SolidColorBrush(System.Windows.Media.Color.FromArgb((byte)(argb >> 24), (byte)(argb >> 16),
+                    (byte)(argb >> 8), (byte)argb)),
+                Opacity = 0.75,
                 VerticalAlignment = VerticalAlignment.Center,
+                HorizontalAlignment = System.Windows.HorizontalAlignment.Center,
             };
         }
 

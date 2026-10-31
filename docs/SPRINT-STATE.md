@@ -1,41 +1,41 @@
-# SPRINT-STATE（v3.0 冲刺检查点 · v4.0.0-alpha.15）
+# SPRINT-STATE（v3.0 冲刺检查点 · v4.0.0-alpha.16）
 
-- 冲刺开始：2026-10-31 / 最后更新：2026-10-31（P2 冲刺：真机反馈修复——时钟报错 + 动画观感 + 最小化可用性）
-- 分支：`agent/alpha.15-p0`（自 `agent/alpha.14-p1` @ `7797439` 切出；所有者授权 agent 自主维护；main 停在 `2b93a28` = alpha.12）
-- 开发环境：**非 Windows 机器**（Linux 交叉编译 `-p:EnableWindowsTargeting=true`；沙箱中途回收一次，环境已重建）
-- 门禁：本地 build 0 警告 0 错误（Core + App + AnimLab）；test **1427 总 / 1381 过 / 46 红**（46 红 = 上轮完全相同的 Linux 平台差异基线：FinderPathSafety 10、FinderDropPlanner 12、FinderClipboard 6、FinderViewOptions 4、LauncherIndex 5、LauncherTarget 9，**无回归**）；本冲刺新增 8 测全绿（AnimParams 新默认 1 + 兜底回落 1 + GenieLamp split 重载 6）；Windows 端以 `ci.yml`（windows-latest 全套）为准
-- 本冲刺动因：所有者真机反馈 ①点顶栏时钟报错打不开 ②打开/关闭动画太快几乎没有 ③最小化动画不可用 ④要求先全面查 bug 再开发
+- 冲刺开始：2026-10-31 / 最后更新：2026-10-31（P3 冲刺：最小化真替换——自制 CBT 前置钩子层 + AnimLab/托盘/Finder 修复）
+- 分支：`agent/alpha.16-cbt`（自 `agent/alpha.15-p0` @ `16614f5` 切出；所有者授权 agent 自主维护；main 停在 `2b93a28` = alpha.12）
+- 开发环境：**非 Windows 机器**（Linux 交叉编译；本轮新增 **MinGW-w64 + clang 交叉原生构建线**，见 `scripts/setup-mingw.sh` / `scripts/build-hook-dll.sh`）
+- 门禁：本地 build 0 错误；test **1427 总 / 1381 过 / 46 红**（46 红 = 与 alpha.15 完全相同的 Linux 平台差异基线，**无回归**）；Windows 端以 `ci.yml`（windows-latest 全套）为准
+- 本冲刺动因：所有者真机反馈 ①打开/关闭/最小化动画"未替换原生动画，要么没有要么不好看" ②最小化开始时一片白光 ③AnimLab 双击无窗口 ④顶栏托盘只有字不是图标 ⑤Finder"没看到你说的东西" ⑥**授权：没有 C++ 原生层就从 0 自制**
 
 ## 队列状态（本冲刺）
 
 | 任务 | 状态 | 证据 | 备注 |
 |---|---|---|---|
-| P2-1 深度代码审查 | done | 双路审查（人工逐文件 + 子代理全链路）：时钟链 8 个方向、动画链 A1-A7、最小化链 B1-B7 全部过一遍；产出 bug 清单（B1~B17，见提交说明） | 结论：钩子都在、数学正确，断点集中在"参数没接上""画面没留够""真窗口从不隐藏"三类工程问题 |
-| P2-2 时钟点击报错修复 | done | `TopBarWindow.OpenClockFlyout/OpenCalendar` 本地 try/catch + 日志 + 回退（异常不再升级为全局弹框，时钟永不白点）；`NotificationCenterWindow`：`CloseCurrent()` + 顶栏 OnClosed 收面板（孤儿面板）、兜底锚点 DIP→物理像素（高 DPI 定位错屏）、`EnsureServiceStartedAsync` 兜底；静态审查未能 100% 锁定真机异常源（无用户日志），**防御已保证任何异常不弹框、不打不开，根因落在 logs** | 待所有者回传 logs/Beautiful-*.log 的"UI 线程未处理异常"行即可定案根因 |
-| P2-3 动画观感修复 | done | ① 时长热加载接线：`AnimParamsStore.ParamsChanged` 事件 → `AnimPolicy.UpdateParams`（alpha.14 的 UpdateParams 零调用 = 热加载死路，本冲刺打通）；② 设置页"动画速度"滑条接线（alpha.14 零消费方 → 与参数表倍率相乘进策略）；③ 默认时长 200→360ms / 0.94→0.90 / 关闭 150→260ms + 关闭动画默认开；④ **DWM Cloak 真窗口入场**：打开动画从"叠在已可见窗口上的重影"变成真入场（Cloak 失败自动回退旧模式；Dispose 中途收摊强制 Uncloak 红线） | 观感类修复需真机目视验收（zip 内 测试清单.txt 第 2 节） |
-| P2-4 最小化动画可用性 | done | ① `EVENT_SYSTEM_FOREGROUND` 钩子：窗口成为前台立即补采一帧（绕过 2Hz 轮询节流；250ms 绝对节流 + 单飞在途 + 新鲜帧跳过三道闸）——"刚切到窗口就最小化必然不播"的最大断点补上；② `AnimParams.LampSplit` 接线（alpha.14 零读取 → GenieLamp 增加 split 重载，默认值逐位不变）；③ mesh 网格 24×8→16×6（顶点 225→119，对冲 P95 80-146ms 的幻灯片感） | 24H2 双动画打架（SPI 被拒）是系统侧限制，维持如实降级；根治 = native BN_Anim_*（仍 BLOCKED，无 MSVC） |
-| P2-5 交付管线 | done | `package-release.sh`：测试清单写入 zip（`测试清单.txt`）；版本 bump `4.0.0-alpha.15`；download 目录只保留 zip | 所有者要求"测试清单打包进 zip"落成 |
+| P3-1 深度侦察 | done | 定位根因：AnimLab=framework-dependent 发布在扁平目录解析不到框架；托盘条"字"=MakeTrayStripTile 的首字母占位；白光/双动画=WinEvent 事后补播架构（原生动画早已开跑） | 全部结构性根因，非偶发 |
+| P3-2 原生构建线（从 0 自制） | done | Debian 腾讯镜像拉 mingw-w64 + clang-19 deb 免 root 解包（`scripts/setup-mingw.sh`）；clang `-fms-extensions` 编 MS SEH + mingw gcc 链接（`scripts/build-hook-dll.sh`）；产物 `native/hook/Beautiful.Hook.dll` 95KB 纯静态零依赖，PE/导出已验 | **绕开了"无 MSVC"两年来的原生层死锁**；GH CDN 慢，走国内镜像 |
+| P3-3 CBT 前置钩子 DLL | done | 纯 C：全局 WH_CBT，HCBT_MINMAX(最小化方向 show 码过滤)在原生动画开跑前 PrintWindow(PW_RENDERFULLCONTENT) 抓帧入共享内存双槽 → PostMessage → 等 ack≤40ms → 返回 1 阻断原生最小化；自家进程/抑制窗口/任何异常一律放行（SEH 全包）；BH_Install/Uninstall/Suppress/Version 四导出 | 注入组件红线：绝不抛异常给宿主、绝不阻塞>40ms、绝不拦截失败态 |
+| P3-4 C# 真替换接入 | done | `MinimizeHookClient`（MMF+EventWaitHandle+消息窗）；`MinimizeAnimator.PlayMinimizeFromHook`（门禁放行→genie 真替换→收尾静默落位；拒绝也必须静默落位兜底）；`SilentMinimize`=DWMWA_TRANSITIONS_FORCEDISABLED(3)+ShowWindow+还原；`_hookMinimizedAt` 2s 防双播（MINIMIZESTART 二次到达不再补播）；缺 DLL/装不上自动回退 alpha.15 事后路径 | **白光根治**：genie 首帧=钩子预抓的真画面，覆盖层与真窗口像素重合 |
+| P3-5 主动路径真替换 | done | `App.MinimizeWindow` 统一入口：Dock 点击（WindowTracker.ActivateOrMinimize 加 minimizeOverride）、Dock 右键菜单、顶栏菜单、热角——全部改走 `MinimizeNow`（预抓+关过渡+静默落位+genie） | 不依赖钩子层也成立 |
+| P3-6 AnimLab 双击无窗口修复 | done | `package-release.sh` AnimLab 改 **self-contained** 并入主包（461 个运行时文件与主程序哈希一致才放行）；AnimLab 加 DispatcherUnhandledException/UnhandledException 落盘 `animlab-crash.log` + 弹窗 | 旧根因：framework-dependent apphost 在扁平目录里解析不到 shared/ 框架 |
+| P3-7 托盘图标化 | done | 新 `TrayIconFallback`：owner 窗口→OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION)→QueryFullProcessImageNameW→ExtractIconExW→HIcon→BitmapSource（按映像路径缓存 128）；顶栏托盘条：真实像素 > exe 图标 > 中性圆点，**废除首字母文字占位** | UIA 路无 owner 句柄 → 中性圆点 |
+| P3-8 Finder 显性入口 | done | 顶栏"文件"菜单"新建访达窗口"（此前唯一入口是 Dock 右键"在访达中打开"与 `--finder` 参数——功能都在、找不到门） | Finder 四视图/QuickLook/标签页/侧栏"我的"早已实现 |
+| P3-9 打包 | done | zip 74MB：主程序+**Beautiful.Hook.dll**+AnimLab（自包含）+测试清单.txt+README；终验三件 PE + coreclr 在位；download 只留 zip；版本 bump 4.0.0-alpha.16 | 清单数字与 AnimParams 实际默认对齐（360/260/500） |
 
 ## 沿用上冲刺
 
 | 任务 | 状态 | 备注 |
 |---|---|---|
-| P0-1 ~ P0-9 / P1-1 ~ P1-3 | done | 打开/关闭动画全链路 + AnimLab + 交叉交付（详见 alpha.13/alpha.14 检查点） |
+| P0/P1/P2 全部 | done | 打开/关闭动画 + Cloak 入场 + AnimLab + 时钟防御（详见 alpha.13~15 检查点） |
 
-## 当前进行中
+## 已知限制（如实降级，非缺陷）
 
-- 无（队列清空）
+- 管理员权限窗口受 UAC 隔离：钩子 DLL 注入不进，原生动画照旧（系统安全边界，MyDockFinder 同样如此）
+- 32 位应用：64 位钩子 DLL 不注入（极少数老应用走事后路径）
+- 双进程同时最小化 <40ms 窗口内的槽竞争：极小概率一帧花屏（双槽设计下最坏影响是替身画面，不影响最小化本身）
+- `Beautiful.Native.dll`（MSVC 线：WGC/DComp/TrayBridge）仍由 CI 独立构建，zip 不含；缺失自动纯 C# 降级
+- BLOCKED（长期）：wine 运行期冒烟（网络 3 次失败）；Windows 运行期行为以 CI 截图+真机验收为准
 
 ## 下一个动作（中断续跑从这里开始）
 
-1. 所有者真机验收 zip 内 `测试清单.txt`（时钟 × 动画 × 最小化三节，≤15 分钟）；回传 logs 里"UI 线程未处理异常"行定案时钟根因（若仍复现）。
-2. native BN_Anim_* DComp 动画宿主：CI 已具备 /W4 /WX 编译验证能力，代码按 v2.2 §3 实现（本机仍无 MSVC，不写假代码、不标完成）。
-3. OV-06~OV-09 回填回收（所有者 ≤20 分钟）。
-
-## BLOCKED 清单
-
-| 项 | 原因 | 回收 |
-|---|---|---|
-| native BN_Anim_*（DComp 宿主） | 本机无 MSVC；代码未写（不预写不可验证的 C++） | 下冲刺按 v2.2 §3 实现，ci.yml 已具备 /W4 /WX 验证能力 |
-| Wine 运行期冒烟 | 开发机网络无法拉取 Wine 发行包（三次尝试，100MB 级下载中断） | 运行期目视验证沿用 zip 内测试清单；CI windows-latest 是编译+测试终审 |
-| 时钟报错根因终审 | 静态审查全链路无必现抛点；需要真机 logs 的一次异常堆栈 | 防御修复已上线（异常不弹框且必落日志）；所有者回传日志行即可闭环 |
+- 推送分支 → CI windows-latest 终审（0W0E + 1381 基线 + NativeSmoke + 截图取证）
+- 真机验收：zip 内 测试清单.txt（B 节四条最小化路径为本轮核心）
+- 所有者回传 logs：钩子层状态行「CBT 前置钩子已挂载」= 真替换生效

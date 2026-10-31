@@ -76,7 +76,7 @@ internal sealed class DockContextMenuExecutor
                 case DockContextAction.CloseAllWindows:
                 case DockContextAction.Quit: CloseAll(menu.Input.Windows, entry.Action); break;
                 case DockContextAction.CloseWindow: CloseGraceful(entry.WindowHandle); break;
-                case DockContextAction.Minimize: ShowWindow(entry.WindowHandle, NativeMethods.SwMinimize); break;
+                case DockContextAction.Minimize: App.MinimizeWindow(entry.WindowHandle); break;
                 case DockContextAction.MaximizeOrRestore: ToggleMaximize(entry.WindowHandle); break;
                 case DockContextAction.OpenRecycleBin: RecycleBin.Open(); break;
                 case DockContextAction.EmptyRecycleBin: RecycleBin.Empty(); break;

@@ -101,6 +101,13 @@ public sealed class MinimizeAnimator : IDisposable
     /// <summary>已报过"首窗出现"的 pid：Dock 启动弹跳联动每个进程只收口一次。</summary>
     private readonly HashSet<uint> _firstWindowSeenPids = new();
 
+    /// <summary>
+    /// CBT 钩子/静默路径已处理过的窗口 → 时间戳：这些窗口的 EVENT_SYSTEM_MINIMIZESTART
+    /// 随后照样会到（我们自己调 ShowWindow 落位也会触发），不挡就是第二次 genie 叠在同一窗口上。
+    /// 2 秒窗口期足够覆盖"genie 收尾 + 事件到达"的间隔。
+    /// </summary>
+    private readonly Dictionary<IntPtr, long> _hookMinimizedAt = new();
+
     /// <summary>首窗出现回调（DockWindow.NotifyFirstWindowShown；null = 无联动）。</summary>
     private readonly Action<string>? _firstWindowShown;
 
@@ -423,6 +430,13 @@ public sealed class MinimizeAnimator : IDisposable
     /// <summary>最小化：抓一帧（或取缓存帧）盖在原位，再把替身收进该应用在 Dock 上的图标。</summary>
     private void PlayMinimize(IntPtr hwnd, string source)
     {
+        // CBT 钩子/静默路径已真替换过的事件不再补播（防双播）
+        if (_hookMinimizedAt.TryGetValue(hwnd, out var handledAt) && NowMs() - handledAt < 2000)
+        {
+            Logger.Info($"动画未播：源={source} 层=无 因=钩子路径已真替换（防双播）");
+            return;
+        }
+
         if (!Admit(hwnd, AnimKind.Minimize, source, out var durationMs, out _)) return;
 
         var p = AnimParamsStore.Current;
@@ -513,6 +527,96 @@ public sealed class MinimizeAnimator : IDisposable
         if (!Admit(hwnd, AnimKind.Minimize, "Dock", out var durationMs, out _)) return;
         var icon = IconRectFor(sourceRect, _dockTarget(hwnd));
         StartGenie(image, sourceRect, icon, durationMs, reverse: false, "Dock", "预抓帧", 0);
+    }
+
+    /// <summary>
+    /// CBT 钩子路径的真替换入口：注入侧已拦下原生最小化并交帧，本方法<b>全权接管</b>——
+    /// 门禁放行就播 genie，播完静默落位；门禁拒绝/无帧也必须静默落位（原生最小化已被拦，
+    /// 我们不落位窗口就缩不下去，比没有动画严重得多）。
+    /// </summary>
+    public void PlayMinimizeFromHook(IntPtr hwnd, BitmapSource? image, Rect sourceRect)
+    {
+        var durationMs = 0;
+        var canPlay = IsRunning
+                      && image is not null
+                      && sourceRect.Width >= MinShellSize && sourceRect.Height >= MinShellSize
+                      && Admit(hwnd, AnimKind.Minimize, "CBT钩子", out durationMs, out _);
+        if (canPlay)
+        {
+            var icon = IconRectFor(sourceRect, _dockTarget(hwnd));
+            LogGeometry("CBT钩子", "钩子帧", hwnd, sourceRect, icon);
+            Logger.Info($"CBT 钩子接管：0x{hwnd.ToInt64():X} 已拦原生最小化，genie 真替换开播 "
+                        + $"帧={image!.PixelWidth}×{image.PixelHeight}");
+            _hookMinimizedAt[hwnd] = NowMs();
+            StartGenie(image!, sourceRect, icon, durationMs, reverse: false, "CBT钩子", "钩子帧", 0,
+                afterDone: () => SilentMinimize(hwnd, "genie 收尾落位"));
+            return;
+        }
+
+        SilentMinimize(hwnd, "门禁拒绝/无帧（钩子已拦原生，必须补落位）");
+    }
+
+    /// <summary>
+    /// 静默落位：关 DWM 过渡 → ShowWindow(SW_MINIMIZE) → 还过渡。
+    /// 调用方必须已经接管这次最小化（钩子拦下原生 / Dock 主动路径），否则会出现"双重动画"。
+    /// </summary>
+    public void SilentMinimize(IntPtr hwnd, string reason)
+    {
+        try
+        {
+            _hookMinimizedAt[hwnd] = NowMs();   // 我们自己的落位也会触发 MINIMIZESTART，同样要防双播
+            MinimizeHookClient.Suppress(hwnd);  // 钩子层放行：这是程序化最小化，不是用户动作
+            var transitions = NativeMethods.DwmwaTransitionsForceDisabled;
+            int on = 1;
+            NativeMethods.DwmSetWindowAttribute(hwnd, transitions, ref on, sizeof(int));
+            NativeMethods.ShowWindow(hwnd, NativeMethods.SwMinimize);
+            int off = 0;
+            NativeMethods.DwmSetWindowAttribute(hwnd, transitions, ref off, sizeof(int));
+            Logger.Info($"最小化落位：0x{hwnd.ToInt64():X} 静默完成（{reason}）");
+        }
+        catch (Exception ex)
+        {
+            Logger.Warn($"静默落位异常（0x{hwnd.ToInt64():X}）：{ex.GetType().Name} {ex.Message}");
+        }
+        finally
+        {
+            MinimizeHookClient.Suppress(IntPtr.Zero);
+        }
+    }
+
+    /// <summary>
+    /// 主动路径（Dock 图标点击/右键菜单/顶栏菜单/热角）共用的真替换最小化：
+    /// 预抓帧（窗口还画着）→ 抑制钩子 + 关 DWM 过渡 → ShowWindow 静默落位 → genie（预抓帧）。
+    /// 动画器不可用时回退系统最小化（原生动画照旧，功能不丢）。
+    /// </summary>
+    public void MinimizeNow(IntPtr hwnd)
+    {
+        if (!IsRunning || hwnd == IntPtr.Zero || NativeMethods.IsIconic(hwnd))
+        {
+            NativeMethods.ShowWindow(hwnd, NativeMethods.SwMinimize);
+            return;
+        }
+
+        var (image, rect) = PreCapture(hwnd);
+        MinimizeHookClient.Suppress(hwnd);
+        try
+        {
+            var transitions = NativeMethods.DwmwaTransitionsForceDisabled;
+            int on = 1;
+            NativeMethods.DwmSetWindowAttribute(hwnd, transitions, ref on, sizeof(int));
+            NativeMethods.ShowWindow(hwnd, NativeMethods.SwMinimize);
+            int off = 0;
+            NativeMethods.DwmSetWindowAttribute(hwnd, transitions, ref off, sizeof(int));
+        }
+        finally
+        {
+            MinimizeHookClient.Suppress(IntPtr.Zero);
+        }
+
+        if (image is not null && rect is { } r)
+            PlayMinimizeFromCapture(hwnd, image, r);
+        else
+            Logger.Info($"动画未播：源=Dock 层=无 因=预抓失败（窗口已静默最小化，无双重动画）");
     }
 
     /// <summary>前台补采的在飞标志（0 = 空闲）：同一时刻至多一张，防 alt-tab 风暴叠抓。</summary>
@@ -616,7 +720,7 @@ public sealed class MinimizeAnimator : IDisposable
 
     /// <summary>按设置选效果：genie（灯罩网格/条带）、zoom（缩放淡出）、suck（更紧的吸吮）。</summary>
     private void StartGenie(BitmapSource image, Rect windowRect, Rect iconRect, int durationMs, bool reverse,
-        string source, string layer, double ageMs)
+        string source, string layer, double ageMs, Action? afterDone = null)
     {
         var effect = SettingsService.Current.MinimizeEffect;
         var engine = EffectiveEngine(AnimParamsStore.Current.Engine);
@@ -624,22 +728,22 @@ public sealed class MinimizeAnimator : IDisposable
         // native 场景渲染器尚未提供动画宿主（BN_Anim_* 未实现）：如实回退 mesh，日志写生效值
         if (effect == "zoom")
         {
-            StartZoomEffect(image, windowRect, iconRect, durationMs, reverse, source, layer, ageMs);
+            StartZoomEffect(image, windowRect, iconRect, durationMs, reverse, source, layer, ageMs, afterDone);
             return;
         }
         if (effect == "suck")
         {
-            StartStripGenie(image, windowRect, iconRect, durationMs, reverse, 0.15, source, layer, engine, ageMs);
+            StartStripGenie(image, windowRect, iconRect, durationMs, reverse, 0.15, source, layer, engine, ageMs, afterDone);
             return;
         }
         if (engine == "strips")
         {
             StartStripGenie(image, windowRect, iconRect, durationMs, reverse, GenieMath.DefaultLag,
-                source, layer, engine, ageMs);
+                source, layer, engine, ageMs, afterDone);
             return;
         }
         StartMesh(image, ToLamp(windowRect), ToLamp(iconRect),
-            AnimParamsStore.Current.LampSplit, durationMs, reverse, source, layer, ageMs);
+            AnimParamsStore.Current.LampSplit, durationMs, reverse, source, layer, ageMs, afterDone);
     }
 
     /// <summary>
@@ -647,7 +751,7 @@ public sealed class MinimizeAnimator : IDisposable
     /// 画布裁切）；Dock 图标方向的精确位移等 native 场景渲染器接管后再补。
     /// </summary>
     private void StartZoomEffect(BitmapSource image, Rect windowRect, Rect iconRect, int durationMs, bool reverse,
-        string source, string layer, double ageMs)
+        string source, string layer, double ageMs, Action? afterDone = null)
     {
         if (windowRect.Width <= 0 || windowRect.Height <= 0)
         {
@@ -666,7 +770,7 @@ public sealed class MinimizeAnimator : IDisposable
             var r = GenieMath.ZoomLerp(new GenieRect(0, 0, 1, 1), target, e);
             var opacity = 1.0 - 0.35 * GenieMath.Clamp01(e);
             return new List<(GenieRect, double)> { (r, opacity) };
-        }, source, "zoom", layer, ageMs);
+        }, source, "zoom", layer, ageMs, afterDone);
     }
 
     /// <summary>
@@ -675,7 +779,7 @@ public sealed class MinimizeAnimator : IDisposable
     /// 但它只用 2D 绘制，在任何渲染环境下都画得出来。
     /// </summary>
     private void StartStripGenie(BitmapSource image, Rect source, Rect icon, int durationMs, bool reverse,
-        double lag, string sourceName, string layer, string engine, double ageMs)
+        double lag, string sourceName, string layer, string engine, double ageMs, Action? afterDone = null)
     {
         var scaleX = (icon.X + icon.Width / 2 - (source.Left + source.Width / 2)) / source.Width;
         var scaleY = (icon.Y - source.Top) / source.Height;
@@ -687,7 +791,7 @@ public sealed class MinimizeAnimator : IDisposable
             return GenieMath.Sample(p, GenieMath.DefaultSlices, lag,
                         0.5 + scaleX, 1.0 + scaleY, endWidth)
                     .Select(b => (b.Rect, b.Opacity)).ToList();
-        }, sourceName, engine, layer, ageMs);
+        }, sourceName, engine, layer, ageMs, afterDone);
     }
 
     /// <summary>
@@ -727,7 +831,8 @@ public sealed class MinimizeAnimator : IDisposable
     /// <paramref name="split"/> = 两阶段分界（参数表 LampSplit，alpha.15 接线：之前这个参数无消费方）。
     /// </summary>
     private void StartMesh(BitmapSource image, LampGeometry windowRect, LampGeometry iconRect,
-        double split, int durationMs, bool reverse, string source, string layer, double ageMs)
+        double split, int durationMs, bool reverse, string source, string layer, double ageMs,
+        Action? afterDone = null)
     {
         GenieMeshGhost? ghost = null;
         try
@@ -742,7 +847,7 @@ public sealed class MinimizeAnimator : IDisposable
             var stripSource = new Rect(windowRect.X, windowRect.Y, windowRect.Width, windowRect.Height);
             var stripIcon = new Rect(iconRect.X, iconRect.Y, iconRect.Width, Math.Max(1, iconRect.Height));
             StartStripGenie(image, stripSource, stripIcon, durationMs, reverse, GenieMath.DefaultLag,
-                source, layer, "strips", ageMs);
+                source, layer, "strips", ageMs, afterDone);
             return;
         }
 
@@ -757,6 +862,7 @@ public sealed class MinimizeAnimator : IDisposable
             {
                 _meshGhost = null;
                 ghost.Dispose();
+                afterDone?.Invoke();
             });
     }
 
@@ -1094,13 +1200,14 @@ public sealed class MinimizeAnimator : IDisposable
 
     private void StartGhost(BitmapSource image, Rect screenPhysical, int durationMs,
         Func<double, List<(GenieRect Rect, double Opacity)>> sampler,
-        string source, string engine, string layer, double ageMs)
+        string source, string engine, string layer, double ageMs, Action? afterDone = null)
     {
         var ghost = new GhostLayer(image, GenieMath.DefaultSlices, screenPhysical);
         _ghost = ghost;
         ghost.Show();
         ghost.Apply(sampler(0));
-        RunClock(durationMs, source, engine, layer, ageMs, t => ghost.Apply(sampler(t)), CloseGhost);
+        RunClock(durationMs, source, engine, layer, ageMs, t => ghost.Apply(sampler(t)),
+            () => { CloseGhost(); afterDone?.Invoke(); });
     }
 
     private void CloseGhost()
@@ -1177,6 +1284,7 @@ public sealed class MinimizeAnimator : IDisposable
         _knownPids.Clear();
         _openAttempted.Clear();
         _firstWindowSeenPids.Clear();
+        _hookMinimizedAt.Clear();
         _frames.Clear();
         if (_cloakedWindow != IntPtr.Zero)
         {

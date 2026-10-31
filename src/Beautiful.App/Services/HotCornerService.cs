@@ -78,7 +78,7 @@ public sealed class HotCornerService : IDisposable
                 try
                 {
                     foreach (var w in _tracker.Windows)
-                        NativeMethods.ShowWindow(w.Handle, NativeMethods.SwMinimize);
+                        App.MinimizeWindow(w.Handle);
                 }
                 catch (Exception ex) { Logger.Warn($"触发角显示桌面失败: {ex.Message}"); }
                 break;

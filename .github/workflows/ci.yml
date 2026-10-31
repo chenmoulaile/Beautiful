@@ -36,6 +36,28 @@ jobs:
         shell: cmd
         run: tools\NativeSmoke\bin\Release\NativeSmoke.exe src\Beautiful.Native\bin\Release\Beautiful.Native.dll
 
+      # alpha.16：CBT 前置钩子层（Linux MinGW 交叉编译产物随仓交付）——
+      # 校验它是 x64 DLL 且四个导出在位（LoadLibrary + GetProcAddress 探针）
+      - name: HookDll 探针（x64 PE + 四导出）
+        shell: pwsh
+        run: |
+          $dll = "native/hook/Beautiful.Hook.dll"
+          $bytes = [System.IO.File]::ReadAllBytes($dll)
+          if ($bytes[0] -ne 0x4D -or $bytes[1] -ne 0x5A) { throw "MZ missing" }
+          Add-Type -TypeDefinition @'
+          using System; using System.Runtime.InteropServices;
+          public static class HookProbe {
+              [DllImport("kernel32", SetLastError=true)] public static extern IntPtr LoadLibrary(string p);
+              [DllImport("kernel32", SetLastError=true)] public static extern IntPtr GetProcAddress(IntPtr m, string n);
+          }
+          '@
+          $m = [HookProbe]::LoadLibrary((Resolve-Path $dll))
+          if ($m -eq [IntPtr]::Zero) { throw "LoadLibrary failed: $([System.Runtime.InteropServices.Marshal]::GetLastWin32Error())" }
+          foreach ($e in "BH_Install","BH_Uninstall","BH_Suppress","BH_Version") {
+              if ([HookProbe]::GetProcAddress($m, $e) -eq [IntPtr]::Zero) { throw "export missing: $e" }
+          }
+          Write-Host "HookDll OK：x64 PE + 4 导出在位"
+
       - name: 构建（0 警告 0 错误）
         run: dotnet build Beautiful.sln -c Release
 

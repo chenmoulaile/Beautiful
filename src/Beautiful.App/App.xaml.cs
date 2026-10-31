@@ -42,6 +42,18 @@ public partial class App : Application
 
     /// <summary>最小化/最大化动画（v3.2）：持有两条 WinEvent 钩子，退出必须卸。</summary>
     private Animation.MinimizeAnimator? _animator;
+    private Animation.MinimizeHookClient? _hookClient;
+
+    /// <summary>
+    /// 主动最小化的统一入口（alpha.16）：Dock 图标点击/右键菜单/顶栏菜单/热角全部走这里。
+    /// 有动画器 → 真替换（预抓帧 + 静默落位 + genie）；没有 → 系统最小化（功能不丢）。
+    /// </summary>
+    internal static void MinimizeWindow(IntPtr hwnd)
+    {
+        var animator = (Current as App)?._animator;
+        if (animator is { IsRunning: true } && hwnd != IntPtr.Zero) animator.MinimizeNow(hwnd);
+        else NativeMethods.ShowWindow(hwnd, NativeMethods.SwMinimize);
+    }
 
     /// <summary>系统最小化动画接管（v3.0 §Q2-2）：退出必须还原用户原来的 SPI_SETANIMATION 值。</summary>
     private Animation.SystemAnimationSuppressor? _animSuppressor;
@@ -145,6 +157,10 @@ public partial class App : Application
                     _animator = new Animation.MinimizeAnimator(
                         hwnd => _dock?.IconRectPhysical(hwnd),
                         name => _dock?.NotifyFirstWindowShown(name));
+
+                    // alpha.16：CBT 前置钩子层（自制原生 DLL，MinGW 交叉编译）。
+                    // 在原生最小化动画开始前拦下并交帧，genie 真替换。装不上只降级回事后路径。
+                    _hookClient = new Animation.MinimizeHookClient(_animator);
 
                     // v3.0 §Q2-2：接管系统"缩向任务栏"动画，消除两条动画打架。
                     // 只在本程序真的会播动画时才接管；关掉动画功能就等于把系统动画原样还给用户。
@@ -447,6 +463,8 @@ public partial class App : Application
         _launchpadHotkey = null;
         _tray?.Dispose();
         _tray = null;
+        _hookClient?.Dispose();     // CBT 钩子必须卸载（注入组件的红线）
+        _hookClient = null;
         _animator?.Dispose();   // WinEvent 钩子必须卸载（幂等）
         _animator = null;
         _animSuppressor?.Dispose();   // SPI_SETANIMATION 必须还原成用户原值（幂等）
@@ -1241,6 +1259,8 @@ public partial class App : Application
             _volumeOsd = null;
             TopBar.NotificationBannerHost.CloseAll();
             _dock?.Close();          // DockWindow.OnClosing：AppBar ABM_REMOVE（hwnd 销毁前）
+            _hookClient?.Dispose();  // CBT 钩子：退出过程中任何最小化都不该再被拦
+            _hookClient = null;
             _animator?.Dispose();    // WinEvent 钩子：退出过程中任何一次最小化都不该再起动画
             _animator = null;
             _animSuppressor?.Dispose();   // 系统动画还原必须在退出链里完成（红线：全局状态全挂 ExitApp）

@@ -334,6 +334,11 @@ internal static partial class NativeMethods
     /// 与上面 14（查询 cloak 状态）是一对：13 写、14 读。</summary>
     public const int DwmwaCloak = 13;
 
+    /// <summary>DWMWA_TRANSITIONS_FORCEDISABLED(3)：禁掉该窗口的 DWM 缩放过渡（最小化/还原动画）。
+    /// alpha.16 的"静默落位"用：钩子拦下原生最小化后，我们播 genie、再关过渡 + ShowWindow 落位，
+    /// 原生动画不再与替身打架。用完即还原（0），不长期占用该属性。</summary>
+    public const int DwmwaTransitionsForceDisabled = 3;
+
     // ---------- DWM 系统背板（v3 已从 UI 表面路径退役）----------
     // DWMWA_SYSTEMBACKDROP_TYPE(38) / DWMWA_MICA_EFFECT(1029) / DWMWA_USE_IMMERSIVE_DARK_MODE(20)
     // 已删除：真机取证证明"非分层窗口 + 玻璃层 + 半透明内容"并不会
