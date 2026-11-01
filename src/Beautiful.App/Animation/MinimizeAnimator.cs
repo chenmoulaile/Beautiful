@@ -90,6 +90,23 @@ public sealed class MinimizeAnimator : IDisposable
     /// <summary>前台帧缓存（兜底捕获层）。采样在后台线程，查询在 UI 线程。</summary>
     private readonly ForegroundFrameCache _frames = new();
 
+    /// <summary>
+    /// alpha.26 新引擎：<b>DWM 实况缩略图 genie</b>（零抓帧、零预渲染，事件到手即起播）。
+    /// 惰性创建；连续失败 3 次自动停用，本会话退回旧图像链路。26H2 真机日志结论：
+    /// PrintWindow 半瘫、mesh 预渲染迟到 ~1s，而这台机器上唯一被证明可靠的实时画面通道
+    /// 就是 DWM 缩略图（悬停预览 hr=0 全通过）——动画引擎因此长在它上面。
+    /// </summary>
+    private DwmLiveGhost? _live;
+    private int _liveFailures;
+
+    /// <summary>
+    /// hwnd → 最后一次<b>非图标</b>的窗口矩形（物理像素）。事件走系统队列送达时窗口总是已
+    /// iconic、GetWindowRect 只会给出 (-32000) 哨兵——这是 alpha.25 及以前
+    /// <c>几何对账=无幽灵（未起播）</c>的根因。本表是事件路径唯一的可信几何来源：
+    /// LOCATIONCHANGE / OBJECT_SHOW / 启动播种三处喂入，最小化哨兵矩形绝不进表。
+    /// </summary>
+    private readonly Dictionary<IntPtr, RECT> _lastGoodRect = new();
+
     /// <summary>放行门禁（风暴/并发/节流/排除/全屏）。</summary>
     private readonly AnimPolicy _policy = new(AnimParamsStore.Current);
 
@@ -135,8 +152,38 @@ public sealed class MinimizeAnimator : IDisposable
             0, 0, WinEventOutOfContext | WinEventSkipOwnProcess);
 
         ApplyExclusions();
+        SeedKnownRects();
         BuildMountStatus();
         StartFrameSampler();
+    }
+
+    /// <summary>
+    /// 启动播种：把存量普通窗口的当前矩形喂进 <see cref="_lastGoodRect"/>。
+    /// 只在启动后第一次最小化的窗口（从未触发过 LOCATIONCHANGE）没有这张表，
+    /// 会在事件路径被“无最后已知矩形”挡住——用一次 EnumWindows 把这个窗口期补掉。
+    /// </summary>
+    private void SeedKnownRects()
+    {
+        var ownPid = (uint)Environment.ProcessId;
+        var seeded = 0;
+        NativeMethods.EnumWindows((hwnd, _) =>
+        {
+            try
+            {
+                if (!NativeMethods.IsWindowVisible(hwnd) || NativeMethods.IsIconic(hwnd)) return true;
+                if (NativeMethods.GetWindowThreadProcessId(hwnd, out var pid) == 0 || pid == ownPid) return true;
+                if (!NativeMethods.GetWindowRect(hwnd, out var r)) return true;
+                if (r.Right - r.Left < MinShellSize || r.Bottom - r.Top < MinShellSize) return true;
+                _lastGoodRect[hwnd] = r;
+                seeded++;
+            }
+            catch
+            {
+                // 枚举回调里的任何异常只跳过该窗口
+            }
+            return true;
+        }, IntPtr.Zero);
+        Logger.Info($"genie 几何表：启动播种 {seeded} 个存量窗口矩形");
     }
 
     /// <summary>动画子系统未启用的原因（设置页/诊断块用）；null = 正常运行。</summary>
@@ -289,8 +336,14 @@ public sealed class MinimizeAnimator : IDisposable
                 else if (_lastRect.Count > 512)
                 {
                     _lastRect.Clear();   // 只缓存"见过的窗口"，超上限整体重来，不做 LRU 的复杂度
+                    _lastGoodRect.Clear();
                 }
                 _lastRect[hwnd] = (rect, zoomed);
+                // alpha.26：非图标矩形才是"最后已知好矩形"。最小化本身也会发 LOCATIONCHANGE
+                // （rect=-32000 哨兵），那种样本绝不能进表——尺寸/图标位双重判定。
+                if (!NativeMethods.IsIconic(hwnd) && rect.Right > rect.Left && rect.Bottom > rect.Top
+                    && rect.Right - rect.Left >= MinShellSize && rect.Bottom - rect.Top >= MinShellSize)
+                    _lastGoodRect[hwnd] = rect;
                 return;
             }
             if (evt == EventObjectShow)
@@ -350,6 +403,8 @@ public sealed class MinimizeAnimator : IDisposable
             if (!own && _policy.IsExcludedName(ProcessName(pid))) return;
             if (!NativeMethods.GetWindowRect(hwnd, out var r)) return;
             if (r.Right - r.Left < MinShellSize || r.Bottom - r.Top < MinShellSize) return;
+            // alpha.26：新窗口的首个可信矩形顺手进表（启动后从未移动过的窗口只能从这里获得首次样本）
+            if (!NativeMethods.IsIconic(hwnd)) _lastGoodRect[hwnd] = r;
 
             _openAttempted.Add(hwnd);
             if (_openAttempted.Count > 256) _openAttempted.Clear();
@@ -542,12 +597,18 @@ public sealed class MinimizeAnimator : IDisposable
     // ---------- 动画 ----------
 
     /// <summary>
-    /// 最小化：抓一帧（或取缓存帧）盖在原位，再把替身收进该应用在 Dock 上的图标。
+    /// 最小化：<b>alpha.26 起首选 DWM 实况缩略图 genie</b>——替身像素由 DWM 合成器直接采样
+    /// 源窗口表面，零抓帧、零预渲染，事件到手即起播；旧图像链路（抓帧 + mesh/strips）降为
+    /// DWM 通道建不起来时的退路。
     /// <para>
-    /// 【alpha.25 遮挡重播】不再斗篷/不再 SW_HIDE 代管：替身是不透明全尺寸画面，Show 出来
-    /// 就把真窗口的原矩形完全盖住——原生"缩向任务栏"动画（SPI 接管不可用的机器上会照常播放）
-    /// 被压在替身底下，从用户视角只有 genie 一条动画。窗口状态全程不被我们碰：iconic+可见，
-    /// 任务栏按钮/Dock 跟踪/对账都不受影响（最小化区驻留也因此不再有对账竞态）。
+    /// 【alpha.26 几何修正】事件走系统队列送达时窗口几乎总是已 iconic（真机实测：
+    /// IsIconic=True、rect=-32000 哨兵），GetWindowRect 从此不可信——这正是 alpha.25 及以前
+    /// <c>几何对账=无幽灵（未起播）</c>的根因。可信几何只有一处：LOCATIONCHANGE 持续维护的
+    /// "最后已知非图标矩形"表（启动播种兜底存量窗口）。
+    /// </para>
+    /// <para>
+    /// 【alpha.25 遗留说明】遮挡重播的"不碰窗口状态"原则保留：斗篷/SW_HIDE 代管不再回来，
+    /// 窗口状态全程不被我们碰，任务栏按钮/Dock 跟踪/对账都不受影响。
     /// </para>
     /// </summary>
     private void PlayMinimize(IntPtr hwnd, string source)
@@ -559,7 +620,42 @@ public sealed class MinimizeAnimator : IDisposable
 
         var p = AnimParamsStore.Current;
 
-        if (NativeMethods.IsIconic(hwnd))
+        // ── alpha.26：几何先于一切 ──
+        var iconic = NativeMethods.IsIconic(hwnd);
+        Rect sourceRect;
+        if (!iconic && NativeMethods.GetWindowRect(hwnd, out var rect)
+            && rect.Right > rect.Left && rect.Bottom > rect.Top)
+        {
+            sourceRect = ToRect(rect);
+            _lastGoodRect.Remove(hwnd);
+            _lastGoodRect.Add(hwnd, rect);
+        }
+        else if (_lastGoodRect.TryGetValue(hwnd, out var good) && good.Right > good.Left && good.Bottom > good.Top)
+        {
+            sourceRect = ToRect(good);
+        }
+        else
+        {
+            _policy.Complete(AnimKind.Minimize);
+            Logger.Info(AnimReport.Skipped(source, "无", "无最后已知矩形（启动播种与 LOCATIONCHANGE 均未覆盖）"));
+            return;
+        }
+        if (sourceRect.Width < MinShellSize || sourceRect.Height < MinShellSize)
+        {
+            _policy.Complete(AnimKind.Minimize);
+            Logger.Info(AnimReport.Skipped(source, "无", "窗口过小", $"{sourceRect.Width:0}×{sourceRect.Height:0}"));
+            return;
+        }
+
+        var iconRect = IconRectFor(sourceRect, _dockTarget(hwnd));
+        LogGeometry(source, "DWM实况", hwnd, sourceRect, iconRect);
+
+        // ── alpha.26 新引擎：事件到手即起播（不再等抓帧/合成/建网格）──
+        if (TryPlayLive(hwnd, sourceRect, iconRect, durationMs, reverse: false, source, 0))
+            return;
+
+        // ── 退路：alpha.25 图像链路（DWM 通道连续失败停用时才走到；行为不变）──
+        if (iconic)
         {
             // 事件走系统队列送达时状态早已翻转（真机实测：回调里 IsIconic=True、rect=-16000,-16000）。
             // 画面只能取前台缓存里替这个窗口留的那一帧；龄超过判废线就如实说"没画面"。
@@ -587,20 +683,6 @@ public sealed class MinimizeAnimator : IDisposable
             return;
         }
 
-        if (!NativeMethods.GetWindowRect(hwnd, out var rect))
-        {
-            _policy.Complete(AnimKind.Minimize);
-            Logger.Info(AnimReport.Skipped(source, "无", "读窗口矩形失败"));
-            return;
-        }
-        var sourceRect = ToRect(rect);
-        if (sourceRect.Width < MinShellSize || sourceRect.Height < MinShellSize)
-        {
-            _policy.Complete(AnimKind.Minimize);
-            Logger.Info(AnimReport.Skipped(source, "无", "窗口过小", $"{sourceRect.Width:0}×{sourceRect.Height:0}"));
-            return;
-        }
-
         var image = GenieFrameSource.MakeOpaque(Capture(hwnd, source));
         if (image is null)
         {
@@ -610,7 +692,6 @@ public sealed class MinimizeAnimator : IDisposable
         var layer = _lastLayer;
         _frames.Put(hwnd, image, sourceRect);   // 留一份：最小化后悬停预览与后续补播都靠它
 
-        var iconRect = IconRectFor(sourceRect, _dockTarget(hwnd));
         LogGeometry(source, layer, hwnd, sourceRect, iconRect);
         StartGenie(image, sourceRect, iconRect, durationMs, reverse: false, source, layer, 0);
     }
@@ -631,6 +712,9 @@ public sealed class MinimizeAnimator : IDisposable
 
         if (!NativeMethods.GetWindowRect(hwnd, out var rect)) return (null, null);
         var sourceRect = ToRect(rect);
+        // alpha.26：预抓矩形 = ShowWindow 之前的准确几何，顺手进 lastGoodRect 表（tile 宽高比也靠它）
+        _lastGoodRect.Remove(hwnd);
+        _lastGoodRect.Add(hwnd, rect);
         var image = GenieFrameSource.MakeOpaque(WindowCapture.Capture(hwnd, out var layer));
         if (image is null)
         {
@@ -653,6 +737,9 @@ public sealed class MinimizeAnimator : IDisposable
             return;   // 门禁拒绝：Dock 链路已 ShowWindow(SW_MINIMIZE)，原生动画自然播完
         }
         var icon = IconRectFor(sourceRect, _dockTarget(hwnd));
+        // alpha.26：预抓矩形 = 最小化前的准确几何，DWM 实况 genie 首选（预抓位图只作 tile 兼退路）
+        if (TryPlayLive(hwnd, sourceRect, icon, durationMs, reverse: false, "Dock", 0))
+            return;
         // 预抓帧入替前同样过实心合成；合成器对非空输入不会返回 null（?? image 兜底保型）
         StartGenie(GenieFrameSource.MakeOpaque(image) ?? image, sourceRect, icon, durationMs, reverse: false, "Dock", "预抓帧", 0);
     }
@@ -771,7 +858,17 @@ public sealed class MinimizeAnimator : IDisposable
             Logger.Info(AnimReport.Skipped("MINIMIZEEND", "无", "窗口矩形为零"));
             return;
         }
+        // 还原后的矩形是新的可信几何：顺手进表（tile 宽高比来源）
+        _lastGoodRect.Remove(hwnd);
+        _lastGoodRect.Add(hwnd, rect);
 
+        var icon = IconRectFor(sourceRect, _dockTarget(hwnd));
+        // ── alpha.26 新引擎：从 Dock tile 长回原尺寸（用户点名的"还原其实根本就没有"就修这条）──
+        LogGeometry("MINIMIZEEND", "DWM实况", hwnd, sourceRect, icon);
+        if (TryPlayLive(hwnd, sourceRect, icon, durationMs, reverse: true, "MINIMIZEEND", 0))
+            return;
+
+        // ── 退路：alpha.25 图像链路 ──
         // 斗篷窗口照常被 PrintWindow 抓到（内容仍在合成），且此刻矩形已有效：拿到的就是"即将现身"的画面
         var image = GenieFrameSource.MakeOpaque(Capture(hwnd, "MINIMIZEEND"));
         if (image is null)
@@ -783,7 +880,6 @@ public sealed class MinimizeAnimator : IDisposable
         var layer = _lastLayer;
         _frames.Put(hwnd, image, sourceRect);
 
-        var icon = IconRectFor(sourceRect, _dockTarget(hwnd));
         LogGeometry("MINIMIZEEND", layer, hwnd, sourceRect, icon);
         // 【alpha.25 遮挡重播】不再藏窗：替身第一帧 = 原矩形全尺寸不透明画面，原生
         // "从任务栏长回来"的动画被替身压在底下；放完替身关闭，真窗口就在原地。
@@ -1078,8 +1174,55 @@ public sealed class MinimizeAnimator : IDisposable
         catch (InvalidOperationException) { /* 已被关掉：动画是尽力而为的东西 */ }
     }
 
-    /// <summary>两条动画共用"同一时刻只有一个替身"的闸门：网格与条带谁在跑都算占用。</summary>
-    private bool Busy => _ghost is not null || _meshGhost is not null;
+    /// <summary>两条动画共用"同一时刻只有一个替身"的闸门：网格、条带与 DWM 实况谁在跑都算占用。</summary>
+    private bool Busy => _ghost is not null || _meshGhost is not null || _live is { IsActive: true };
+
+    /// <summary>
+    /// 该窗口最后已知的非图标物理矩形（Dock 最小化 tile 的宽高比来源；无样本返回 null）。
+    /// alpha.26 起 GetWindowRect 在窗口 iconic 后只有 (-32000) 哨兵，tile 等比缩略图只认这张表。
+    /// </summary>
+    public Rect? LastKnownRectPhysical(IntPtr hwnd)
+        => _lastGoodRect.TryGetValue(hwnd, out var r) && r.Right > r.Left && r.Bottom > r.Top
+            ? ToRect(r)
+            : null;
+
+    /// <summary>
+    /// alpha.26 新引擎入口：<b>DWM 实况缩略图 genie</b>。true = 已接管本次动画（RunClock 驱动）；
+    /// false = 通道不可用（连续失败 3 次自动停用），调用方走旧图像链路。
+    /// <para>
+    /// 【为什么它能修 26H2 的三件事】替身像素由 DWM 合成器直接采样源窗口表面：
+    /// ① 不再抓帧 → <c>抓帧不可用/纯色判废</c> 整条故障面消失；② 不再预渲染 →
+    /// mesh 那 ~500ms 起播延迟消失，事件到手即起播；③ tile 与动画同一通道 →
+    /// 缩略图与 genie 内容天然一致，最小化/还原/条目三处观感对齐。
+    /// </para>
+    /// </summary>
+    private bool TryPlayLive(IntPtr hwnd, Rect sourceRect, Rect iconRect, int durationMs, bool reverse,
+        string source, double ageMs)
+    {
+        if (_liveFailures >= 3) return false;
+        try
+        {
+            _live ??= new DwmLiveGhost();
+            if (!_live.Begin(hwnd, sourceRect, iconRect))
+            {
+                _liveFailures++;
+                if (_liveFailures >= 3)
+                    Logger.Warn("DWM 实况 genie 连续 3 次建不起来，本会话停用（退回图像链路）");
+                return false;
+            }
+        }
+        catch (Exception ex)
+        {
+            _liveFailures++;
+            Logger.Warn($"DWM 实况 genie 异常（退回图像链路）：{ex.GetType().Name} {ex.Message}");
+            return false;
+        }
+
+        RunClock(durationMs, source, "dwmlive", "DWM实况", ageMs,
+            t => _live?.Apply(t, reverse),
+            () => _live?.Finish());
+        return true;
+    }
 
     private static Rect ToRect(RECT r) => new(r.Left, r.Top, r.Right - r.Left, r.Bottom - r.Top);
 
@@ -1137,7 +1280,10 @@ public sealed class MinimizeAnimator : IDisposable
         _lastRect.Clear();
         _processNames.Clear();
         _openAttempted.Clear();
+        _lastGoodRect.Clear();
         _frames.Clear();
+        _live?.Dispose();
+        _live = null;
         _meshGhost?.Dispose();
         _meshGhost = null;
         CloseGhost();

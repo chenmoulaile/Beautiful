@@ -100,6 +100,14 @@ public partial class DockWindow : AcrylicWindow
     private DispatcherTimer? _previewDwell;
     private DockItem? _previewPending;
 
+    // ---------- 最小化区实况缩略图（alpha.26）----------
+    // 每条最小化条目一只纯 Win32 弹层（DWM 缩略图、输入全穿透），跟随条目物理矩形。
+    // 生命周期随 Dock：OnSourceInitialized 建，OnClosed 全量注销+销毁。
+    private MinimizedTileLayer? _minTiles;
+    private bool _minTilesSyncQueued;
+    private DispatcherTimer? _minTilesTimer;
+    private readonly List<(IntPtr hwnd, Rect rect)> _minTileScratch = new();
+
     private IntPtr _hwnd;
     private uint _appbarMsg;
     private uint _taskbarCreatedMsg;
@@ -153,6 +161,8 @@ public partial class DockWindow : AcrylicWindow
             frameProvider: hwnd => _animator?.LastFrameFor(hwnd));
         DataContext = _vm;
         WireSurface();
+        // alpha.26：最小化区实况 tile —— 条目集合一变就对齐（最小化/还原/关闭都经 Reconcile 写回 Items）
+        _vm.Items.CollectionChanged += (_, _) => QueueMinTileSync();
         // 【终审 I-6】ThemeChanged 静态订阅移出构造函数（原 :94）：构造期任何一步抛异常都会留下
         // 一个半构造、无 HWND 却永久挂在静态事件上的僵尸实例——与 TopBarWindow/EnsureTopBar、
         // SwitcherService 已修过的同类泄漏一致。订阅移到 OnSourceInitialized（Show/Handle 生成时），
@@ -204,6 +214,43 @@ public partial class DockWindow : AcrylicWindow
         return new System.Windows.Rect(topLeft.X, topLeft.Y, dpi.X - topLeft.X, dpiY.Y - topLeft.Y);
     }
 
+    // ---------- 最小化区实况 tile（alpha.26）----------
+
+    /// <summary>去重排队：同一帧多次触发只跑一次（MouseMove 每帧都来，真活儿交给 Background 队列）。</summary>
+    private void QueueMinTileSync()
+    {
+        if (_minTiles is null || _minTilesSyncQueued) return;
+        _minTilesSyncQueued = true;
+        Dispatcher.BeginInvoke(() =>
+        {
+            _minTilesSyncQueued = false;
+            SyncMinTiles();
+        }, DispatcherPriority.Background);
+    }
+
+    /// <summary>把当前最小化条目集合与物理矩形交给 tile 层（增量对齐，可高频调用）。</summary>
+    private void SyncMinTiles()
+    {
+        if (_minTiles is null) return;
+        try
+        {
+            _minTileScratch.Clear();
+            foreach (var item in _vm.Items)
+            {
+                if (item.Kind != DockItemKind.MinimizedWindow) continue;
+                if (item.WindowHandle is not { } handle || handle == IntPtr.Zero) continue;
+                if (IconRectPhysical(handle) is not { } rect) continue;
+                _minTileScratch.Add((handle, rect));
+            }
+            _minTiles.Sync(_minTileScratch);
+        }
+        catch (Exception ex)
+        {
+            // tile 同步失败不影响 Dock 本体：记一条，下个 200ms 周期照常重试
+            Logger.Warn($"最小化 tile 同步异常（已隔离）：{ex.GetType().Name} {ex.Message}");
+        }
+    }
+
     /// <summary>DockSurface 接线：光标取样 + 左键激活 + 右键条目菜单 + 悬停预览（Task 13）+ 拖放固定/排序（v3 T5）。</summary>
     private void WireSurface()
     {
@@ -216,6 +263,8 @@ public partial class DockWindow : AcrylicWindow
         Surface.MouseMove += SnapshotForegroundAtHover;
         // 悬停预览：MouseMove 判定当前条目并起/重置 350ms 驻留；离开条目行即收起。
         Surface.MouseMove += OnSurfaceMouseMove;
+        // alpha.26：放大场逐帧挪动条目，最小化区实况 tile 同步跟手（去重排队，一帧最多一次）
+        Surface.MouseMove += (_, _) => QueueMinTileSync();
         Surface.MouseLeave += (_, _) => CancelPreview();
 
         // 内部拖拽（排序 / 转固定 / 甩出取消固定）的完成回调：策略在窗口，几何与状态机在渲染器。
@@ -372,6 +421,12 @@ public partial class DockWindow : AcrylicWindow
         InitWidget();
         ApplyHideMode(SettingsService.Current.DockHideMode, persist: false);
         ApplyEdge(SettingsService.Current.DockEdge, persist: false);
+        // alpha.26：最小化区实况 tile 宿主（DWM 缩略图、输入全穿透），宽高比取动画器的最后已知矩形
+        _minTiles = new MinimizedTileLayer(_hwnd, hwnd => _animator?.LastKnownRectPhysical(hwnd));
+        _minTilesTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(200) };
+        _minTilesTimer.Tick += (_, _) => SyncMinTiles();
+        _minTilesTimer.Start();
+        SyncMinTiles();
     }
 
     // ---------- 左右停靠（实验） ----------
@@ -1028,6 +1083,10 @@ public partial class DockWindow : AcrylicWindow
         _progress = null;
         _autoHideTimer?.Stop();
         _autoHideTimer = null;
+        _minTilesTimer?.Stop();
+        _minTilesTimer = null;
+        _minTiles?.Dispose();
+        _minTiles = null;
         _widgetTimer?.Stop();
         _widgetTimer = null;
         _weather?.Dispose();
