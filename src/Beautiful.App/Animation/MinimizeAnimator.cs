@@ -50,6 +50,7 @@ public sealed class MinimizeAnimator : IDisposable
     private const uint EventSystemMinimizeEnd = 0x0017;
     private const uint EventObjectLocationChange = 0x8004;
     private const uint EventObjectShow = 0x8002;
+    private const uint EventObjectDestroy = 0x8001;   // alpha.27：窗口销毁（关闭动画触发源）
     private const uint ObjidWindow = 0;
     private const uint WinEventOutOfContext = 0x00000000;
     private const uint WinEventSkipOwnProcess = 0x00000002;
@@ -70,6 +71,7 @@ public sealed class MinimizeAnimator : IDisposable
     private IntPtr _minimizeHook = IntPtr.Zero;
     private IntPtr _locationHook = IntPtr.Zero;
     private IntPtr _showHook = IntPtr.Zero;
+    private IntPtr _destroyHook = IntPtr.Zero;
 
     /// <summary>窗口过渡接管器（alpha.21）：原生动画的开关与可见性代管都归它。可为 null（极端降级）。</summary>
     private readonly WindowTransitionGuard? _guard;
@@ -113,6 +115,11 @@ public sealed class MinimizeAnimator : IDisposable
     /// <summary>hwnd → 上一次的 (矩形, 是否最大化)。只为识别"从非最大化跳到最大化"那一下。</summary>
     private readonly Dictionary<IntPtr, (RECT Rect, bool Zoomed)> _lastRect = new();
 
+    // alpha.27：窗口身份表（类名 + 进程号，一一对应 hwnd）。EVENT_OBJECT_DESTROY 到手时
+    // 窗口已经销毁——类名/进程号/矩形全部查不出来，关闭动画的"值不值得播"判定
+    // 只能靠生前留下的身份证（与 _lastRect 同一个 512 上限、同一次整体重来）。
+    private readonly Dictionary<IntPtr, (string Class, uint Pid)> _identityByHwnd = new();
+
     /// <summary>pid → 进程名。排除清单与日志都要它；每 3-4 分钟才有新 pid，缓存足够。</summary>
     private readonly Dictionary<uint, string> _processNames = new();
 
@@ -150,6 +157,11 @@ public sealed class MinimizeAnimator : IDisposable
         _showHook = NativeMethods.SetWinEventHook(
             EventObjectShow, EventObjectShow, IntPtr.Zero, _proc,
             0, 0, WinEventOutOfContext | WinEventSkipOwnProcess);
+        // OBJECT_DESTROY（v2.2 §4 关闭项，默认关）：窗口销毁的最后一刻。同样跳过自家进程——
+        // 自家窗口一律走 WindowCloseFx 真动画，不进这条事件路径。
+        _destroyHook = NativeMethods.SetWinEventHook(
+            EventObjectDestroy, EventObjectDestroy, IntPtr.Zero, _proc,
+            0, 0, WinEventOutOfContext | WinEventSkipOwnProcess);
 
         ApplyExclusions();
         SeedKnownRects();
@@ -175,6 +187,8 @@ public sealed class MinimizeAnimator : IDisposable
                 if (!NativeMethods.GetWindowRect(hwnd, out var r)) return true;
                 if (r.Right - r.Left < MinShellSize || r.Bottom - r.Top < MinShellSize) return true;
                 _lastGoodRect[hwnd] = r;
+                var cls = NativeMethods.GetWindowClassName(hwnd);   // alpha.27：播种时就把身份证一起建好
+                _identityByHwnd[hwnd] = (cls, pid);
                 seeded++;
             }
             catch
@@ -206,6 +220,7 @@ public sealed class MinimizeAnimator : IDisposable
         var hooksOk = _minimizeHook != IntPtr.Zero;
         var locOk = _locationHook != IntPtr.Zero;
         var showOk = _showHook != IntPtr.Zero;
+        var destroyOk = _destroyHook != IntPtr.Zero;
 
         if (!hooksOk)
         {
@@ -219,6 +234,7 @@ public sealed class MinimizeAnimator : IDisposable
         var degraded = new List<string>();
         if (!locOk) degraded.Add("LOCATIONCHANGE 钩子失败（最大化动画不可用）");
         if (!showOk) degraded.Add("OBJECT_SHOW 钩子失败（打开动画不可用）");
+        if (!destroyOk) degraded.Add("OBJECT_DESTROY 钩子失败（关闭动画不可用）");
         if (_guard is null) degraded.Add("过渡接管器未装配（原生动画可能与替身叠加）");
         if (!s.MinimizeAnimation) degraded.Add("设置项 MinimizeAnimation 为关");
         if (effectiveEngine != requestedEngine) degraded.Add($"引擎 {requestedEngine} 不可用已回退 {effectiveEngine}");
@@ -226,6 +242,7 @@ public sealed class MinimizeAnimator : IDisposable
         MountStatus = $"动画子系统已挂载：MINIMIZE=0x{_minimizeHook.ToInt64():X} "
                       + $"LOCATION={(locOk ? $"0x{_locationHook.ToInt64():X}" : "失败")} "
                       + $"SHOW={(showOk ? $"0x{_showHook.ToInt64():X}" : "失败")} "
+                      + $"DESTROY={(destroyOk ? $"0x{_destroyHook.ToInt64():X}" : "失败")} "
                       + $"接管器={( _guard is null ? "未装配" : $"托管 {_guard.ManagedCount} 斗篷 {_guard.CloakedCount}" )} "
                       + $"设置=开 请求引擎={requestedEngine} 生效引擎={effectiveEngine} "
                       + $"前台缓存=开 参数[{p.ToLogLine()}]"
@@ -343,7 +360,10 @@ public sealed class MinimizeAnimator : IDisposable
                 // （rect=-32000 哨兵），那种样本绝不能进表——尺寸/图标位双重判定。
                 if (!NativeMethods.IsIconic(hwnd) && rect.Right > rect.Left && rect.Bottom > rect.Top
                     && rect.Right - rect.Left >= MinShellSize && rect.Bottom - rect.Top >= MinShellSize)
+                {
                     _lastGoodRect[hwnd] = rect;
+                    RememberIdentity(hwnd);   // alpha.27：顺带记下类名/进程号（DESTROY 后只剩这张身份证）
+                }
                 return;
             }
             if (evt == EventObjectShow)
@@ -351,11 +371,32 @@ public sealed class MinimizeAnimator : IDisposable
                 HandleWindowShown(hwnd);
                 return;
             }
+            if (evt == EventObjectDestroy)
+            {
+                // alpha.27 关闭动画（默认关）：此刻窗口已经销毁，能做的只有"拿生前的
+                // 缓存帧在原位演完退场"。设置未开时 PlayClose 静默返回——功能没开就
+                // 没有"尝试"，也没有"未播"日志（DESTROY 对菜单/提示窗非常频繁，不能刷屏）。
+                _dispatcher.BeginInvoke(() => PlayClose(hwnd), DispatcherPriority.Render);
+                return;
+            }
         }
         catch
         {
             // 原生回调里连日志都可能抛（Logger 要写文件）：静默吞掉是这里唯一正确的选择
         }
+    }
+
+    /// <summary>
+    /// 记住窗口的类名与进程号（一次性；已在表内的窗口零开销直过）。
+    /// DESTROY 到手时 hwnd 失效，这是 PlayClose 唯一的类名/进程来源。
+    /// </summary>
+    private void RememberIdentity(IntPtr hwnd)
+    {
+        if (_identityByHwnd.ContainsKey(hwnd)) return;
+        if (_identityByHwnd.Count > 512) _identityByHwnd.Clear();   // 与 _lastRect 同一纪律
+        var cls = NativeMethods.GetWindowClassName(hwnd);
+        NativeMethods.GetWindowThreadProcessId(hwnd, out var pid);
+        _identityByHwnd[hwnd] = (cls, pid);
     }
 
     private static bool IsBigJump(RECT from, RECT to)
@@ -404,7 +445,11 @@ public sealed class MinimizeAnimator : IDisposable
             if (!NativeMethods.GetWindowRect(hwnd, out var r)) return;
             if (r.Right - r.Left < MinShellSize || r.Bottom - r.Top < MinShellSize) return;
             // alpha.26：新窗口的首个可信矩形顺手进表（启动后从未移动过的窗口只能从这里获得首次样本）
-            if (!NativeMethods.IsIconic(hwnd)) _lastGoodRect[hwnd] = r;
+            if (!NativeMethods.IsIconic(hwnd))
+            {
+                _lastGoodRect[hwnd] = r;
+                RememberIdentity(hwnd);   // alpha.27：类名/进程号同源记录
+            }
 
             _openAttempted.Add(hwnd);
             if (_openAttempted.Count > 256) _openAttempted.Clear();
@@ -814,6 +859,80 @@ public sealed class MinimizeAnimator : IDisposable
             Logger.Warn($"自家开窗动画失败（直接现身）：{ex.GetType().Name} {ex.Message}");
             reveal();
         }
+    }
+
+    /// <summary>
+    /// 关闭退场（v2.2 §4 关闭项，alpha.27）：默认关（macOS 忠实，README 写明这不是没做完）；
+    /// <c>WindowCloseAnimation=true</c> 时，第三方窗口销毁（OBJECT_DESTROY）用<b>前台缓存帧</b>
+    /// 在原位播 150ms 的 fade+scale→92%（缓存龄超过 <see cref="AnimParams.CloseCacheMaxAgeMs"/> 不播）。
+    /// <para>
+    /// 【为什么只能用缓存帧】DESTROY 事件到手时窗口已经销毁：hwnd 失效，实时抓帧物理上不可能，
+    /// 矩形也只有"最后已知非图标矩形"表可信。所以画面/几何/类名/进程号全部来自生前留下的表，
+    /// 任一缺项都诚实跳过（判废可见化）。
+    /// </para>
+    /// <para>
+    /// 【为什么设置未开时一行日志都不留】DESTROY 对菜单/提示窗/托盘浮层非常频繁；功能没开
+    /// 就没有"尝试"，写"未播"行只是刷屏。开了之后才按判废纪律逐条留痕。
+    /// </para>
+    /// </summary>
+    private void PlayClose(IntPtr hwnd)
+    {
+        // 默认关：静默返回（见方法注释——不判废、不记日志、不碰任何表）
+        if (!SettingsService.Current.WindowCloseAnimation) return;
+
+        // 身份表没有这个窗口：菜单/提示窗一类（从未被记为"正经窗口"），静默跳过
+        if (!_identityByHwnd.TryGetValue(hwnd, out var identity)) return;
+
+        // 高频销毁窗型（菜单/提示/影子/输入法/系统 shell 面）永远不进关闭动画，连日志都不留
+        var cls = identity.Class ?? "";
+        if (cls is "#32768" or "Tooltips_Class32" or "SysShadow" or "Default IME" or "MSCTFIME UI"
+            or "Windows.UI.Core.CoreWindow" or "Shell_TrayWnd" or "Progman" or "WorkerW") return;
+
+        // 几何：最后已知非图标矩形。销毁后 GetWindowRect 只有 (-32000) 哨兵，不能信
+        if (!_lastGoodRect.TryGetValue(hwnd, out var rectRaw))
+        {
+            Logger.Info(AnimReport.Skipped("OBJECT_DESTROY", "无", "无最后已知矩形", $"类={cls}"));
+            return;
+        }
+        var target = ToRect(rectRaw);
+        if (target.Width < MinShellSize || target.Height < MinShellSize)
+        {
+            Logger.Info(AnimReport.Skipped("OBJECT_DESTROY", "无", "窗口过小", $"类={cls}"));
+            return;
+        }
+
+        if (!Admit(hwnd, AnimKind.Close, "OBJECT_DESTROY", out var durationMs, out _))
+            return;   // 门禁拒绝：自然消失（降级安全）
+
+        // 画面：前台缓存帧（龄口径比最小化宽：销毁事件在系统队列里又晚了一拍）
+        var p = AnimParamsStore.Current;
+        if (!_frames.TryGet(hwnd, p.CloseCacheMaxAgeMs, out var image, out var frameRect, out var ageMs))
+        {
+            _policy.Complete(AnimKind.Close);
+            Logger.Info(AnimReport.Skipped("OBJECT_DESTROY", "缓存", "缓存无帧或帧龄超限",
+                $"类={cls} 上限={p.CloseCacheMaxAgeMs}ms"));
+            return;
+        }
+        var composed = GenieFrameSource.MakeOpaque(image);
+        if (composed is null)
+        {
+            _policy.Complete(AnimKind.Close);
+            Logger.Info(AnimReport.Skipped("OBJECT_DESTROY", "缓存", "帧整理失败", $"类={cls}"));
+            return;
+        }
+
+        var layer = $"缓存 {ageMs:0}ms";
+        // 几何以帧矩形为准（画面与矩形是同一时刻抓的）；帧矩形不可信时退最后已知矩形
+        var source = frameRect.Width >= MinShellSize && frameRect.Height >= MinShellSize ? frameRect : target;
+        var dur = durationMs > 0 ? durationMs : p.Scaled(p.CloseDurationMs);
+        var endScale = Math.Clamp(p.CloseEndScale, 0.5, 1.0);
+        LogGeometry("OBJECT_DESTROY", layer, hwnd, source, Rect.Empty);
+        StartGhost(composed, source, dur, t =>
+        {
+            var f = CloseAnimMath.Sample(t, endScale);
+            var r = CloseAnimMath.RectFor(f.Scale);
+            return new List<(GenieRect, double)> { (r, f.Opacity) };
+        }, "OBJECT_DESTROY", "close", layer, ageMs);
     }
 
     /// <summary>
@@ -1275,9 +1394,11 @@ public sealed class MinimizeAnimator : IDisposable
         if (_minimizeHook != IntPtr.Zero) NativeMethods.UnhookWinEvent(_minimizeHook);
         if (_locationHook != IntPtr.Zero) NativeMethods.UnhookWinEvent(_locationHook);
         if (_showHook != IntPtr.Zero) NativeMethods.UnhookWinEvent(_showHook);
-        _minimizeHook = _locationHook = _showHook = IntPtr.Zero;
+        if (_destroyHook != IntPtr.Zero) NativeMethods.UnhookWinEvent(_destroyHook);
+        _minimizeHook = _locationHook = _showHook = _destroyHook = IntPtr.Zero;
         _proc = null;
         _lastRect.Clear();
+        _identityByHwnd.Clear();
         _processNames.Clear();
         _openAttempted.Clear();
         _lastGoodRect.Clear();

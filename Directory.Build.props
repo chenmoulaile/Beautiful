@@ -4,7 +4,7 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <LangVersion>latest</LangVersion>
     <!-- 鐗堟湰鍙峰崟涓€鏉ユ簮锛氭敼杩欓噷锛坰cripts/release.ps1 涓?CI 鍧囪鍙栨鍊硷級 -->
-    <Version>4.0.0-alpha.26</Version>
+    <Version>4.0.0-alpha.27</Version>
     <Product>Beautiful</Product>
     <Company>chenmoulaile</Company>
     <Deterministic>true</Deterministic>

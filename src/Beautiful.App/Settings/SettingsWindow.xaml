@@ -663,6 +663,10 @@
                                   Content="新窗口淡入（实验：跨进程不保证生效）"
                                   Margin="0,8,0,0"
                                   Checked="WindowOpenAnim_Changed" Unchecked="WindowOpenAnim_Changed"/>
+                        <CheckBox x:Name="WindowCloseAnimCheck"
+                                  Content="窗口关闭动画（默认关：macOS 关窗没有动画）"
+                                  Margin="0,8,0,0"
+                                  Checked="WindowCloseAnim_Changed" Unchecked="WindowCloseAnim_Changed"/>
                         <StackPanel Orientation="Horizontal" Margin="0,8,0,0">
                             <TextBlock Text="Dock 隐藏方式" VerticalAlignment="Center"/>
                             <ComboBox x:Name="DockHideCombo" Width="160" Margin="10,0,0,0"

@@ -65,6 +65,18 @@ public sealed record AppSettings
     /// </summary>
     public bool WindowOpenAnimation { get; init; }
 
+    /// <summary>
+    /// 窗口关闭动画（v2.2 §4 关闭项，<b>默认关</b>——macOS 忠实：关窗口没有动画，这不是没做完）。
+    /// <para>
+    /// 打开后：第三方窗口销毁（EVENT_OBJECT_DESTROY）时用<b>前台缓存帧</b>在原位播
+    /// 150ms 的 fade+scale→92% 退场（缓存龄超过 1000ms 不播——画面已经不是"刚才那个窗口"）。
+    /// 画面来自缓存而非实时抓帧：窗口销毁后 hwnd 已失效，实时抓帧物理上不可能。
+    /// 自家窗口（设置/关于本机/访达）始终走真动画（<c>WindowCloseFx</c>），不受这一项控制——
+    /// 自家窗口随时能拿到自己的画面，没有理由不播。
+    /// </para>
+    /// </summary>
+    public bool WindowCloseAnimation { get; init; }
+
     /// <summary>媒体面板失焦是否自动收起。</summary>
     public bool HidePanelOnDeactivate { get; init; } = true;
 

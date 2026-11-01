@@ -1437,6 +1437,13 @@ public partial class FinderWindow : Window
 
     private bool _openAnimated;
 
+    /// <summary>关闭退场（v2.2 §4：自家窗口一律真动画）：fade+scale 演完再真关闭；退出/关停中直接放行。</summary>
+    protected override void OnClosing(CancelEventArgs e)
+    {
+        base.OnClosing(e);
+        if (!e.Cancel && Beautiful.App.Animation.WindowCloseFx.TryBegin(this)) e.Cancel = true;
+    }
+
     // ---------- 行视图模型 ----------
 
     /// <summary>

@@ -154,6 +154,7 @@ public partial class SettingsWindow : Window
         DockWidgetCheck.IsChecked = s.DockWidgetEnabled;
         DockHideCombo.SelectedIndex = s.DockHideMode switch { "auto" => 1, "dim" => 2, _ => 0 };
         WindowOpenAnimCheck.IsChecked = s.WindowOpenAnimation;
+        WindowCloseAnimCheck.IsChecked = s.WindowCloseAnimation;
         DockEdgeCombo.SelectedIndex = s.DockEdge switch { "left" => 1, "right" => 2, _ => 0 };
         HidePanelCheck.IsChecked = s.HidePanelOnDeactivate;
         PreviewCheck.IsChecked = s.PreviewEnabled;
@@ -698,6 +699,21 @@ public partial class SettingsWindow : Window
         var on = WindowOpenAnimCheck.IsChecked == true;
         SettingsService.UpdateAndSave(SettingsService.Current with { WindowOpenAnimation = on });
         if (on) Beautiful.App.Services.WindowOpenAnimator.Reset();
+    }
+
+    /// <summary>窗口关闭动画（v2.2 §4，默认关）：只改设置，下一次窗口销毁时生效。</summary>
+    private void WindowCloseAnim_Changed(object sender, RoutedEventArgs e)
+    {
+        if (_loading) return;
+        var on = WindowCloseAnimCheck.IsChecked == true;
+        SettingsService.UpdateAndSave(SettingsService.Current with { WindowCloseAnimation = on });
+    }
+
+    /// <summary>关闭退场（v2.2 §4：自家窗口一律真动画）：fade+scale 演完再真关闭，异常/关停中直接放行。</summary>
+    protected override void OnClosing(System.ComponentModel.CancelEventArgs e)
+    {
+        base.OnClosing(e);
+        if (!e.Cancel && Animation.WindowCloseFx.TryBegin(this)) e.Cancel = true;
     }
 
     /// <summary>Dock 隐藏方式（P3-T5）：常显 / 自动隐藏 / 半透明，立即生效。</summary>

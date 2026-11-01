@@ -59,6 +59,13 @@ public sealed record AnimParams
     /// <summary>关闭终态缩放（缩到 92% 再消失，避免"硬切"）。</summary>
     public double CloseEndScale { get; init; } = 0.92;
 
+    /// <summary>
+    /// 关闭动画的缓存帧龄上限。比前景缓存龄（700ms）宽：窗口销毁的事件走在系统队列里，
+    /// 到手时往往又晚了一拍——1000ms 是"画面还是用户刚才看到的那个窗口"的宽容口径
+    /// （v2.2 §4 关闭项原文：缓存龄&lt;1000ms 才播）。
+    /// </summary>
+    public int CloseCacheMaxAgeMs { get; init; } = 1000;
+
     // ---------- 捕获 ----------
 
     /// <summary>占位帧就绪重试间隔（打开路径的首帧竞态）。</summary>
@@ -159,6 +166,7 @@ public sealed record AnimParams
             FromIconStartScale = ClampDouble(FromIconStartScale, 0.05, 1.0, 0.3),
             CloseDurationMs = ClampInt(CloseDurationMs, 60, 1000, 150),
             CloseEndScale = ClampDouble(CloseEndScale, 0.5, 1.0, 0.92),
+            CloseCacheMaxAgeMs = ClampInt(CloseCacheMaxAgeMs, 100, 3000, 1000),
             CaptureRetryMs = ClampInt(CaptureRetryMs, 1, 100, 8),
             CaptureRetryCount = ClampInt(CaptureRetryCount, 1, 100, 12),
             ForegroundCacheMaxAgeMs = ClampInt(ForegroundCacheMaxAgeMs, 100, 5000, 700),
@@ -220,7 +228,7 @@ public sealed record AnimParams
         => string.Create(CultureInfo.InvariantCulture,
             $"genie={GenieDurationMs}ms split={LampSplit:0.00} restore={RestoreDurationMs}ms "
             + $"morph={MorphDurationMs}ms settle={SettleDurationMs}ms open={OpenDurationMs}ms/{OpenStartScale:0.00} "
-            + $"close={CloseDurationMs}ms/{CloseEndScale:0.00} 缓存={ForegroundCacheMaxAgeMs}ms/{ForegroundRefreshMs}ms "
+            + $"close={CloseDurationMs}ms/{CloseEndScale:0.00}/缓存{CloseCacheMaxAgeMs}ms 缓存={ForegroundCacheMaxAgeMs}ms/{ForegroundRefreshMs}ms "
             + $"风暴={StormCount}/{StormWindowMs}ms 倍率={SpeedMultiplier:0.0} 引擎={Engine}");
 
     private static int ClampInt(int v, int lo, int hi, int fallback)

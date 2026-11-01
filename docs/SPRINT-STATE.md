@@ -68,6 +68,70 @@ OV-01 四路径真机点按 / OV-02 SPI 接管在所有者系统上的可用性 
 
 ---
 
+## alpha.26（2026-11-01）DWM 实况缩略图引擎（CI 首次全绿 + 首个 CI 产出 Release）
+
+26H2 真机日志三条铁证：PrintWindow 抓帧半瘫（纯色判废/抓帧不可用）、mesh 预渲染起播迟到
+~1s（P95=78ms/帧）、DwmRegisterThumbnail hr=0 全通过。动画引擎改长在唯一被验证可靠的
+DWM 缩略图通道上（详见 commit d33204b）：
+
+1. **DwmLiveGhost**：12 切片实况 genie——rcSource 按源窗口切片，rcDestination 每帧按
+   GenieMath 收拢；切片→单片→图像链三级退化，句柄全数配平。零抓帧、零预渲染，事件到手即起播。
+2. **MinimizedTileLayer**：最小化条目实况缩略图（等比内切、三路跟随同步、输入全穿透）。
+3. **MinimizeAnimator**：lastGoodRect 表根治"事件到手已 iconic、几何=无幽灵"；
+   PlayMinimize/PlayRestore/PlayMinimizeFromCapture 首选 TryPlayLive。
+4. **CI 里程碑**：release workflow（native /W4 /WX → NativeSmoke → build → test → publish →
+   Inno 安装程序 → Release）在 tag v4.0.0-alpha.26 上首次完整跑绿（run 41317924864），
+   Release 资产双件套（Setup.exe 52.8MB + win-x64.zip 75.9MB）由 CI 独占产出。
+   所有者机器无 MSVC 的 native 编译缺口由 CI 补上——"本机不可编译"从此不再是阻塞项。
+
+## alpha.27（2026-11-01）Q4 关闭动画落成（默认关）+ 自家窗口真动画
+
+所有者裁定"先不测试，继续推进"→ 跳过 OV 回填，执行下一动作队列的 Q4 收尾项（SPRINT-STATE
+下一动作 #2 后半）。规格 v3.0-autonomous-sprint.md §4-Q4 原文逐条落实：
+
+1. **第三方关闭退场（默认关）**：`AppSettings.WindowCloseAnimation`（默认 false，macOS 忠实，
+   README 写明"这不是没做完"）。开启后 EVENT_OBJECT_DESTROY 触发 `PlayClose`：前台缓存帧
+   （龄 ≤ 新参数 CloseCacheMaxAgeMs=1000ms）+ 最后已知非图标矩形，150ms fade+scale→92%
+   （easeInQuad，`CloseAnimMath` 纯函数 + 10 单测）。
+   【物理上限，诚实声明】DESTROY 到手时 hwnd 已失效——实时抓帧不可能，画面只能来自缓存，
+   所以只有"最近 1 秒内曾是前台"的窗口有退场；后台窗口关闭诚实跳过（日志一行，判废可见化）。
+2. **窗口身份表**：DESTROY 后类名/进程号/矩形全查不到 → LOCATIONCHANGE/SHOW/启动播种三处
+   顺手登记（类名+pid，512 上限整体重来）。菜单(#32768)/提示窗/影子窗/输入法/系统 shell 面
+   按类名白名单静默跳过；设置未开时 PlayClose 零日志（DESTROY 对短命窗型极频繁，防刷屏）。
+3. **自家窗口真动画（规格原文"一律真动画"）**：新增 `WindowCloseFx`——WPF DoubleAnimation
+   对窗口本体做 fade+scale（不经过替身；自家窗口画面随时可得，不受设置控制）。设置/关于本机/
+   访达三窗 OnClosing 接线；ConditionalWeakTable 防重入（窗口一生只演一次，无泄漏）；
+   Application.Shutdown 期间不演（不给退出加 150ms 的税）；异常 fail-open 直通关闭 +
+   120% 时长保险计时器双保险。
+4. **设置页**：新增"窗口关闭动画（默认关：macOS 关窗没有动画）"复选框，紧邻新窗口淡入项。
+
+门禁：Release 构建 0W0E；Core 测试 1361 过 / 46 失败（全部为 Linux 平台差异基线，零新增；
+CloseAnimMath 10 用例全过）。AnimPolicy 无改动即支持 Close（AnimKind.Close 的 BaseDuration
+与节流早已就位，v3.0 预留生效）。
+
+**遗留/口径变更**：
+- 下一动作 #2 的"打开占位帧（捕获重试 8ms×12）"**作废**：alpha.26 DWM 实况引擎起播零预渲染，
+  打开路径的占位帧竞态已无意义；第三方开窗在 26H2 上受 PrintWindow 半瘫影响退 fail-open
+  （窗口直接出现），根治需"开窗实况替身"，但 DWM 拒斗篷（alpha.25 已证）使新窗口无法先藏后演——
+  记入 BLOCKED，除非找到不斗篷的藏窗法。
+- OV-03（帧性能 P95）随 DWM 实况引擎上线自动重测：实况通道无 mesh 预渲染，P95 语义变化，
+  待所有者真机日志回填。
+
+---
+
+## 队列状态（alpha.27 后刷新）
+
+| 任务 | 状态 | 备注 |
+|---|---|---|
+| Q4 关闭动画 | done | 默认关 + 自家真动画，规格 §4-Q4 全项落实（WH_MOUSE_LL 预捕获属 v2 可选，未做） |
+| Q4 打开占位帧 | 作废 | alpha.26 实况引擎取代；开窗实况替身 BLOCKED（DWM 拒斗篷） |
+| native DComp 动画宿主 | BLOCKED→缓解 | CI 已能编译 native（/W4 /WX 全绿），无宿主代码；真机调试仍需所有者装 MSVC |
+| AnimLab 调参台 | pending | anim-params.json 热加载仍是最小可用路径 |
+| OV-01/02/05 | 等回填 | 所有者验收 alpha.27 时一并回填（测试清单已备） |
+
+
+---
+
 ## alpha.25（2026-11-01）遮挡重播 + 图标实拍重画
 
 真机反馈（alpha.24 清单留言 + Beautiful-202611.log）定位到四个架构级根因，全部换思路重做：

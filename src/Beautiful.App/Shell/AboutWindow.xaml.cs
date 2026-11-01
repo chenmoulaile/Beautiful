@@ -84,6 +84,13 @@ public partial class AboutWindow : Window
 
     private void Close_Click(object sender, RoutedEventArgs e) => Close();
 
+    /// <summary>关闭退场（v2.2 §4：自家窗口一律真动画）：fade+scale 演完再真关闭，异常/关停中直接放行。</summary>
+    protected override void OnClosing(System.ComponentModel.CancelEventArgs e)
+    {
+        base.OnClosing(e);
+        if (!e.Cancel && Beautiful.App.Animation.WindowCloseFx.TryBegin(this)) e.Cancel = true;
+    }
+
     private void More_Click(object sender, RoutedEventArgs e)
     {
         try { Process.Start(new ProcessStartInfo("ms-settings:about") { UseShellExecute = true }); }
