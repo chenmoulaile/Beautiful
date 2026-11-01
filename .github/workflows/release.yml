@@ -46,13 +46,38 @@ jobs:
         run: tools\NativeSmoke\bin\Release\NativeSmoke.exe src\Beautiful.Native\bin\Release\Beautiful.Native.dll
 
       - name: 还原与构建
-        run: dotnet build Beautiful.sln -c Release
+        shell: pwsh
+        run: |
+          $out = dotnet build Beautiful.sln -c Release 2>&1 | Tee-Object -FilePath build.log
+          $out | ForEach-Object { Write-Host $_ }
+          exit $LASTEXITCODE
 
       - name: 测试门禁
-        run: dotnet test tests/Beautiful.Core.Tests -c Release
+        shell: pwsh
+        run: |
+          $out = dotnet test tests/Beautiful.Core.Tests -c Release 2>&1 | Tee-Object -FilePath test.log
+          $out | ForEach-Object { Write-Host $_ }
+          exit $LASTEXITCODE
 
       - name: 发布自包含产物
-        run: dotnet publish src/Beautiful.App -c Release -r win-x64 --self-contained true -p:PublishSingleFile=false -p:UseAppHost=true -o publish
+        shell: pwsh
+        run: |
+          $out = dotnet publish src/Beautiful.App -c Release -r win-x64 --self-contained true -p:PublishSingleFile=false -p:UseAppHost=true -o publish 2>&1 | Tee-Object -FilePath publish.log
+          $out | ForEach-Object { Write-Host $_ }
+          exit $LASTEXITCODE
+
+      # 诊断日志在失败时下载可得（Actions 网页日志需要 admin 权限，产物走 API 即可拉取）
+      - name: 上传诊断日志（仅失败时）
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: diag-logs
+          path: |
+            build.log
+            test.log
+            publish.log
+            native-build.log
+          if-no-files-found: ignore
 
       - name: 压缩
         run: Compress-Archive -Path publish/* -DestinationPath Beautiful-win-x64-${{ github.ref_name }}.zip
