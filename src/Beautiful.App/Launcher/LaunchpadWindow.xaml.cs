@@ -1,6 +1,9 @@
 using System;
 using System.Collections.Generic;
+using System.Collections.ObjectModel;
 using System.Linq;
+using System.Threading;
+using System.Threading.Tasks;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
@@ -55,8 +58,17 @@ public partial class LaunchpadWindow : Window, System.ComponentModel.INotifyProp
 
     private readonly LauncherService _service;
     private IReadOnlyList<LauncherApp> _apps = Array.Empty<LauncherApp>();
-    private List<LaunchpadTile> _pageTiles = new();
+    private ObservableCollection<LaunchpadTile> _pageTiles = new();
     private int _page;
+
+    /// <summary>当前页图标分帧泵的取消源：翻页/搜索/关闭时取消，防止旧页继续提取。</summary>
+    private CancellationTokenSource? _iconPump;
+
+    /// <summary>图标提取请求尺寸（物理 px）：TileIconSize × DPI × 悬停 1.10，取整到 16 的倍数。</summary>
+    private int _iconPx = 176;
+
+    /// <summary>搜索输入防抖：每敲一个字就全量 Refresh+重开泵，会让索引搜索与图标泵反复从头来。</summary>
+    private System.Windows.Threading.DispatcherTimer? _searchDebounce;
 
     private sealed record LaunchpadTile(
         LauncherApp? App, string Name, BitmapSource? Icon, Services.LaunchpadFolderRecord? Folder = null);
@@ -252,6 +264,9 @@ public partial class LaunchpadWindow : Window, System.ComponentModel.INotifyProp
 
     private void OnClosed(object? sender, EventArgs e)
     {
+        _iconPump?.Cancel();
+        _iconPump = null;
+        _searchDebounce?.Stop();
         _service.IndexChanged -= OnIndexChanged;
         if (ReferenceEquals(_current, this)) _current = null;
         Logger.Info("启动台已关闭");
@@ -267,6 +282,21 @@ public partial class LaunchpadWindow : Window, System.ComponentModel.INotifyProp
         if (SearchPlaceholder is not null)
             SearchPlaceholder.Visibility = SearchBox.Text.Length == 0 ? Visibility.Visible : Visibility.Collapsed;
         _page = 0;
+        // 防抖 150ms（alpha.22 OOM 整改）：连续输入时每字符都全量刷新+重提图标，是纯浪费。
+        _searchDebounce ??= new System.Windows.Threading.DispatcherTimer(
+            System.Windows.Threading.DispatcherPriority.Background)
+        {
+            Interval = TimeSpan.FromMilliseconds(150),
+        };
+        _searchDebounce.Stop();
+        _searchDebounce.Tick -= OnSearchDebounceTick;
+        _searchDebounce.Tick += OnSearchDebounceTick;
+        _searchDebounce.Start();
+    }
+
+    private void OnSearchDebounceTick(object? sender, EventArgs e)
+    {
+        _searchDebounce?.Stop();
         Refresh();
     }
 
@@ -282,15 +312,70 @@ public partial class LaunchpadWindow : Window, System.ComponentModel.INotifyProp
         BuildFolderStrip(query.Length == 0);
         var pageCount = LaunchpadPagination.PageCount(allTiles.Count, PageSize);
         _page = Math.Clamp(_page, 0, Math.Max(0, pageCount - 1));
+        // 图标请求尺寸随网格适配结果走（ApplyGridFit 先于 Refresh 调用）
+        _iconPx = Math.Clamp((int)Math.Ceiling(TileIconSize * VisualTreeHelper.GetDpi(this).PixelsPerDip * 1.10 / 16.0) * 16,
+            64, Interop.IconExtractor.PreferredSize);
+
         var (first, count) = LaunchpadPagination.SpanOf(_page, allTiles.Count, PageSize);
-        _pageTiles = allTiles.Skip(first).Take(count).ToList();
+        _pageTiles = new ObservableCollection<LaunchpadTile>(allTiles.Skip(first).Take(count));
         Tiles.ItemsSource = _pageTiles;
         if (_pageTiles.Count > 0) Tiles.SelectedIndex = 0;
+
+        // alpha.22 OOM 根因修复：旧版对全量应用同步提 256×256 图标（UI 线程），位图分配风暴
+        // 2 秒内打爆 WPF 渲染通道。现在 tile 先建（图标空），当前页的图标由泵分帧补。
+        PumpPageIcons();
 
         BuildDots(pageCount);
         Status.Text = _service.IsIndexReady
             ? (_apps.Count == 0 ? "没有匹配的应用" : $"{_apps.Count} 个应用")
             : "正在建立索引…";
+    }
+
+    /// <summary>
+    /// 当前页图标分帧泵：后台逐个提取（尺寸按显示需求，不再 256 一刀切），每 6 个让出一拍——
+    /// 渲染/输入优先，图标在 UI 上渐次浮现（iOS/macOS 启动台本身就这样，观感不是妥协而是同构）。
+    /// 翻页/搜索/换文件夹都会重开泵（旧泵取消），所以每时每刻只有一页 ≤35 个在提取。
+    /// </summary>
+    private void PumpPageIcons()
+    {
+        _iconPump?.Cancel();
+        _iconPump = new CancellationTokenSource();
+        var token = _iconPump.Token;
+        var tiles = _pageTiles;
+        var size = _iconPx;
+        _ = PumpIconsAsync(tiles, size, token);
+    }
+
+    private async Task PumpIconsAsync(IList<LaunchpadTile> tiles, int size, CancellationToken token)
+    {
+        const int batch = 6;
+        var doneInBatch = 0;
+        for (var i = 0; i < tiles.Count; i++)
+        {
+            if (token.IsCancellationRequested) return;
+            var tile = tiles[i];
+            if (tile.App is null || tile.Icon is not null) continue;   // 文件夹 tile 自带拼贴图标
+            try
+            {
+                var app = tile.App;
+                var icon = await Task.Run(() => _service.IconOf(app, size), token);
+                if (token.IsCancellationRequested || icon is null) continue;
+                // 续接回 UI 线程（本方法从 UI 线程启动）：索引替换触发 Replace 通知，单项重绑
+                if (i < tiles.Count && ReferenceEquals(tiles[i], tile))
+                    tiles[i] = tile with { Icon = icon };
+            }
+            catch (OperationCanceledException) { return; }
+            catch (Exception ex)
+            {
+                Logger.Warn($"启动台图标提取失败（留空格）：{ex.GetType().Name} {ex.Message}");
+            }
+            if (++doneInBatch >= batch)
+            {
+                doneInBatch = 0;
+                try { await Task.Delay(16, token); }
+                catch (OperationCanceledException) { return; }
+            }
+        }
     }
 
     private void BuildDots(int pageCount)

@@ -45,6 +45,12 @@ public sealed class DockViewModel
     private bool _widgetEnabled = true;
 
     // 分隔符同样是固定实例（角色 → 实例）：槽位不变时 Reconcile 不产生任何集合事件
+    /// <summary>访达常驻格（alpha.22）：macOS Dock 首格，实例固定（图标一次绘制，Reconcile 引用比较零事件）。</summary>
+    private readonly DockItem _finder = CreateFinderItem();
+
+    /// <summary>启动台常驻格（alpha.22）：macOS Dock 第二格，同上。</summary>
+    private readonly DockItem _launchpad = CreateLaunchpadItem();
+
     private readonly DockItem _appsSeparator = MakeSeparator(DockSeparatorRole.AppsBoundary);
     private readonly DockItem _trashSeparator = MakeSeparator(DockSeparatorRole.TrashBoundary);
 
@@ -281,6 +287,24 @@ public sealed class DockViewModel
     /// <summary>回收站图标的 shell 命名空间 id（启动路径是 shell: 形式，取图要用 ::{clsid} 形式）。</summary>
     private const string RecycleBinIconSource = "::{645FF040-5081-101B-9F08-00AA002F954E}";
 
+    /// <summary>访达常驻格：图标 = 内置矢量重绘（macOS 双色脸），点击由 DockWindow 打开自家访达。</summary>
+    private static DockItem CreateFinderItem()
+        => new(Id: "builtin:finder",
+               Label: "访达",
+               Icon: DockBuiltinIcons.Finder(),
+               Kind: DockItemKind.Finder,
+               LaunchPath: Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
+               IconSource: "builtin:finder");
+
+    /// <summary>启动台常驻格：图标 = 内置矢量重绘（银底斜向火箭），点击由 DockWindow 拉 App 的启动台。</summary>
+    private static DockItem CreateLaunchpadItem()
+        => new(Id: "builtin:launchpad",
+               Label: "启动台",
+               Icon: DockBuiltinIcons.Launchpad(),
+               Kind: DockItemKind.Launchpad,
+               LaunchPath: string.Empty,
+               IconSource: "builtin:launchpad");
+
     private static DockItem CreateWidgetItem()
         => new(Id: "widget:clock-weather",
                Label: DockWidget.Clock(DateTimeOffset.Now),
@@ -453,8 +477,11 @@ public sealed class DockViewModel
     private void Reconcile()
     {
         // ① 语义序列（无分隔符）
-        var semantic = new List<DockItem>(_pinned.Count + _windows.Count + 2);
+        var semantic = new List<DockItem>(_pinned.Count + _windows.Count + 4);
         var kinds = new List<DockItemKind>(semantic.Count);
+        // macOS Dock 首两格：访达 + 启动台（常驻功能格，与固定块之间不留分隔符——macOS 同款）
+        semantic.Add(_finder); kinds.Add(_finder.Kind);
+        semantic.Add(_launchpad); kinds.Add(_launchpad.Kind);
         AddBlock(semantic, kinds, _pinned);
         AddBlock(semantic, kinds, _windows);
         semantic.Add(_recycleBin); kinds.Add(_recycleBin.Kind);

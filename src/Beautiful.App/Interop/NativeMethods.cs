@@ -326,6 +326,10 @@ internal static partial class NativeMethods
 
 
     // ---------- DWM ----------
+    /// <summary>DWMWA_TRANSITIONS_FORCEDISABLED：按窗口关闭 DWM 过渡动画（过渡接管的开关，alpha.21）。</summary>
+    public const int DwmwaTransitionsForcedDisabled = 3;
+    /// <summary>DWMWA_CLOAK：斗篷化窗口（屏幕隐形、DWM 继续合成，可见性代管用）。</summary>
+    public const int DwmwaCloak = 13;
     public const int DwmwaCloaked = 14;
     [DllImport("dwmapi.dll")]
     public static extern int DwmGetWindowAttribute(IntPtr hwnd, int attr, out int value, int size);

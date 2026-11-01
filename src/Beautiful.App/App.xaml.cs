@@ -1,4 +1,5 @@
-﻿using System.Threading;
+﻿using System.Diagnostics;
+using System.Threading;
 using System.Threading.Tasks;
 using System.Windows;
 using System.Windows.Threading;
@@ -42,6 +43,9 @@ public partial class App : Application
 
     /// <summary>最小化/最大化动画（v3.2）：持有两条 WinEvent 钩子，退出必须卸。</summary>
     private Animation.MinimizeAnimator? _animator;
+
+    /// <summary>窗口过渡接管器（alpha.21）：关闭原生 DWM 过渡 + 斗篷代管；退出必须全量还原。</summary>
+    private Animation.WindowTransitionGuard? _transitionGuard;
 
     /// <summary>系统最小化动画接管（v3.0 §Q2-2）：退出必须还原用户原来的 SPI_SETANIMATION 值。</summary>
     private Animation.SystemAnimationSuppressor? _animSuppressor;
@@ -140,7 +144,18 @@ public partial class App : Application
                     // 必须在动画器构造之前 Load：构造期就要用它算挂载自检行与首帧时长。
                     Services.AnimParamsStore.Load();
 
-                    _animator = new Animation.MinimizeAnimator(hwnd => _dock?.IconRectPhysical(hwnd));
+                    // 过渡接管器（alpha.21）：先建 guard 再建动画器（构造参数传入）。
+                    // 管理资格 = 窗口资格判定（排除自己/工具窗口/任务栏桌面等）。
+                    _transitionGuard = new Animation.WindowTransitionGuard(
+                        hwnd => Services.WindowEligibility.IsEligibleWindow(hwnd, (uint)Environment.ProcessId));
+
+                    _animator = new Animation.MinimizeAnimator(hwnd => _dock?.IconRectPhysical(hwnd), _transitionGuard);
+
+                    // 过渡接管启动扫描：存量窗口统一关原生过渡（新窗口由 OBJECT_SHOW 钩子接管）。
+                    // 斗篷代管的窗口在 Dock/切换器里豁免（ManagedCloakOverride）：不能凭空消失。
+                    Services.WindowEligibility.ManagedCloakOverride =
+                        hwnd => _transitionGuard!.IsCloakedByUs(hwnd);
+                    _transitionGuard.ScanExistingWindows();
 
                     // v3.0 §Q2-2：接管系统"缩向任务栏"动画，消除两条动画打架。
                     // 只在本程序真的会播动画时才接管；关掉动画功能就等于把系统动画原样还给用户。
@@ -162,6 +177,9 @@ public partial class App : Application
 
             // 6. Dock 即主 UI：--minimized 仅标识自启来源（自启语义），Dock 照常显示，超出仅记录
             _dock = new DockWindow(_taskbar, _animator);
+
+            // 启动台常驻格（alpha.22）：Dock 点击时求值（_launcher 此刻可能尚未创建，lambda 闭包兜住）
+            Dock.DockWindow.LaunchpadRequested = () => Launcher.LaunchpadWindow.ShowOrToggle(_launcher);
             _dock.Show();
 
             if (e.Args.Contains("--minimized", StringComparer.OrdinalIgnoreCase))
@@ -445,6 +463,9 @@ public partial class App : Application
         _tray = null;
         _animator?.Dispose();   // WinEvent 钩子必须卸载（幂等）
         _animator = null;
+        _transitionGuard?.Dispose();   // 解斗篷/还原 DWM 属性（幂等）
+        _transitionGuard = null;
+        Services.WindowEligibility.ManagedCloakOverride = null;
         _animSuppressor?.Dispose();   // SPI_SETANIMATION 必须还原成用户原值（幂等）
         _animSuppressor = null;
         DestroyLauncher();  // 覆盖层是瞬态弹层：兜底路径也要收（Dispose 幂等，ExitApp 已走过一次则 no-op）
@@ -1239,6 +1260,9 @@ public partial class App : Application
             _dock?.Close();          // DockWindow.OnClosing：AppBar ABM_REMOVE（hwnd 销毁前）
             _animator?.Dispose();    // WinEvent 钩子：退出过程中任何一次最小化都不该再起动画
             _animator = null;
+            _transitionGuard?.Dispose();   // 解斗篷/还原 DWM 属性必须在这里完成（幂等，二次调用 no-op）
+            _transitionGuard = null;
+            Services.WindowEligibility.ManagedCloakOverride = null;
             _animSuppressor?.Dispose();   // 系统动画还原必须在退出链里完成（红线：全局状态全挂 ExitApp）
             _animSuppressor = null;
             _taskbar?.Restore();     // Hide/AutoHide 还原系统任务栏
@@ -1256,12 +1280,59 @@ public partial class App : Application
 
     private void OnDispatcherUnhandledException(object sender, DispatcherUnhandledExceptionEventArgs e)
     {
+        // 【OOM 单独处理】alpha.21 真机日志：位图分配风暴 → DUCE 通道 SyncFlush 连环 OOM（40 秒 20+ 次），
+        // 旧逻辑每次都弹一个模态 MessageBox → 堆叠的模态框把 UI 线程锁死 = 用户看到的"一堆报错+卡死"。
+        // 内存不足时弹框本身还要分配内存，只会火上浇油：OOM 一律静默自愈（清缓存 + 强制 GC），不弹框。
+        if (e.Exception is OutOfMemoryException)
+        {
+            e.Handled = true;
+            SelfHealMemory();
+            return;
+        }
+
         Logger.Error("UI 线程未处理异常", e.Exception);
         e.Handled = true; // 尽力存活（真正致命的场景仍可经托盘"退出"干净收尾）
         if (++_exceptionDialogs <= MaxExceptionDialogs)
             MessageBox.Show(
                 $"发生界面异常，Beautiful 将继续运行。\n详情见 logs 目录日志。\n\n{e.Exception.Message}",
                 "Beautiful", MessageBoxButton.OK, MessageBoxImage.Error);
+    }
+
+    /// <summary>最近一次 OOM 自愈的时刻（毫秒）。自愈含强制 GC，本身不便宜：30 秒防抖。</summary>
+    private long _lastSelfHealMs;
+
+    /// <summary>
+    /// OOM 自愈：清位图缓存（图标提取 LRU / 前台帧缓存）+ 暂停前台采样两分钟 + 强制 GC。
+    /// frozen BitmapSource 的像素缓冲在非托管堆，要等 GC/finalizer 才释放——主动
+    /// Collect + WaitForPendingFinalizers 能立刻把断头位图收掉，DUCE 通道的下一次提交才有机会成功。
+    /// </summary>
+    private void SelfHealMemory()
+    {
+        var now = Stopwatch.GetTimestamp() * 1000L / Stopwatch.Frequency;
+        var first = now - Interlocked.Read(ref _lastSelfHealMs) > 30_000;
+        Interlocked.Exchange(ref _lastSelfHealMs, now);
+        Logger.Error($"内存不足（OOM）——已触发自愈{(first ? "" : "（30 秒内重复，跳过重复 GC）")}：清图标/帧缓存 + 暂停前台采样 2 分钟");
+        try
+        {
+            Interop.IconExtractor.ClearCache();
+            _animator?.ClearFrameCache();
+            _animator?.PauseSampling(TimeSpan.FromMinutes(2));
+        }
+        catch (Exception ex)
+        {
+            Logger.Warn($"OOM 自愈清理异常（忽略）：{ex.GetType().Name}");
+        }
+        if (!first) return;
+        try
+        {
+            GC.Collect(GC.MaxGeneration, GCCollectionMode.Forced, blocking: true, compacting: true);
+            GC.WaitForPendingFinalizers();
+            GC.Collect(GC.MaxGeneration, GCCollectionMode.Forced, blocking: true, compacting: true);
+        }
+        catch (Exception ex)
+        {
+            Logger.Warn($"OOM 自愈 GC 异常（忽略）：{ex.GetType().Name}");
+        }
     }
 
     private void OnAppDomainUnhandledException(object? sender, UnhandledExceptionEventArgs e)

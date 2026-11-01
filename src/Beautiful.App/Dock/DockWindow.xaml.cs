@@ -1318,6 +1318,16 @@ public partial class DockWindow : AcrylicWindow
                 OpenWidgetPanel(item);
                 break;
 
+            case DockItemKind.Finder:
+                // macOS：访达格永远可点，打开用户主目录（Windows 语境里最接近"我的文件"的落点）
+                OpenInFinder(item.LaunchPath);
+                break;
+
+            case DockItemKind.Launchpad:
+                // 启动台服务在 App 组装（晚于 Dock）：走静态委托，点击时才求值
+                LaunchpadRequested?.Invoke();
+                break;
+
             case DockItemKind.Window:
                 var wi = item.WindowHandle is { } h
                     ? _tracker.Windows.FirstOrDefault(w => w.Handle == h)
@@ -1405,6 +1415,9 @@ public partial class DockWindow : AcrylicWindow
         var p = Surface.PointToScreen(Mouse.GetPosition(Surface));
         FluentMenu.Show(new FluentPopupHost(), new Point(p.X, p.Y), views);
     }
+
+    /// <summary>启动台请求（alpha.22 启动台常驻格）：App 装配后注入（LaunchpadWindow.ShowOrToggle(service)）。</summary>
+    internal static Action? LaunchpadRequested;
 
     /// <summary>
     /// 在自家访达里打开（Phase 6-c 互通）：目录直接导航；文件则打开其所在文件夹。

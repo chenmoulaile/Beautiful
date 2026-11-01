@@ -17,6 +17,77 @@
          【Card 用定宽而不是 MinWidth】宿主按 Measure(inf,inf) 同步量尺寸来决定弹层大小与是否翻转，
          定宽让星号列/换行文本在第一趟布局就定形（同 CalendarFlyout 用固定单元格的同一教训）。 -->
     <UserControl.Resources>
+        <!-- alpha.22：macOS 无把手粗胶囊滑条（填充段即把手，点哪跳哪、拖填充边缘走）。
+             自足样式：填充白胶囊在亮/暗两主题下都与 MacControlFillHover 轨道有足够对比；
+             Thumb 保留（WPF Track 必需）但视觉透明，只占填充边缘 14px 的可拖区。 -->
+        <Style x:Key="CcMacThumb" TargetType="{x:Type Thumb}">
+            <Setter Property="Focusable" Value="False"/>
+            <Setter Property="IsTabStop" Value="False"/>
+            <Setter Property="Width" Value="14"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Thumb">
+                        <Grid Background="Transparent"/>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+        <Style x:Key="CcMacSliderDecrease" TargetType="RepeatButton">
+            <Setter Property="Focusable" Value="False"/>
+            <Setter Property="IsTabStop" Value="False"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="RepeatButton">
+                        <Grid Height="26" Background="Transparent">
+                            <Border Height="20" CornerRadius="10" VerticalAlignment="Center"
+                                    Background="#F0FFFFFF"/>
+                        </Grid>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+        <Style x:Key="CcMacSliderIncrease" TargetType="RepeatButton">
+            <Setter Property="Focusable" Value="False"/>
+            <Setter Property="IsTabStop" Value="False"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="RepeatButton">
+                        <Grid Height="26" Background="Transparent">
+                            <Border Height="20" CornerRadius="10" VerticalAlignment="Center"
+                                    Background="{DynamicResource MacControlFillHover}"/>
+                        </Grid>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+        <Style x:Key="CcMacSlider" TargetType="Slider">
+            <Setter Property="Height" Value="26"/>
+            <Setter Property="Minimum" Value="0"/>
+            <Setter Property="Maximum" Value="100"/>
+            <Setter Property="IsMoveToPointEnabled" Value="True"/>
+            <Setter Property="FocusVisualStyle" Value="{x:Null}"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Slider">
+                        <Grid Height="26" Background="Transparent">
+                            <Track x:Name="PART_Track" Orientation="Horizontal" VerticalAlignment="Center">
+                                <Track.DecreaseRepeatButton>
+                                    <RepeatButton Command="{x:Static Slider.DecreaseLarge}"
+                                                  Style="{StaticResource CcMacSliderDecrease}"/>
+                                </Track.DecreaseRepeatButton>
+                                <Track.Thumb>
+                                    <Thumb Width="14" Height="20" Style="{StaticResource CcMacThumb}"/>
+                                </Track.Thumb>
+                                <Track.IncreaseRepeatButton>
+                                    <RepeatButton Command="{x:Static Slider.IncreaseLarge}"
+                                                  Style="{StaticResource CcMacSliderIncrease}"/>
+                                </Track.IncreaseRepeatButton>
+                            </Track>
+                        </Grid>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
         <LinearGradientBrush x:Key="CardFillSolid" StartPoint="0,0" EndPoint="0,1">
             <GradientStop Color="#F82C2C2F" Offset="0"/>
             <GradientStop Color="#FB1F1F23" Offset="1"/>
@@ -295,6 +366,7 @@
                                        FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets"
                                        Foreground="{DynamicResource ThemeTextPrimary}"/>
                             <Slider x:Name="BrightnessSlider" Grid.Column="1" Minimum="0" Maximum="100"
+                                    Style="{StaticResource CcMacSlider}"
                                     IsMoveToPointEnabled="True" VerticalAlignment="Center"
                                     TickFrequency="1" SmallChange="1" LargeChange="5"
                                     ValueChanged="Brightness_ValueChanged"
@@ -321,6 +393,7 @@
                                     Style="{StaticResource CcFooterStyle}" Click="Mute_Click"
                                     AutomationProperties.Name="静音开关"/>
                             <Slider x:Name="VolumeSlider" Grid.Column="1" Minimum="0" Maximum="100"
+                                    Style="{StaticResource CcMacSlider}"
                                     IsMoveToPointEnabled="True" VerticalAlignment="Center"
                                     TickFrequency="1" SmallChange="1" LargeChange="5"
                                     ValueChanged="Volume_ValueChanged"

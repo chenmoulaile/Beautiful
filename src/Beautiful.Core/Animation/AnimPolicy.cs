@@ -201,20 +201,35 @@ public sealed class AnimPolicy
         return false;
     }
 
-    private bool IsExcluded(AnimRequest request)
+    /// <summary>
+    /// 按进程名查询排除清单（alpha.21 打开动画的放行前查询用：排除的应用保留原生行为，不斗篷）。
+    /// 与 <see cref="IsExcluded(AnimRequest)"/> 同一口径：大小写不敏感、忽略 .exe 后缀。
+    /// </summary>
+    public bool IsExcludedName(string processName)
     {
-        if (_exclusions.Count == 0) return false;
-        var name = request.ProcessName;
-        if (string.IsNullOrWhiteSpace(name)) return false;
-        name = name.Trim().ToLowerInvariant();
+        lock (_gate)
+        {
+            if (_exclusions.Count == 0) return false;
+            return MatchesExclusion(_exclusions, processName);
+        }
+    }
+
+    /// <summary>排除口径：大小写不敏感、忽略 .exe 后缀后全等。</summary>
+    private static bool MatchesExclusion(IReadOnlyCollection<string> exclusions, string? processName)
+    {
+        if (exclusions.Count == 0 || string.IsNullOrWhiteSpace(processName)) return false;
+        var name = processName.Trim().ToLowerInvariant();
         var bare = name.EndsWith(".exe", StringComparison.Ordinal) ? name[..^4] : name;
-        foreach (var x in _exclusions)
+        foreach (var x in exclusions)
         {
             var xb = x.EndsWith(".exe", StringComparison.Ordinal) ? x[..^4] : x;
             if (xb == bare) return true;
         }
         return false;
     }
+
+    private bool IsExcluded(AnimRequest request)
+        => MatchesExclusion(_exclusions, request.ProcessName);
 
     private bool OpenBurstExceeded(AnimRequest request, AnimParams p)
     {

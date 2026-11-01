@@ -29,5 +29,11 @@ public enum DockItemKind
     /// Dock 小组件（Phase 7-T3）：时钟 + 天气。它不是应用、不参与固定/拖拽/窗口跟踪，
     /// 只作为行尾的一个信息块存在；点击打开日历浮层。
     /// </summary>
-    Widget
+    Widget,
+
+    /// <summary>访达常驻格（macOS Dock 首格）：点击打开自家访达窗口；不参与固定/拖拽/窗口跟踪。</summary>
+    Finder,
+
+    /// <summary>启动台常驻格（macOS Dock 第二格）：点击打开 Launchpad；同上不参与固定/拖拽。</summary>
+    Launchpad
 }

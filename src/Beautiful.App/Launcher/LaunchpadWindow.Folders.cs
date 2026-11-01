@@ -61,7 +61,9 @@ public partial class LaunchpadWindow
         var tiles = new List<LaunchpadTile>();
         if (_layout is null)
         {
-            return _apps.Select(app => new LaunchpadTile(app, app.Name, _service.IconOf(app))).ToList();
+            // alpha.22 OOM 整改：不再在此同步提图标（UI 线程 × 全量应用 × 256px 是内存风暴根因）。
+            // tile 先建（Icon=null），当前页图标由 PumpPageIcons 分帧补；文件夹 tile 仍同步拼贴（数量少）。
+            return _apps.Select(app => new LaunchpadTile(app, app.Name, null)).ToList();
         }
 
         var inFolder = new HashSet<string>(StringComparer.Ordinal);
@@ -94,7 +96,7 @@ public partial class LaunchpadWindow
                 continue;
             }
 
-            tiles.Add(new LaunchpadTile(app, app.Name, _service.IconOf(app)));
+            tiles.Add(new LaunchpadTile(app, app.Name, null));
         }
 
         return tiles;
@@ -115,7 +117,7 @@ public partial class LaunchpadWindow
             var background = new SolidColorBrush(Color.FromArgb(0x33, 0xFF, 0xFF, 0xFF));
             dc.DrawRoundedRectangle(background, null, new Rect(0, 0, size, size), 16, 16);
 
-            var icons = members.Select(m => _service.IconOf(m)).Where(i => i is not null).Take(4).ToList();
+            var icons = members.Select(m => _service.IconOf(m, _iconPx)).Where(i => i is not null).Take(4).ToList();
             if (icons.Count == 0)
             {
                 return Render(visual, size);
@@ -283,7 +285,7 @@ public partial class LaunchpadWindow
             apps.Select(LaunchpadLayoutStore.KeyOf).ToList());
         window.FolderTitle.Text = demo.Name;
         window.FolderItems.ItemsSource = apps
-            .Select(app => new LaunchpadTile(app, app.Name, window._service.IconOf(app)))
+            .Select(app => new LaunchpadTile(app, app.Name, window._service.IconOf(app, window._iconPx)))
             .ToList();
         window.FolderOverlay.Visibility = Visibility.Visible;
         return true;
@@ -375,8 +377,9 @@ public partial class LaunchpadWindow
 
         _openFolder = folder;
         FolderTitle.Text = folder.Name;
+        // 文件夹成员通常 ≤20：同步提取可接受，但尺寸跟随页图标（缓存命中同尺寸，不额外翻倍内存）
         FolderItems.ItemsSource = _layout.MembersOf(folder, _service.AllApps)
-            .Select(app => new LaunchpadTile(app, app.Name, _service.IconOf(app)))
+            .Select(app => new LaunchpadTile(app, app.Name, _service.IconOf(app, _iconPx)))
             .ToList();
         FolderOverlay.Visibility = Visibility.Visible;
     }

@@ -26,10 +26,14 @@ namespace Beautiful.App.Animation;
 /// Dock 路径在 <c>ShowWindow</c> 前同步预抓，其余三条路径靠前台帧缓存兜底（见 <see cref="ForegroundFrameCache"/>）。
 /// </para>
 /// <para>
-/// 【为什么替身用分层窗口 + 条带 Rectangle】逐像素透明只有分层窗口这一条路（v2 已被系统背板证伪），
-/// 而 genie 的弯曲感来自"每条带各自向目标收拢"，WPF 2D 没有网格变形，用 N 条带 + 各自的
-/// <c>ImageBrush.Viewport</c> 是零第三方依赖下最接近原味的实现。几何全在
-/// <see cref="GenieMath"/>（纯函数 + 单测），这里只负责每帧把它乘回像素。
+/// 【alpha.21 换思路：过渡接管】原生动画由 <see cref="WindowTransitionGuard"/> 在 DWM 层按窗口关闭
+/// （FORCEDISABLED），替身是唯一动画——"两条动画打架"在架构上不可能再发生；打开动画走
+/// OBJECT_SHOW → 斗篷代管 → 替身落位 → 解斗篷，用户全程看不见"窗口先弹出来再演动画"的那一帧。
+/// </para>
+/// <para>
+/// 【为什么替身用分层窗口 + 条带 Rectangle / 网格】逐像素透明只有分层窗口这一条路，genie 的弯曲感
+/// 来自"每条带各自向目标收拢"。几何全在 <see cref="GenieMath"/>/<see cref="GenieLamp"/>（纯函数 + 单测），
+/// 这里只负责每帧把它乘回像素。
 /// </para>
 /// <para>
 /// 【v3.0 冲刺改了什么】① 全部时长/比例改读 <see cref="AnimParams"/>(热加载)；② 放行判定收口到
@@ -43,6 +47,7 @@ public sealed class MinimizeAnimator : IDisposable
     private const uint EventSystemMinimizeStart = 0x0016;
     private const uint EventSystemMinimizeEnd = 0x0017;
     private const uint EventObjectLocationChange = 0x8004;
+    private const uint EventObjectShow = 0x8002;
     private const uint ObjidWindow = 0;
     private const uint WinEventOutOfContext = 0x00000000;
     private const uint WinEventSkipOwnProcess = 0x00000002;
@@ -62,6 +67,16 @@ public sealed class MinimizeAnimator : IDisposable
     private NativeMethods.WinEventDelegate? _proc;
     private IntPtr _minimizeHook = IntPtr.Zero;
     private IntPtr _locationHook = IntPtr.Zero;
+    private IntPtr _showHook = IntPtr.Zero;
+
+    /// <summary>窗口过渡接管器（alpha.21）：原生动画的开关与可见性代管都归它。可为 null（极端降级）。</summary>
+    private readonly WindowTransitionGuard? _guard;
+
+    /// <summary>genie 收尾时要解斗篷的窗口：还原/最大化/打开动画结束后真窗口才现身。</summary>
+    private IntPtr _pendingUncloak = IntPtr.Zero;
+
+    /// <summary>已尝试过打开动画的窗口（同一 hwnd 只播一次；上限整体重置）。</summary>
+    private readonly HashSet<IntPtr> _openAttempted = new();
 
     private GhostLayer? _ghost;
     private GenieMeshGhost? _meshGhost;
@@ -82,9 +97,10 @@ public sealed class MinimizeAnimator : IDisposable
     private DispatcherTimer? _sampleTimer;
     private string _exclusionSnapshot = "";
 
-    public MinimizeAnimator(Func<IntPtr, Rect?> dockTargetProvider)
+    public MinimizeAnimator(Func<IntPtr, Rect?> dockTargetProvider, WindowTransitionGuard? guard = null)
     {
         _dockTarget = dockTargetProvider;
+        _guard = guard;
         _dispatcher = Dispatcher.CurrentDispatcher;
         _disabledByEnvironment = Environment.GetEnvironmentVariable("BEAUTIFUL_NO_ANIMATION") == "1";
         if (_disabledByEnvironment)
@@ -103,6 +119,11 @@ public sealed class MinimizeAnimator : IDisposable
             0, 0, WinEventOutOfContext | WinEventSkipOwnProcess);
         _locationHook = NativeMethods.SetWinEventHook(
             EventObjectLocationChange, EventObjectLocationChange, IntPtr.Zero, _proc,
+            0, 0, WinEventOutOfContext | WinEventSkipOwnProcess);
+        // OBJECT_SHOW：新窗口出现的那一刻——关掉它的原生过渡（存量窗口由启动扫描补）+ 决定要不要
+        // 斗篷代管后播打开动画。这是"打开动画与原生开窗动画重叠"的根治点。
+        _showHook = NativeMethods.SetWinEventHook(
+            EventObjectShow, EventObjectShow, IntPtr.Zero, _proc,
             0, 0, WinEventOutOfContext | WinEventSkipOwnProcess);
 
         ApplyExclusions();
@@ -129,6 +150,7 @@ public sealed class MinimizeAnimator : IDisposable
         var effectiveEngine = EffectiveEngine(requestedEngine);
         var hooksOk = _minimizeHook != IntPtr.Zero;
         var locOk = _locationHook != IntPtr.Zero;
+        var showOk = _showHook != IntPtr.Zero;
 
         if (!hooksOk)
         {
@@ -141,11 +163,15 @@ public sealed class MinimizeAnimator : IDisposable
         DisabledReason = null;
         var degraded = new List<string>();
         if (!locOk) degraded.Add("LOCATIONCHANGE 钩子失败（最大化动画不可用）");
+        if (!showOk) degraded.Add("OBJECT_SHOW 钩子失败（打开动画不可用）");
+        if (_guard is null) degraded.Add("过渡接管器未装配（原生动画可能与替身叠加）");
         if (!s.MinimizeAnimation) degraded.Add("设置项 MinimizeAnimation 为关");
         if (effectiveEngine != requestedEngine) degraded.Add($"引擎 {requestedEngine} 不可用已回退 {effectiveEngine}");
 
         MountStatus = $"动画子系统已挂载：MINIMIZE=0x{_minimizeHook.ToInt64():X} "
                       + $"LOCATION={(locOk ? $"0x{_locationHook.ToInt64():X}" : "失败")} "
+                      + $"SHOW={(showOk ? $"0x{_showHook.ToInt64():X}" : "失败")} "
+                      + $"接管器={( _guard is null ? "未装配" : $"托管 {_guard.ManagedCount} 斗篷 {_guard.CloakedCount}" )} "
                       + $"设置=开 请求引擎={requestedEngine} 生效引擎={effectiveEngine} "
                       + $"前台缓存=开 参数[{p.ToLogLine()}]"
                       + (degraded.Count > 0 ? $" 降级：{string.Join("；", degraded)}" : "");
@@ -173,6 +199,38 @@ public sealed class MinimizeAnimator : IDisposable
     public int CachedFrames => _frames.Count;
 
     /// <summary>
+    /// OOM 自愈钩子（App 侧调用）：立刻丢弃全部前台帧。缓存里 1 全尺寸(720px) + 4 半尺寸，
+    /// 都是 frozen 位图——断头时它们就是进程里最大的几块非托管内存，先丢先活。
+    /// </summary>
+    public void ClearFrameCache() => _frames.Clear();
+
+    /// <summary>
+    /// OOM 自愈钩子：暂停前台采样一段时间。采样是唯一的高频位图分配源（每 500ms 一张
+    /// PrintWindow + 缩放），内存紧张时先把它停掉，给 DUCE 通道喘口气的窗口。
+    /// 恢复由一次性 DispatcherTimer 到点自停（不需要任何人记得来重启）。
+    /// </summary>
+    public void PauseSampling(TimeSpan duration)
+    {
+        _sampleTimer?.Stop();
+        if (_sampleTimer is null) return;
+        var resume = new DispatcherTimer(DispatcherPriority.Background, _dispatcher)
+        {
+            Interval = duration,
+        };
+        resume.Tick += (_, _) =>
+        {
+            resume.Stop();
+            if (_sampleTimer is not null && IsRunning)
+            {
+                _sampleTimer.Start();
+                Logger.Info($"前台帧采样：熔断结束（暂停 {duration.TotalSeconds:0}s）后已恢复");
+            }
+        };
+        resume.Start();
+        Logger.Warn($"前台帧采样：熔断暂停 {duration.TotalSeconds:0}s（内存压力自愈）");
+    }
+
+    /// <summary>
     /// 原生回调：只许做"取出参数 + 投递"两件事。任何异常逃逸出去都会打断消息泵，
     /// 任何阻塞都会让系统认为我们不该收事件（键盘钩子还会被静默摘掉，同一类事故）。
     /// </summary>
@@ -185,6 +243,10 @@ public sealed class MinimizeAnimator : IDisposable
 
             if (evt == EventSystemMinimizeStart)
             {
+                // 【同步斗篷，别等 BeginInvoke】斗篷是几百纳秒的 DWM 属性写入，可以在回调线程直接做；
+                // 若等 UI 线程下一轮消息，窗口可能已经画了一帧"凭空消失前的样子"。此后斗篷一直保持到
+                // 还原动画收尾——真窗口在隐形状态下完成还原，用户只看见 genie。
+                _guard?.Cloak(hwnd, "minimize");
                 _dispatcher.BeginInvoke(() => PlayMinimize(hwnd, "MINIMIZESTART"), DispatcherPriority.Render);
                 return;
             }
@@ -198,19 +260,35 @@ public sealed class MinimizeAnimator : IDisposable
             if (evt == EventObjectLocationChange)
             {
                 // LOCATIONCHANGE 在拖动窗口时每帧都来，所以这里只做 O(1) 的状态比对，
-                // 真正可能耗时的动画只在"非最大化 → 最大化"那一次跳变上触发。
+                // 真正可能耗时的动画只在"非最大化 ↔ 最大化"的跳变上触发。
                 if (!NativeMethods.GetWindowRect(hwnd, out var rect)) return;
                 var zoomed = NativeMethods.IsZoomed(hwnd);
                 if (_lastRect.TryGetValue(hwnd, out var previous))
                 {
                     if (!previous.Zoomed && zoomed && IsBigJump(previous.Rect, rect))
-                        _dispatcher.BeginInvoke(() => PlayZoom(hwnd, previous.Rect, rect), DispatcherPriority.Render);
+                    {
+                        _guard?.Cloak(hwnd, "maximize");
+                        _dispatcher.BeginInvoke(() => PlayZoom(hwnd, previous.Rect, rect, zoomIn: true),
+                            DispatcherPriority.Render);
+                    }
+                    else if (previous.Zoomed && !zoomed && IsBigJump(rect, previous.Rect))
+                    {
+                        _guard?.Cloak(hwnd, "unmaximize");
+                        _dispatcher.BeginInvoke(() => PlayZoom(hwnd, previous.Rect, rect, zoomIn: false),
+                            DispatcherPriority.Render);
+                    }
                 }
                 else if (_lastRect.Count > 512)
                 {
                     _lastRect.Clear();   // 只缓存"见过的窗口"，超上限整体重来，不做 LRU 的复杂度
                 }
                 _lastRect[hwnd] = (rect, zoomed);
+                return;
+            }
+            if (evt == EventObjectShow)
+            {
+                HandleWindowShown(hwnd);
+                return;
             }
         }
         catch
@@ -226,6 +304,113 @@ public sealed class MinimizeAnimator : IDisposable
         var tw = to.Right - to.Left;
         var th = to.Bottom - to.Top;
         return fw > 0 && fh > 0 && tw > fw * 1.2 && th > fh * 1.2;
+    }
+
+    // ---------- 打开动画（OBJECT_SHOW → 斗篷代管 → 替身落位 → 解斗篷） ----------
+
+    /// <summary>
+    /// 新窗口出现的处置：先无条件接管过渡动画（存量窗口由启动扫描补），
+    /// 再决定要不要斗篷+打开动画。所有早退路径都必须先解斗篷——这条链路里
+    /// 窗口刚要现身，被我们斗住了却不放出来，就是"窗口凭空消失"级事故。
+    /// </summary>
+    private void HandleWindowShown(IntPtr hwnd)
+    {
+        try
+        {
+            if (_guard is null || hwnd == IntPtr.Zero) return;
+            _guard.EnsureNoTransitions(hwnd);   // 存量/新窗口都在这里统一接管
+            if (!SettingsService.Current.WindowOpenAnimation) return;
+            if (_openAttempted.Contains(hwnd)) return;
+
+            var ex = NativeMethods.GetWindowLongPtr(hwnd, NativeMethods.GwlpExStyle);
+            if ((ex & NativeMethods.WsExToolwindow) != 0) return;
+            if (!NativeMethods.IsWindowVisible(hwnd) || NativeMethods.IsIconic(hwnd)) return;
+            if (NativeMethods.GetWindowTextLength(hwnd) == 0) return;
+            if (NativeMethods.DwmGetWindowAttribute(hwnd, NativeMethods.DwmwaCloaked, out var cloaked, 4) == 0
+                && cloaked != 0) return;   // UWP 挂起/浏览器隐藏窗：别人的斗篷不碰
+            if (NativeMethods.GetWindowThreadProcessId(hwnd, out var pid) == 0
+                || pid == (uint)Environment.ProcessId) return;
+            var className = NativeMethods.GetWindowClassName(hwnd);
+            if (className is "Windows.UI.Core.CoreWindow" or "Shell_TrayWnd" or "Progman" or "WorkerW"
+                or "XamlExplorerHostIslandWindow") return;
+            if (_policy.IsExcludedName(ProcessName(pid))) return;   // 排除的应用保留原生行为，不斗
+            if (!NativeMethods.GetWindowRect(hwnd, out var r)) return;
+            if (r.Right - r.Left < MinShellSize || r.Bottom - r.Top < MinShellSize) return;
+
+            _openAttempted.Add(hwnd);
+            if (_openAttempted.Count > 256) _openAttempted.Clear();
+
+            // 斗得住才播：斗篷失败就让它直接出现（fail-open），只丢动画不丢窗口
+            if (!_guard.Cloak(hwnd, "open")) return;
+            _dispatcher.BeginInvoke(() => PlayOpen(hwnd), DispatcherPriority.Render);
+        }
+        catch
+        {
+            // WinEvent 回调：静默吞掉（与 OnWinEvent 同一纪律）
+        }
+    }
+
+    /// <summary>打开动画：替身从 90% 平滑落位淡入，放完解斗篷换真窗口上台。</summary>
+    private void PlayOpen(IntPtr hwnd)
+    {
+        void FailOpen(string why, string layer = "无")
+        {
+            _guard?.Uncloak(hwnd, $"打开动画早退:{why}");
+            _policy.Complete(AnimKind.Open);
+            Logger.Info(AnimReport.Skipped("OBJECT_SHOW", layer, why));
+        }
+
+        // 排队期间窗口可能又藏起来了/被销毁：斗篷必须先解
+        if (!NativeMethods.IsWindow(hwnd) || !NativeMethods.IsWindowVisible(hwnd) || NativeMethods.IsIconic(hwnd))
+        {
+            _guard?.Uncloak(hwnd, "打开时窗口已不可见");
+            return;
+        }
+        if (!Admit(hwnd, AnimKind.Open, "OBJECT_SHOW", out var durationMs, out _))
+        {
+            FailOpen("门禁未放行");
+            return;
+        }
+        if (!NativeMethods.GetWindowRect(hwnd, out var rect))
+        {
+            FailOpen("读窗口矩形失败");
+            return;
+        }
+        var target = ToRect(rect);
+        if (target.Width < MinShellSize || target.Height < MinShellSize)
+        {
+            FailOpen("窗口过小", $"{target.Width:0}×{target.Height:0}");
+            return;
+        }
+        var image = Capture(hwnd, "OBJECT_SHOW");
+        if (image is null)
+        {
+            FailOpen("抓帧不可用");
+            return;
+        }
+        var composed = GenieFrameSource.MakeOpaque(image);
+        if (composed is null) { FailOpen("帧整理失败"); return; }
+        image = composed;
+        var layer = _lastLayer;
+        _frames.Put(hwnd, image, target);
+
+        var p = AnimParamsStore.Current;
+        var dur = durationMs > 0 ? durationMs : p.Scaled(p.OpenDurationMs);
+        var startScale = Math.Clamp(p.OpenStartScale, 0.5, 1.0);
+        _pendingUncloak = hwnd;
+        LogGeometry("OBJECT_SHOW", layer, hwnd, target, Rect.Empty);
+        StartGhost(image, target, dur, t =>
+        {
+            var e = 1.0 - Math.Pow(1.0 - t, 3.0);   // easeOutCubic：开头快、落位稳，macOS 开窗手感
+            var scale = startScale + (1.0 - startScale) * e;
+            var w = target.Width * scale;
+            var h = target.Height * scale;
+            var r = new GenieRect(
+                (target.Width - w) / 2 / target.Width,
+                (target.Height - h) / 2 / target.Height,
+                w / target.Width, h / target.Height);
+            return new List<(GenieRect, double)> { (r, e) };
+        }, "OBJECT_SHOW", "open", layer, 0);
     }
 
     // ---------- 门禁 ----------
@@ -361,7 +546,13 @@ public sealed class MinimizeAnimator : IDisposable
                             + $"(龄={age:0}ms 判定={verdict})");
                 var icon = IconRectFor(cachedRect, _dockTarget(hwnd));
                 LogGeometry(source, "缓存", hwnd, cachedRect, icon);
-                StartGenie(cached, cachedRect, icon, durationMs, reverse: false, source, "缓存", age);
+                // 缓存帧同样过实心合成：alpha 洞不会因为帧老就变少
+                if (GenieFrameSource.MakeOpaque(cached) is not { } composed)
+                {
+                    _policy.Complete(AnimKind.Minimize);
+                    return;
+                }
+                StartGenie(composed, cachedRect, icon, durationMs, reverse: false, source, "缓存", age);
                 return;
             }
 
@@ -385,7 +576,7 @@ public sealed class MinimizeAnimator : IDisposable
             return;
         }
 
-        var image = Capture(hwnd, source);
+        var image = GenieFrameSource.MakeOpaque(Capture(hwnd, source));
         if (image is null)
         {
             _policy.Complete(AnimKind.Minimize);
@@ -396,6 +587,8 @@ public sealed class MinimizeAnimator : IDisposable
 
         var iconRect = IconRectFor(sourceRect, _dockTarget(hwnd));
         LogGeometry(source, layer, hwnd, sourceRect, iconRect);
+        // 最小化方向不解斗篷：斗篷保持到还原收尾（还原时真窗口在隐形状态下就位，用户看不见"先弹出"帧）。
+        // 窗口一直最小化 → 看门狗会跳过 iconic 窗口（见 WindowTransitionGuard），斗篷 harmless。
         StartGenie(image, sourceRect, iconRect, durationMs, reverse: false, source, layer, 0);
     }
 
@@ -415,7 +608,7 @@ public sealed class MinimizeAnimator : IDisposable
 
         if (!NativeMethods.GetWindowRect(hwnd, out var rect)) return (null, null);
         var sourceRect = ToRect(rect);
-        var image = WindowCapture.Capture(hwnd, out var layer);
+        var image = GenieFrameSource.MakeOpaque(WindowCapture.Capture(hwnd, out var layer));
         if (image is null)
         {
             Logger.Info(AnimReport.Skipped("Dock预抓", layer, "抓帧不可用"));
@@ -434,19 +627,40 @@ public sealed class MinimizeAnimator : IDisposable
     {
         if (!Admit(hwnd, AnimKind.Minimize, "Dock", out var durationMs, out _)) return;
         var icon = IconRectFor(sourceRect, _dockTarget(hwnd));
-        StartGenie(image, sourceRect, icon, durationMs, reverse: false, "Dock", "预抓帧", 0);
+        // 预抓帧入替前同样过实心合成；合成器对非空输入不会返回 null（?? image 兜底保型）
+        StartGenie(GenieFrameSource.MakeOpaque(image) ?? image, sourceRect, icon, durationMs, reverse: false, "Dock", "预抓帧", 0);
     }
 
     /// <summary>
-    /// 还原方向：窗口此刻已经可见，替身从图标那一行"流出来"长回原尺寸。
-    /// 只装最小化不装还原的话，点开窗口是瞬间出现的，反而把动画衬得更假。
+    /// 该窗口最近一帧画面（Dock 最小化窗口缩略图用）。不设龄上限：窗口最小化后帧不再更新，
+    /// 拿到的就是"离开时的画面"——macOS 缩略图语义正是如此。无帧返回 null（调用方退应用图标）。
+    /// </summary>
+    public BitmapSource? LastFrameFor(IntPtr hwnd)
+    {
+        if (!IsRunning || hwnd == IntPtr.Zero) return null;
+        // maxAgeMs=int.MaxValue：不设龄上限，窗口最小化后拿到的就是"离开时的画面"
+        return _frames.TryGet(hwnd, int.MaxValue, out var frame, out _, out _)
+            ? frame
+            : null;
+    }
+
+    /// <summary>
+    /// 还原方向：真窗口此刻已回到原位但仍处于斗篷下（最小化时我们斗的，一直没解），
+    /// 替身从图标那一行"流出来"长回原尺寸，放完解斗篷换真窗口——用户全程看不见
+    /// "窗口先弹出来再演动画"的那一帧（alpha.20 反复被抱怨的点，本轮根治）。
+    /// 若斗篷当年没打上（DWM 拒绝/降级），这里退化为旧行为：窗口直接可见，替身叠加播放。
     /// </summary>
     private void PlayRestore(IntPtr hwnd)
     {
-        if (!Admit(hwnd, AnimKind.Restore, "MINIMIZEEND", out var durationMs, out _)) return;
+        if (!Admit(hwnd, AnimKind.Restore, "MINIMIZEEND", out var durationMs, out _))
+        {
+            _guard?.Uncloak(hwnd, "还原被门禁拒绝");   // 没动画可播就必须放窗口出来
+            return;
+        }
 
         if (!NativeMethods.GetWindowRect(hwnd, out var rect))
         {
+            _guard?.Uncloak(hwnd, "还原读矩形失败");
             _policy.Complete(AnimKind.Restore);
             Logger.Info(AnimReport.Skipped("MINIMIZEEND", "无", "读窗口矩形失败"));
             return;
@@ -454,15 +668,17 @@ public sealed class MinimizeAnimator : IDisposable
         var sourceRect = ToRect(rect);
         if (sourceRect.Width <= 0 || sourceRect.Height <= 0)
         {
+            _guard?.Uncloak(hwnd, "还原窗口矩形为零");
             _policy.Complete(AnimKind.Restore);
             Logger.Info(AnimReport.Skipped("MINIMIZEEND", "无", "窗口矩形为零"));
             return;
         }
 
-        // 刚还原的窗口需要一点时间把客户区画完，抓太早会得到上一帧或纯色
-        var image = Capture(hwnd, "MINIMIZEEND");
+        // 斗篷窗口照常被 PrintWindow 抓到（内容仍在合成），且此刻矩形已有效：拿到的就是"即将现身"的画面
+        var image = GenieFrameSource.MakeOpaque(Capture(hwnd, "MINIMIZEEND"));
         if (image is null)
         {
+            _guard?.Uncloak(hwnd, "还原无帧");
             _policy.Complete(AnimKind.Restore);
             return;
         }
@@ -471,6 +687,7 @@ public sealed class MinimizeAnimator : IDisposable
 
         var icon = IconRectFor(sourceRect, _dockTarget(hwnd));
         LogGeometry("MINIMIZEEND", layer, hwnd, sourceRect, icon);
+        _pendingUncloak = hwnd;   // RunClock 收尾统一解斗篷（异常路径也会走到 Finish，不会漏）
         StartGenie(image, sourceRect, icon, durationMs, reverse: true, "MINIMIZEEND", layer, 0);
     }
 
@@ -500,6 +717,8 @@ public sealed class MinimizeAnimator : IDisposable
         }
         StartMesh(image, ToLamp(windowRect), ToLamp(iconRect), durationMs, reverse, source, layer, ageMs);
     }
+
+    // __PART2__
 
     /// <summary>
     /// zoom：整窗向图标方向缩成一个点并淡出。当前用源窗口内的中心缩放（避免被 2D 幽灵窗口的
@@ -646,6 +865,10 @@ public sealed class MinimizeAnimator : IDisposable
             {
                 // 槽必须释放：无论正常收尾还是异常中止，否则几轮之后全部被"并发上限"挡住
                 _policy.Complete(_activeKind);
+                // 斗篷代管的还原/最大化/打开动画：真窗口在这里才现身（异常/提前终止也会走到 Finish，不会漏）
+                var uncloak = _pendingUncloak;
+                _pendingUncloak = IntPtr.Zero;
+                if (uncloak != IntPtr.Zero) _guard?.Uncloak(uncloak, "动画收尾");
             }
         }
 
@@ -677,40 +900,56 @@ public sealed class MinimizeAnimator : IDisposable
         CompositionTarget.Rendering += tick;
     }
 
-    /// <summary>最大化/还原：替身从旧矩形长到新矩形（morph 曲线，无滞后）。</summary>
-    private void PlayZoom(IntPtr hwnd, RECT fromRect, RECT toRect)
+    /// <summary>
+    /// 最大化/还原：替身在两态矩形的并集画布上连续变形（内容随窗口一起长/缩，macOS 同款）。
+    /// <para>
+    /// 斗篷链路：LOCATIONCHANGE 检测到跳变时已同步斗篷（真窗口瞬间到位但隐形），这里抓
+    /// <b>新态</b>的画面做替身、从旧矩形长到新矩形，收尾解斗篷换真窗口——原生动画已由
+    /// FORCEDISABLED 关掉，替身是唯一动画，不会再打架。
+    /// </para>
+    /// </summary>
+    private void PlayZoom(IntPtr hwnd, RECT fromRect, RECT toRect, bool zoomIn)
     {
-        if (!Admit(hwnd, AnimKind.Maximize, "LOCATIONCHANGE", out var durationMs, out _)) return;
+        if (!Admit(hwnd, AnimKind.Maximize, "LOCATIONCHANGE", out var durationMs, out _))
+        {
+            _guard?.Uncloak(hwnd, "最大化被门禁拒绝");
+            return;
+        }
 
-        var image = Capture(hwnd, "LOCATIONCHANGE");
+        var from = ToRect(fromRect);
+        var to = ToRect(toRect);
+        if (from.Width <= 0 || from.Height <= 0 || to.Width <= 0 || to.Height <= 0)
+        {
+            _guard?.Uncloak(hwnd, "最大化矩形无效");
+            _policy.Complete(AnimKind.Maximize);
+            Logger.Info(AnimReport.Skipped("LOCATIONCHANGE", "无", "新旧矩形无效"));
+            return;
+        }
+
+        var image = GenieFrameSource.MakeOpaque(Capture(hwnd, "LOCATIONCHANGE"));
         if (image is null)
         {
+            _guard?.Uncloak(hwnd, "最大化无帧");
             _policy.Complete(AnimKind.Maximize);
             return;
         }
         var layer = _lastLayer;
 
-        var from = ToRect(fromRect);
-        var to = ToRect(toRect);
-        if (from.Width <= 0 || from.Height <= 0)
-        {
-            _policy.Complete(AnimKind.Maximize);
-            Logger.Info(AnimReport.Skipped("LOCATIONCHANGE", layer, "旧矩形无效"));
-            return;
-        }
+        // 画布 = 两态的并集：无论放大还是缩小，替身条带都落在画布内（WPF 窗口外内容不可见）
+        var canvas = Rect.Union(from, to);
+        var fromN = new GenieRect(
+            (from.Left - canvas.Left) / canvas.Width, (from.Top - canvas.Top) / canvas.Height,
+            from.Width / canvas.Width, from.Height / canvas.Height);
+        var toN = new GenieRect(
+            (to.Left - canvas.Left) / canvas.Width, (to.Top - canvas.Top) / canvas.Height,
+            to.Width / canvas.Width, to.Height / canvas.Height);
 
-        var p = AnimParamsStore.Current;
-        var maxDuration = p.Scaled(p.MorphDurationMs);
-        durationMs = durationMs <= 0 ? maxDuration : durationMs;
-
-        StartGhost(image, to, durationMs, t =>
+        _pendingUncloak = hwnd;
+        StartGhost(image, canvas, durationMs, t =>
         {
-            var e = AnimCurve.EaseInOutQuad(t);
-            var r = GenieMath.ZoomLerp(
-                new GenieRect(
-                    (from.Left - to.Left) / to.Width, (from.Top - to.Top) / to.Height,
-                    from.Width / to.Width, from.Height / to.Height),
-                new GenieRect(0, 0, 1, 1), e);
+            // v3.0：morph 曲线按 v2.2 §5 用 easeInOutQuad（原来是线性）；zoomIn 决定插值方向
+            var e = AnimCurve.EaseInOutQuad(zoomIn ? t : 1.0 - t);
+            var r = GenieMath.ZoomLerp(fromN, toN, e);
             return new List<(GenieRect, double)> { (r, 1.0) };
         }, "LOCATIONCHANGE", "morph", layer, 0);
     }
@@ -788,10 +1027,12 @@ public sealed class MinimizeAnimator : IDisposable
         _sampleTimer = null;
         if (_minimizeHook != IntPtr.Zero) NativeMethods.UnhookWinEvent(_minimizeHook);
         if (_locationHook != IntPtr.Zero) NativeMethods.UnhookWinEvent(_locationHook);
-        _minimizeHook = _locationHook = IntPtr.Zero;
+        if (_showHook != IntPtr.Zero) NativeMethods.UnhookWinEvent(_showHook);
+        _minimizeHook = _locationHook = _showHook = IntPtr.Zero;
         _proc = null;
         _lastRect.Clear();
         _processNames.Clear();
+        _openAttempted.Clear();
         _frames.Clear();
         _meshGhost?.Dispose();
         _meshGhost = null;

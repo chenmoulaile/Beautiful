@@ -16,6 +16,13 @@ namespace Beautiful.App.Services;
 internal static class WindowEligibility
 {
     /// <summary>
+    /// "被我们斗篷代管的窗口"豁免（alpha.21 过渡接管）：斗篷窗口在 DWM 查询里 cloaked=1，
+    /// 不豁免就会从 Dock/切换器里凭空消失。装配方在动画器装配后注入（指到
+    /// WindowTransitionGuard.IsCloakedByUs）；null = 未接管，按默认规则过滤。
+    /// </summary>
+    public static Func<IntPtr, bool>? ManagedCloakOverride;
+
+    /// <summary>
     /// 是否作为"可切换窗口"呈现：可见 + 有标题 + 非本进程 + 未被 DWM cloak + 非工具窗口 +
     /// 非任务栏/桌面/ UWP 宿主类窗口。规则与 v1 WindowTracker 完全一致。
     /// </summary>
@@ -35,8 +42,9 @@ internal static class WindowEligibility
         if (NativeMethods.GetWindowTextLength(h) == 0) return false;
         if (NativeMethods.GetWindowThreadProcessId(h, out var pid) == 0) return false;
         if (pid == ownProcessId) return false;
-        // 过滤 UWP 幽灵与浏览器 cloak 窗口
-        if (NativeMethods.DwmGetWindowAttribute(h, NativeMethods.DwmwaCloaked, out var cloaked, 4) == 0 && cloaked != 0)
+        // 过滤 UWP 幽灵与浏览器 cloak 窗口（被我们代管斗篷的窗口豁免：Dock/切换器里必须还能看到它）
+        if (NativeMethods.DwmGetWindowAttribute(h, NativeMethods.DwmwaCloaked, out var cloaked, 4) == 0
+            && cloaked != 0 && ManagedCloakOverride?.Invoke(h) != true)
             return false;
         // 过滤工具窗口（WS_EX_TOOLWINDOW）
         var ex = NativeMethods.GetWindowLongPtr(h, NativeMethods.GwlpExStyle);

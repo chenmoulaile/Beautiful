@@ -128,8 +128,10 @@ public sealed class LauncherService : IDisposable
     /// 结果行图标：<b>走 v3 T6 的提取管线（请求 256px，LRU 缓存）</b>，不在这里按 26/32px 重新提一次。
     /// 提取失败返回 null → 行画空框而不是编一个图标。
     /// </summary>
-    public BitmapSource? IconOf(LauncherApp app)
+    public BitmapSource? IconOf(LauncherApp app, int size = IconExtractor.PreferredSize)
     {
+        // 【size 参数】alpha.22 OOM 整改：调用方按"实际显示尺寸 × DPI"来要（启动台 ≈176、
+        // 启动器列表 32），不再一刀切 256——位图内存按像素数平方下降，缓存键含尺寸不会串。
         // AppsFolder 条目（MSIX）的 LaunchPath 是 explorer.exe：拿它当图标源会让每个 UWP 应用都画成
         // 资源管理器图标——那是"错图标"，比"没图标"更糟。这类条目只认 IconPath（包内 logo 路径，
         // 读不到就是空框）。其余条目沿用"没有 IconPath 就用启动目标"的降级链。
@@ -137,7 +139,7 @@ public sealed class LauncherService : IDisposable
         var source = isAppsFolder
             ? app.IconPath
             : string.IsNullOrWhiteSpace(app.IconPath) ? app.LaunchPath : app.IconPath;
-        return string.IsNullOrWhiteSpace(source) ? null : IconExtractor.GetIcon(source);
+        return string.IsNullOrWhiteSpace(source) ? null : IconExtractor.GetIcon(source, size);
     }
 
     // ---------- 开合 ----------
