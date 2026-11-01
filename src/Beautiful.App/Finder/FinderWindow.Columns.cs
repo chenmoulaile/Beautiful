@@ -394,7 +394,9 @@ public partial class FinderWindow
         {
             foreach (var row in pending)
             {
-                if (!IsLoaded)
+                // 停车标志而非 IsLoaded：IsLoaded 是 DispatcherObject 属性，这个循环跑在
+                // 线程池线程上，跨线程读必抛（alpha.22 真机"未观察的任务异常"×2 的根因）。
+                if (_columnIconLoopStopped)
                 {
                     return;
                 }

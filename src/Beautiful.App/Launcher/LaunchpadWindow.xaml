@@ -5,7 +5,10 @@
         ShowInTaskbar="False" Topmost="True" WindowStartupLocation="Manual"
         Background="#101014" Foreground="#FFFFFFFF"
         TextOptions.TextFormattingMode="Display">
-    <Grid x:Name="Root" MouseWheel="Root_MouseWheel">
+    <!-- 滚轮翻页必须挂 PreviewMouseWheel（隧道事件）：内层 ListBox 的 ScrollViewer 在冒泡
+         MouseWheel 里无条件 e.Handled=true，挂在 Root 上的冒泡处理器永远收不到
+         （真机实测"Launchpad 无法通过鼠标滚轮切换页面"即此）。 -->
+    <Grid x:Name="Root" PreviewMouseWheel="Root_MouseWheel">
         <Image x:Name="WallpaperImage" Stretch="UniformToFill" Opacity="0.85"/>
         <Border Background="#B3000000"/>
         <Grid Margin="70,46,70,32">

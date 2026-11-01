@@ -92,6 +92,19 @@ internal static class WindowCapture
     }
 
     /// <summary>
+    /// 抓帧层变化才记日志（0=native命中 1=native未命中 2=PrintWindow 3=屏幕退路）。
+    /// 【为什么】前台帧采样 2Hz 每次都调这里，逐次记日志的后果是日志被"窗口抓取"刷屏
+    /// （alpha.22 真机日志一半以上是它），真正有用的层切换（PrintWindow 失败退到屏幕）反而被淹没。
+    /// </summary>
+    private static int _lastCaptureLayer = -1;
+
+    private static void LogLayerChanged(int layerId, string message)
+    {
+        var previous = System.Threading.Interlocked.Exchange(ref _lastCaptureLayer, layerId);
+        if (previous != layerId) Logger.Info(message);
+    }
+
+    /// <summary>
     /// native 捕获服务（Phase 2）：开启时作为 PrintWindow 之外的又一条路；返回 null 继续走既有 C# 退路。
     /// 当前 native 实现为 PrintWindow→BitBlt（WGC/DXGI 是后续增强），判废逻辑在 native 内完成。
     /// </summary>
@@ -110,10 +123,10 @@ internal static class WindowCapture
                 var source = BitmapSource.Create(result.Width, result.Height, 96, 96,
                     PixelFormats.Bgra32, null, pixels, result.Stride);
                 source.Freeze();
-                Logger.Info($"窗口抓取：层=native(mode={result.Mode}) 位图={result.Width}×{result.Height}");
+                LogLayerChanged(0, $"窗口抓取：层=native(mode={result.Mode}) 位图={result.Width}×{result.Height}");
                 return source;
             }
-            Logger.Info($"窗口抓取：native 未命中（code={status}, rejected={result.Rejected}），继续 C# 退路");
+            LogLayerChanged(1, $"窗口抓取：native 未命中（code={status}, rejected={result.Rejected}），继续 C# 退路");
             return null;
         }
         catch (Exception ex)
@@ -179,7 +192,7 @@ internal static class WindowCapture
 
             if (TryFreeze(memDc, bitmap, width, height, out var source))
             {
-                Logger.Info($"窗口抓取：层=PrintWindow 位图={width}×{height}");
+                LogLayerChanged(2, $"窗口抓取：层=PrintWindow 位图={width}×{height}");
                 return source;
             }
             return null;   // 纯色：交给屏幕抠图这条退路，别在这里定生死
@@ -212,7 +225,7 @@ internal static class WindowCapture
             previous = SelectObject(memDc, bitmap);
             if (!BitBlt(memDc, 0, 0, width, height, screenDc, rect.Left, rect.Top, Srccopy)) return null;
             if (!TryFreeze(memDc, bitmap, width, height, out var source)) return null;
-            Logger.Info($"窗口抓取：层=屏幕 位图={width}×{height}（PrintWindow 纯色退路）");
+            LogLayerChanged(3, $"窗口抓取：层=屏幕 位图={width}×{height}（PrintWindow 纯色退路）");
             return source;
         }
         catch (Exception ex) when (ex is ExternalException or OutOfMemoryException

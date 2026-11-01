@@ -269,6 +269,9 @@ public partial class LaunchpadWindow : Window, System.ComponentModel.INotifyProp
         _searchDebounce?.Stop();
         _service.IndexChanged -= OnIndexChanged;
         if (ReferenceEquals(_current, this)) _current = null;
+        // 全屏面板关闭必须通知 Dock 复位悬停放大：面板盖住 Dock 期间收不到鼠标事件，
+        // 关闭瞬间光标静止时 Dock 会停在放大态（真机实测反馈）。
+        Dock.DockWindow.LaunchpadDismissed?.Invoke();
         Logger.Info("启动台已关闭");
     }
 

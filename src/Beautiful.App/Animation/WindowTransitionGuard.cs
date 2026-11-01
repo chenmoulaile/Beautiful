@@ -50,6 +50,12 @@ public sealed class WindowTransitionGuard : IDisposable
     /// <summary>斗篷登记表（hwnd → 打上时刻）。看门狗与"是不是我们斗的"判定都认这张表。</summary>
     private readonly Dictionary<IntPtr, long> _cloaked = new();
 
+    /// <summary>
+    /// SW_HIDE 代管表：斗篷被拒且仅限自家窗口时启用（见 Cloak）。隐藏窗口会从任务栏/
+    /// 切换器消失，所以每一笔登记都有明确的恢复口（Uncloak）与兜底（看门狗清死窗口、退出清理现身）。
+    /// </summary>
+    private readonly HashSet<IntPtr> _hiddenByUs = new();
+
     /// <summary>哪些 hwnd 由谁管理由装配方决定（排除清单/资格判定集中在 App 装配处）。</summary>
     private readonly Func<IntPtr, bool> _shouldManage;
 
@@ -106,7 +112,7 @@ public sealed class WindowTransitionGuard : IDisposable
             else if (_noTransitionFailed.Count < 1024) _noTransitionFailed.Add(hwnd);
         }
         if (hr != 0)
-            Logger.Warn($"过渡接管：0x{hwnd.ToInt64():X} 关闭 DWM 过渡失败 hr=0x{hr:X8}（该窗口保留原生动画，本会话不再重试）");
+            Logger.Info($"过渡接管：0x{hwnd.ToInt64():X} 关闭 DWM 过渡失败 hr=0x{hr:X8}（该窗口保留原生动画，本会话不再重试）");
     }
 
     /// <summary>该窗口是否已被我们关掉过渡动画（诊断用）。</summary>
@@ -151,6 +157,20 @@ public sealed class WindowTransitionGuard : IDisposable
         var hr = NativeMethods.DwmSetWindowAttribute(hwnd, NativeMethods.DwmwaCloak, ref one, sizeof(int));
         if (hr != 0)
         {
+            // 斗篷被拒（真机：自家 WPF 窗口 E_ACCESSDENIED 0x80070005）。只对【最小化链路 + 自家窗口】
+            // 启用 SW_HIDE 代管：最小化方向若没有隐形代管，原生"缩向任务栏"动画（SPI 接管在新系统
+            // 上不可用）会和 genie 替身同播——用户实测"最小化动画很透明、观感差"的根因就是双动画叠加。
+            // 代管窗口由 Uncloak 统一恢复（动画收尾/早退路径都会走到），死窗口由看门狗清表。
+            if (reason == "minimize"
+                && NativeMethods.GetWindowThreadProcessId(hwnd, out var pid) != 0
+                && pid == (uint)Environment.ProcessId
+                && NativeMethods.IsWindowVisible(hwnd))
+            {
+                NativeMethods.ShowWindow(hwnd, NativeMethods.SwHide);
+                lock (_gate) _hiddenByUs.Add(hwnd);
+                Logger.Info($"斗篷：0x{hwnd.ToInt64():X} DWM 拒绝 hr=0x{hr:X8}（{reason}）→ SW_HIDE 代管（自家窗口，替身收尾自动恢复）");
+                return true;
+            }
             Logger.Info($"斗篷：0x{hwnd.ToInt64():X} DWM 拒绝 hr=0x{hr:X8}（{reason}）→ 无代管降级");
             return false;
         }
@@ -162,6 +182,17 @@ public sealed class WindowTransitionGuard : IDisposable
     public void Uncloak(IntPtr hwnd, string reason)
     {
         if (hwnd == IntPtr.Zero) return;
+        bool hidden;
+        lock (_gate) hidden = _hiddenByUs.Remove(hwnd);
+        if (hidden)
+        {
+            // SW_HIDE 代管的恢复口：最小化方向窗口此刻是 iconic → 以"最小化但可见"现身
+            // （任务栏按钮回来）；还原方向窗口已被系统复位 → 原位现身且不抢激活。
+            var cmd = NativeMethods.IsIconic(hwnd) ? NativeMethods.SwShowNoActivate : NativeMethods.SwShowna;
+            NativeMethods.ShowWindow(hwnd, cmd);
+            Logger.Info($"斗篷：0x{hwnd.ToInt64():X} SW_HIDE 代管恢复（{reason}，cmd=0x{cmd:X}）");
+            return;
+        }
         bool had;
         lock (_gate) had = _cloaked.Remove(hwnd);
         if (!had) return;   // 不是我们斗的：绝不去动别人的可见性
@@ -177,6 +208,12 @@ public sealed class WindowTransitionGuard : IDisposable
     public bool IsCloakedByUs(IntPtr hwnd)
     {
         lock (_gate) return _cloaked.ContainsKey(hwnd);
+    }
+
+    /// <summary>该窗口是否被 SW_HIDE 代管（斗篷被拒时的隐形代管，见 Cloak；最小化链路用）。</summary>
+    public bool IsHiddenByUs(IntPtr hwnd)
+    {
+        lock (_gate) return _hiddenByUs.Contains(hwnd);
     }
 
     /// <summary>看门狗：斗了太久还没人解的窗口强制放出来（fail-open）。</summary>
@@ -199,6 +236,15 @@ public sealed class WindowTransitionGuard : IDisposable
                 if (now - at > CloakTimeoutMs) expired.Add(hwnd);
             }
             foreach (var hwnd in dead) _cloaked.Remove(hwnd);
+            // SW_HIDE 代管表只清死窗口：活着的代管窗口恢复时机归还原链路管（Uncloak），
+            // 这里强行现身会把正在播的替身戳穿。
+            if (_hiddenByUs.Count > 0)
+            {
+                var hiddenDead = new List<IntPtr>();
+                foreach (var hwnd in _hiddenByUs)
+                    if (!NativeMethods.IsWindow(hwnd)) hiddenDead.Add(hwnd);
+                foreach (var hwnd in hiddenDead) _hiddenByUs.Remove(hwnd);
+            }
         }
         foreach (var hwnd in expired)
         {
@@ -218,13 +264,23 @@ public sealed class WindowTransitionGuard : IDisposable
         _watchdog?.Dispose();
         IntPtr[] cloaked;
         IntPtr[] managed;
+        IntPtr[] hidden;
         lock (_gate)
         {
             cloaked = _cloaked.Keys.ToArray();
             managed = _noTransition.Keys.ToArray();
+            hidden = _hiddenByUs.ToArray();
             _cloaked.Clear();
             _noTransition.Clear();
             _noTransitionFailed.Clear();
+            _hiddenByUs.Clear();
+        }
+
+        // SW_HIDE 代管的窗口必须先现身再谈退出：否则窗口随进程一起消失，用户会以为窗口丢了
+        foreach (var hwnd in hidden)
+        {
+            var cmd = NativeMethods.IsIconic(hwnd) ? NativeMethods.SwShowNoActivate : NativeMethods.SwShowna;
+            NativeMethods.ShowWindow(hwnd, cmd);
         }
 
         foreach (var hwnd in cloaked)

@@ -159,7 +159,12 @@ public partial class NotificationCenterWindow : Window
     private void PlaySlideIn()
     {
         var transform = new TranslateTransform(20, 0);
-        RenderTransform = transform;
+        // RenderTransform 只能挂在内容根上：Window 本身被 WPF 明确禁止挂变换
+        // （CoerceRenderTransform 抛"转换对于 Window 无效"，真机已复现——点通知中心就崩的就是这行）。
+        if (Content is UIElement root)
+        {
+            root.RenderTransform = transform;
+        }
         Opacity = 0;
 
         var slide = new System.Windows.Media.Animation.DoubleAnimation(0, TimeSpan.FromMilliseconds(180))

@@ -107,7 +107,7 @@ internal static class IconExtractor
             if (Cache.TryGet(key, out var hit)) return hit;
             var result = Extract(path, size);
             Cache.Set(key, result);
-            LogOnce(result);
+            LogOnce(result, size);
             return result;
         }
     }
@@ -377,14 +377,16 @@ internal static class IconExtractor
     /// 每个图标源一行日志（"哪个层产出的 + 多大"）：真机反馈"图标糊"时先看这一行，
     /// 判的是"资源里到底有没有大帧"，不必再靠截图目测。上限 <see cref="LogLimit"/> 条防集合无界增长。
     /// </summary>
-    private static void LogOnce(Result result)
+    private static void LogOnce(Result result, int requestedSize)
     {
         if (result.Icon is null) return;
         var path = result.UsedPath;
         if (path.Length == 0 || Logged.Count >= LogLimit) return;
         if (!Logged.Add(path)) return;
         var name = Path.GetFileName(path);
+        // 请求尺寸必须记实参（旧版记的是 PreferredSize 常量 256，启动台按 176 请求时日志
+        // 会误导成"请求 256"，真机排障时对不上号）。
         Logger.Info($"图标提取 {name}: 层={result.Tier} 尺寸={result.Icon.PixelWidth}×{result.Icon.PixelHeight} " +
-                    $"格式={result.Icon.Format} 请求={PreferredSize}");
+                    $"格式={result.Icon.Format} 请求={requestedSize}");
     }
 }

@@ -180,6 +180,7 @@ public partial class App : Application
 
             // 启动台常驻格（alpha.22）：Dock 点击时求值（_launcher 此刻可能尚未创建，lambda 闭包兜住）
             Dock.DockWindow.LaunchpadRequested = () => Launcher.LaunchpadWindow.ShowOrToggle(_launcher);
+            Dock.DockWindow.LaunchpadDismissed = () => _dock.Surface.ResetMagnification();
             _dock.Show();
 
             if (e.Args.Contains("--minimized", StringComparer.OrdinalIgnoreCase))

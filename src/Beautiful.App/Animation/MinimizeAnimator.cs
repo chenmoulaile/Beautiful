@@ -328,12 +328,17 @@ public sealed class MinimizeAnimator : IDisposable
             if (NativeMethods.GetWindowTextLength(hwnd) == 0) return;
             if (NativeMethods.DwmGetWindowAttribute(hwnd, NativeMethods.DwmwaCloaked, out var cloaked, 4) == 0
                 && cloaked != 0) return;   // UWP 挂起/浏览器隐藏窗：别人的斗篷不碰
-            if (NativeMethods.GetWindowThreadProcessId(hwnd, out var pid) == 0
-                || pid == (uint)Environment.ProcessId) return;
+            if (NativeMethods.GetWindowThreadProcessId(hwnd, out var pid) == 0) return;
+            var own = pid == (uint)Environment.ProcessId;
+            // 自家窗口默认不接管（Dock/顶栏/启动台/控制中心全是自家表面，接管=自我打架）；
+            // 显式登记的内容窗口（访达，见 SelfContentWindows）例外——否则自家窗口永远播
+            // 系统原生开窗动画（用户反馈"访达的滑动动画退回 windows 的了"）。
+            if (own && !SelfContentWindows.Contains(hwnd)) return;
             var className = NativeMethods.GetWindowClassName(hwnd);
             if (className is "Windows.UI.Core.CoreWindow" or "Shell_TrayWnd" or "Progman" or "WorkerW"
                 or "XamlExplorerHostIslandWindow") return;
-            if (_policy.IsExcludedName(ProcessName(pid))) return;   // 排除的应用保留原生行为，不斗
+            // 排除名单面向第三方应用；自家内容窗口不受名单约束
+            if (!own && _policy.IsExcludedName(ProcessName(pid))) return;
             if (!NativeMethods.GetWindowRect(hwnd, out var r)) return;
             if (r.Right - r.Left < MinShellSize || r.Bottom - r.Top < MinShellSize) return;
 
@@ -530,7 +535,18 @@ public sealed class MinimizeAnimator : IDisposable
     /// <summary>最小化：抓一帧（或取缓存帧）盖在原位，再把替身收进该应用在 Dock 上的图标。</summary>
     private void PlayMinimize(IntPtr hwnd, string source)
     {
-        if (!Admit(hwnd, AnimKind.Minimize, source, out var durationMs, out _)) return;
+        // SW_HIDE 代管（斗篷被拒）且本轮动画没播成：立刻恢复可见——隐藏窗口会从任务栏/
+        // 切换器消失，不能留着（斗篷窗口没有这个问题：斗篷不改变可见性，可安全挂到还原收尾）。
+        void ReleaseHidden(string why)
+        {
+            if (_guard?.IsHiddenByUs(hwnd) == true) _guard.Uncloak(hwnd, why);
+        }
+
+        if (!Admit(hwnd, AnimKind.Minimize, source, out var durationMs, out _))
+        {
+            ReleaseHidden("门禁未放行");
+            return;
+        }
 
         var p = AnimParamsStore.Current;
 
@@ -549,13 +565,18 @@ public sealed class MinimizeAnimator : IDisposable
                 // 缓存帧同样过实心合成：alpha 洞不会因为帧老就变少
                 if (GenieFrameSource.MakeOpaque(cached) is not { } composed)
                 {
+                    ReleaseHidden("缓存帧整理失败");
                     _policy.Complete(AnimKind.Minimize);
                     return;
                 }
+                // SW_HIDE 代管的窗口不能像斗篷那样挂到还原收尾——隐藏窗口没有任务栏按钮，
+                // 替身一放完就得让它以"最小化但可见"现身（Finish 统一走 Uncloak）。
+                if (_guard?.IsHiddenByUs(hwnd) == true) _pendingUncloak = hwnd;
                 StartGenie(composed, cachedRect, icon, durationMs, reverse: false, source, "缓存", age);
                 return;
             }
 
+            ReleaseHidden("缓存帧过期/缺失");
             _policy.Complete(AnimKind.Minimize);
             Logger.Info(AnimReport.Skipped(source, "缓存", "到手时已最小化且缓存帧过期/缺失",
                 $"缓存条数={_frames.Count}"));
@@ -564,6 +585,7 @@ public sealed class MinimizeAnimator : IDisposable
 
         if (!NativeMethods.GetWindowRect(hwnd, out var rect))
         {
+            ReleaseHidden("读窗口矩形失败");
             _policy.Complete(AnimKind.Minimize);
             Logger.Info(AnimReport.Skipped(source, "无", "读窗口矩形失败"));
             return;
@@ -571,6 +593,7 @@ public sealed class MinimizeAnimator : IDisposable
         var sourceRect = ToRect(rect);
         if (sourceRect.Width < MinShellSize || sourceRect.Height < MinShellSize)
         {
+            ReleaseHidden("窗口过小");
             _policy.Complete(AnimKind.Minimize);
             Logger.Info(AnimReport.Skipped(source, "无", "窗口过小", $"{sourceRect.Width:0}×{sourceRect.Height:0}"));
             return;
@@ -579,6 +602,7 @@ public sealed class MinimizeAnimator : IDisposable
         var image = GenieFrameSource.MakeOpaque(Capture(hwnd, source));
         if (image is null)
         {
+            ReleaseHidden("抓帧不可用");
             _policy.Complete(AnimKind.Minimize);
             return;
         }
@@ -587,6 +611,9 @@ public sealed class MinimizeAnimator : IDisposable
 
         var iconRect = IconRectFor(sourceRect, _dockTarget(hwnd));
         LogGeometry(source, layer, hwnd, sourceRect, iconRect);
+        // SW_HIDE 代管：替身一放完就恢复"最小化但可见"（隐藏窗口没有任务栏按钮）。
+        // 斗篷窗口不设这个——斗篷保持到还原收尾，用户看不见"先弹出"帧。
+        if (_guard?.IsHiddenByUs(hwnd) == true) _pendingUncloak = hwnd;
         // 最小化方向不解斗篷：斗篷保持到还原收尾（还原时真窗口在隐形状态下就位，用户看不见"先弹出"帧）。
         // 窗口一直最小化 → 看门狗会跳过 iconic 窗口（见 WindowTransitionGuard），斗篷 harmless。
         StartGenie(image, sourceRect, iconRect, durationMs, reverse: false, source, layer, 0);
@@ -625,8 +652,15 @@ public sealed class MinimizeAnimator : IDisposable
     /// <summary>用预抓的画面放 genie。窗口此刻多半已经缩下去，矩形用预抓的那份，不再现查。</summary>
     public void PlayMinimizeFromCapture(IntPtr hwnd, BitmapSource image, Rect sourceRect)
     {
-        if (!Admit(hwnd, AnimKind.Minimize, "Dock", out var durationMs, out _)) return;
+        if (!Admit(hwnd, AnimKind.Minimize, "Dock", out var durationMs, out _))
+        {
+            // SW_HIDE 代管（事件路径打的）但 Dock 链路没能播：立即恢复，别留隐藏窗口
+            if (_guard?.IsHiddenByUs(hwnd) == true) _guard.Uncloak(hwnd, "Dock预抓门禁未放行");
+            return;
+        }
         var icon = IconRectFor(sourceRect, _dockTarget(hwnd));
+        // SW_HIDE 代管：替身一放完就恢复"最小化但可见"，任务栏按钮不能少
+        if (_guard?.IsHiddenByUs(hwnd) == true) _pendingUncloak = hwnd;
         // 预抓帧入替前同样过实心合成；合成器对非空输入不会返回 null（?? image 兜底保型）
         StartGenie(GenieFrameSource.MakeOpaque(image) ?? image, sourceRect, icon, durationMs, reverse: false, "Dock", "预抓帧", 0);
     }
@@ -687,6 +721,13 @@ public sealed class MinimizeAnimator : IDisposable
 
         var icon = IconRectFor(sourceRect, _dockTarget(hwnd));
         LogGeometry("MINIMIZEEND", layer, hwnd, sourceRect, icon);
+        // SW_HIDE 代管窗口的还原：触发还原的 SW_RESTORE 已让真窗口可见，原生还原动画会和
+        // 替身叠播（minimize 方向刚治好的病）——帧已抓（上面），先藏回去，替身放完由 Finish
+        // 统一现身（Uncloak 对代管窗口走 ShowWindow 恢复，不抢激活）。
+        if (_guard?.IsHiddenByUs(hwnd) == true && NativeMethods.IsWindowVisible(hwnd))
+        {
+            NativeMethods.ShowWindow(hwnd, NativeMethods.SwHide);
+        }
         _pendingUncloak = hwnd;   // RunClock 收尾统一解斗篷（异常路径也会走到 Finish，不会漏）
         StartGenie(image, sourceRect, icon, durationMs, reverse: true, "MINIMIZEEND", layer, 0);
     }
@@ -742,8 +783,9 @@ public sealed class MinimizeAnimator : IDisposable
             var p = reverse ? 1.0 - t : t;
             var e = AnimCurve.EaseInOutQuad(p);
             var r = GenieMath.ZoomLerp(new GenieRect(0, 0, 1, 1), target, e);
-            var opacity = 1.0 - 0.35 * GenieMath.Clamp01(e);
-            return new List<(GenieRect, double)> { (r, opacity) };
+            // 替身全程不透明：缩放本身就是完整的视觉收缩，再叠 35% 淡出只会让画面"发虚透明"
+            // （用户实测反馈）。替身消失由 Finish 的窗口关闭一次性完成，与 mesh 引擎口径一致。
+            return new List<(GenieRect, double)> { (r, 1.0) };
         }, source, "zoom", layer, ageMs);
     }
 

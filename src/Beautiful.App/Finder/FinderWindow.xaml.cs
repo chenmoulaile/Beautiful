@@ -67,6 +67,16 @@ public partial class FinderWindow : Window
     private List<FinderRow> _visibleRows = [];
     private CancellationTokenSource? _loadCts;
     private CancellationTokenSource? _iconCts;
+
+    /// <summary>
+    /// 列视图图标后台循环的停车标记。不能在后台线程读 <see cref="UIElement.IsLoaded"/>——
+    /// 那是 DispatcherObject 属性，跨线程读直接抛 InvalidOperationException（真机日志
+    /// "未观察的任务异常 …FinderWindow.StartColumnIconLoad"×2 即此），窗口关闭信号改走本标志。
+    /// </summary>
+    private volatile bool _columnIconLoopStopped;
+
+    /// <summary>本窗口的 hwnd（SourceInitialized 时登记进 <see cref="SelfContentWindows"/>，关闭时注销）。</summary>
+    private IntPtr _selfContentHwnd;
     private string _currentPath = string.Empty;
     private string? _loadError;
     private string? _freeSpaceText;
@@ -125,6 +135,8 @@ public partial class FinderWindow : Window
         _current = window;
         window.Closed += (_, _) =>
         {
+            window._columnIconLoopStopped = true;   // 停掉列视图图标后台循环（跨线程不能读 IsLoaded）
+            Animation.SelfContentWindows.Unregister(window._selfContentHwnd);
             if (ReferenceEquals(_current, window))
             {
                 _current = null;
@@ -1371,10 +1383,16 @@ public partial class FinderWindow : Window
     protected override void OnSourceInitialized(EventArgs e)
     {
         base.OnSourceInitialized(e);
+        var handle = new WindowInteropHelper(this).Handle;
         var corner = NativeMethods.DwmwcpRound;
         NativeMethods.DwmSetWindowAttribute(
-            new WindowInteropHelper(this).Handle,
+            handle,
             NativeMethods.DwmwaWindowCornerPreference, ref corner, sizeof(int));
+        // 登记为"自家内容窗口"：开窗动画接管器只对注册过的自家窗口播 mac 开窗
+        // （其余自家表面——Dock/顶栏/面板——保持原生行为，不自动画）。
+        // 不注册的后果：自家窗口永远播系统原生开窗动画（真机反馈"访达的滑动动画退回 windows 的了"）。
+        _selfContentHwnd = handle;
+        Animation.SelfContentWindows.Register(handle);
     }
 
     // ---------- 行视图模型 ----------

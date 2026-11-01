@@ -1040,6 +1040,18 @@ public sealed class DockSurface : Canvas
         _hooked = true;
     }
 
+    /// <summary>
+    /// 强制复位悬停放大（全屏覆盖层关闭时由 DockWindow 调用，见 LaunchpadDismissed）。
+    /// <para>
+    /// 【为什么需要】Launchpad 这类全屏面板盖住 Dock 的整段期间，Dock 收不到任何鼠标事件；
+    /// 面板关闭的瞬间光标若恰好静止，既没有 MouseMove 也没有 MouseLeave，放大场就停留在
+    /// 打开前的旧状态（真机实测：Esc 关启动台后 Dock 停在放大态，直到几秒后的某个事件才恢复）。
+    /// 这里只做一件事：唤醒渲染循环并作废旧的光标样本——下一帧按真实光标位置重算，
+    /// 光标不在行内就自然回落到 1，光标还在图标上就保持该图标的放大（与 macOS 一致）。
+    /// </para>
+    /// </summary>
+    public void ResetMagnification() => Wake();
+
     private void StopLoop()
     {
         if (!_hooked) return;

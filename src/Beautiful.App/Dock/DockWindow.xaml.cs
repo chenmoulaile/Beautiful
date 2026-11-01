@@ -1420,6 +1420,13 @@ public partial class DockWindow : AcrylicWindow
     internal static Action? LaunchpadRequested;
 
     /// <summary>
+    /// 启动台关闭回调：App 装配后注入（Surface.ResetMagnification）。
+    /// 启动台全屏盖住 Dock 期间 Dock 收不到鼠标事件，关闭瞬间光标静止时放大场会卡在
+    /// 旧状态（真机实测"Esc 关闭后 Dock 停在放大态"），关闭时必须主动复位一次。
+    /// </summary>
+    internal static Action? LaunchpadDismissed;
+
+    /// <summary>
     /// 在自家访达里打开（Phase 6-c 互通）：目录直接导航；文件则打开其所在文件夹。
     /// 拿不到路径时退回系统关联打开，绝不让菜单项变成"点了没反应"。
     /// </summary>
