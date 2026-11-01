@@ -215,8 +215,7 @@ public class FinderColumnViewTests
     {
         var chain = FinderColumnChain.Build(@"C:\Users\me\Docs\Work\2026", maxColumns: 3);
 
-        Assert.Equal(new[] { @"C:\Users\me\Docs\Work\2026", @"C:\Users\me\Docs\Work", @"C:\Users\me\Docs" }
-            .Reverse().ToArray(), chain);
+        Assert.Equal(new[] { @"C:\Users\me\Docs", @"C:\Users\me\Docs\Work", @"C:\Users\me\Docs\Work\2026" }, chain);
     }
 
     [Fact]
