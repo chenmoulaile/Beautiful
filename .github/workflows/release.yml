@@ -25,8 +25,21 @@ jobs:
           dotnet-version: '8.0.x'
 
       - name: 编译 native（v4 Phase 2，/W4 /WX）
-        shell: cmd
-        run: scripts\build-native.cmd Release
+        shell: pwsh
+        run: |
+          $out = cmd /c "scripts\build-native.cmd Release" 2>&1 | Tee-Object -FilePath native-build.log
+          $out | ForEach-Object { Write-Host $_ }
+          exit $LASTEXITCODE
+
+      # native 代码从未在本机编译过（所有者机器无 MSVC）：失败时把完整输出存成产物，
+      # 仓库所有者在 Actions 页即可下载定位，不用翻网页控制台。
+      - name: 上传 native 构建日志（仅失败时）
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: native-build-log
+          path: native-build.log
+          if-no-files-found: ignore
 
       - name: NativeSmoke（无桌面部分进 CI）
         shell: cmd
