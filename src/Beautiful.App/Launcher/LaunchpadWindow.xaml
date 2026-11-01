@@ -40,7 +40,10 @@
                         HorizontalAlignment="Center" VerticalAlignment="Top"
                         Margin="0,0,0,10" Visibility="Collapsed"/>
 
-            <ListBox x:Name="Tiles" Grid.Row="1" Background="Transparent" BorderThickness="0"
+            <!-- alpha.25 翻页滑动：PageHost 里快照层与 Tiles 同位叠放——翻页时旧页截图滑出、
+                 新页整体从旁边滑入（macOS 启动台同款），动画结束移除快照层。 -->
+            <Grid x:Name="PageHost" Grid.Row="1">
+            <ListBox x:Name="Tiles" Background="Transparent" BorderThickness="0"
                      ScrollViewer.HorizontalScrollBarVisibility="Disabled"
                      ScrollViewer.VerticalScrollBarVisibility="Disabled"
                      KeyDown="Tiles_KeyDown">
@@ -100,6 +103,7 @@
                     </DataTemplate>
                 </ListBox.ItemTemplate>
             </ListBox>
+            </Grid>
 
             <StackPanel Grid.Row="2" Orientation="Horizontal" HorizontalAlignment="Center" Margin="0,10,0,0">
                 <StackPanel x:Name="Dots" Orientation="Horizontal" VerticalAlignment="Center"/>

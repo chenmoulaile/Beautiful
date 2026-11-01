@@ -161,6 +161,14 @@ public partial class FinderWindow : Window
     {
         InitializeComponent();
 
+        // alpha.25 自导开窗动画：先以全透明完成布局与首帧渲染（PrintWindow 对全透明窗口照常出图），
+        // ContentRendered 里让替身演 mac 开窗，收尾才把 Opacity 置 1。
+        // 【fail-open】动画器缺席/异常/1.5s 保险任一环兜底都会把窗口亮出来，绝不停在透明态。
+        if (SettingsService.Current.WindowOpenAnimation)
+        {
+            Opacity = 0;
+        }
+
         _statusHintTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(3) };
         _statusHintTimer.Tick += (_, _) =>
         {
@@ -1394,6 +1402,40 @@ public partial class FinderWindow : Window
         _selfContentHwnd = handle;
         Animation.SelfContentWindows.Register(handle);
     }
+
+    /// <summary>
+    /// 首帧渲染完成 → 让动画器播 mac 开窗替身（94% 落位），放完再现身。
+    /// 三重保险保证窗口一定会现身：动画器所有早退路径回调 reveal、1.5s 失败保险、
+    /// 异常路径直接现身（见 MinimizeAnimator.PlayOpenForSelf 的 fail-open 红线）。
+    /// </summary>
+    protected override void OnContentRendered(EventArgs e)
+    {
+        base.OnContentRendered(e);
+        if (_openAnimated || Opacity > 0) return;   // 复用单例/未预藏：不重播
+        _openAnimated = true;
+
+        var failsafe = new System.Windows.Threading.DispatcherTimer
+        {
+            Interval = TimeSpan.FromMilliseconds(1500),
+        };
+        failsafe.Tick += (_, _) => { Opacity = 1; failsafe.Stop(); };
+        failsafe.Start();
+
+        var animator = App.SharedAnimator;
+        if (animator is null || !SettingsService.Current.WindowOpenAnimation)
+        {
+            Opacity = 1;
+            failsafe.Stop();
+            return;
+        }
+        animator.PlayOpenForSelf(_selfContentHwnd, () =>
+        {
+            Opacity = 1;
+            failsafe.Stop();
+        });
+    }
+
+    private bool _openAnimated;
 
     // ---------- 行视图模型 ----------
 

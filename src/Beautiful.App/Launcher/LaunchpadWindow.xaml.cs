@@ -9,6 +9,7 @@ using System.Windows.Controls;
 using System.Windows.Input;
 using System.Windows.Media;
 using System.Windows.Media.Effects;
+using System.Windows.Media.Animation;
 using System.Windows.Media.Imaging;
 using Beautiful.App.Interop;
 using Beautiful.App.Services;
@@ -320,14 +321,21 @@ public partial class LaunchpadWindow : Window, System.ComponentModel.INotifyProp
 
         // 文件夹只在"无搜索"时参与排版：搜索是"找应用"，把文件夹塞进结果只会让人多点一次。
         _allTiles = BuildTiles(query.Length == 0);
-        var allTiles = _allTiles;
         BuildFolderStrip(query.Length == 0);
-        var pageCount = LaunchpadPagination.PageCount(allTiles.Count, PageSize);
+        var pageCount = LaunchpadPagination.PageCount(_allTiles.Count, PageSize);
         _page = Math.Clamp(_page, 0, Math.Max(0, pageCount - 1));
         // 图标请求尺寸随网格适配结果走（ApplyGridFit 先于 Refresh 调用）
         _iconPx = Math.Clamp((int)Math.Ceiling(TileIconSize * VisualTreeHelper.GetDpi(this).PixelsPerDip * 1.10 / 16.0) * 16,
             64, Interop.IconExtractor.PreferredSize);
 
+        ApplyPage();
+    }
+
+    /// <summary>把当前 _page 应用到界面（ItemsSource/图标泵/页点/状态行）。翻页与刷新共用。</summary>
+    private void ApplyPage()
+    {
+        var allTiles = _allTiles;
+        var pageCount = LaunchpadPagination.PageCount(allTiles.Count, PageSize);
         var (first, count) = LaunchpadPagination.SpanOf(_page, allTiles.Count, PageSize);
         _pageTiles = new ObservableCollection<LaunchpadTile>(allTiles.Skip(first).Take(count));
         Tiles.ItemsSource = _pageTiles;
@@ -341,6 +349,79 @@ public partial class LaunchpadWindow : Window, System.ComponentModel.INotifyProp
         Status.Text = _service.IsIndexReady
             ? (_apps.Count == 0 ? "没有匹配的应用" : $"{_apps.Count} 个应用")
             : "正在建立索引…";
+    }
+
+    /// <summary>翻页节流窗口（TickCount64 ms）：滑动动画期间吞掉新的翻页请求，防连翻掉帧。</summary>
+    private bool _sliding;
+
+    /// <summary>
+    /// alpha.25 翻页滑动动画：macOS 启动台整页横向滑动。旧页在换源前截一张位图垫底滑出，
+    /// 新页整体从旁边滑入（方向 = 翻页方向），280ms easeInOut；结束移除快照复位变换。
+    /// 快照失败（首帧/极小窗）退化为即时换页——翻页功能永远优先于动画。
+    /// </summary>
+    private void SlideToPage(int newPage)
+    {
+        var pageCount = LaunchpadPagination.PageCount(_allTiles.Count, PageSize);
+        newPage = Math.Clamp(newPage, 0, Math.Max(0, pageCount - 1));
+        if (newPage == _page || _sliding) return;
+        var direction = newPage > _page ? 1 : -1;   // 下一页：新页从右滑入；上一页：从左滑入
+
+        // ① 旧页快照（必须在换 ItemsSource 之前抓，DPI 对齐窗口缩放保清晰）
+        System.Windows.Controls.Image? snapshot = null;
+        var w = (int)Math.Ceiling(Tiles.ActualWidth);
+        var h = (int)Math.Ceiling(Tiles.ActualHeight);
+        if (w > 10 && h > 10)
+        {
+            try
+            {
+                var dpi = VisualTreeHelper.GetDpi(this).PixelsPerDip;
+                var rtb = new RenderTargetBitmap((int)(w * dpi), (int)(h * dpi), 96 * dpi, 96 * dpi, PixelFormats.Pbgra32);
+                rtb.Render(Tiles);
+                rtb.Freeze();
+                snapshot = new System.Windows.Controls.Image
+                {
+                    Source = rtb,
+                    Width = w,
+                    Height = h,
+                    HorizontalAlignment = System.Windows.HorizontalAlignment.Left,
+                    VerticalAlignment = VerticalAlignment.Top,
+                };
+            }
+            catch (Exception ex)
+            {
+                Logger.Warn($"启动台翻页快照失败（退化为直切）：{ex.GetType().Name} {ex.Message}");
+            }
+        }
+
+        // ② 换页（无动画路径：更新 ItemsSource/泵/页点）
+        _page = newPage;
+        ApplyPage();
+
+        // ③ 双层滑动；没有快照就直接停在这里（= 旧版直切行为）
+        if (snapshot is null) return;
+        var width = PageHost.ActualWidth;
+        if (width < 50) { PageHost.Children.Remove(snapshot); return; }
+
+        _sliding = true;
+        PageHost.Children.Add(snapshot);   // 快照垫底，新页 Tiles 在上
+        var inX = width * direction;
+        var slideIn = new TranslateTransform(inX, 0);
+        var slideOut = new TranslateTransform(0, 0);
+        Tiles.RenderTransform = slideIn;
+        snapshot.RenderTransform = slideOut;
+
+        var duration = TimeSpan.FromMilliseconds(280);
+        var ease = new CubicEase { EasingMode = EasingMode.EaseInOut };
+        var animIn = new DoubleAnimation(inX, 0, duration) { EasingFunction = ease };
+        var animOut = new DoubleAnimation(0, -inX, duration) { EasingFunction = ease };
+        animIn.Completed += (_, _) =>
+        {
+            PageHost.Children.Remove(snapshot);
+            Tiles.RenderTransform = null;
+            _sliding = false;
+        };
+        slideIn.BeginAnimation(TranslateTransform.XProperty, animIn);
+        slideOut.BeginAnimation(TranslateTransform.XProperty, animOut);
     }
 
     /// <summary>
@@ -422,9 +503,9 @@ public partial class LaunchpadWindow : Window, System.ComponentModel.INotifyProp
         // 总页数必须用全量 tile 数（Tiles.Items 只有当前页，见 _allTiles 字段注释）
         var pageCount = LaunchpadPagination.PageCount(_allTiles.Count, PageSize);
         if (e.Key == Key.Right && _page < pageCount - 1)
-        { _page++; Refresh(); e.Handled = true; }
+        { SlideToPage(_page + 1); e.Handled = true; }
         if (e.Key == Key.Left && _page > 0)
-        { _page--; Refresh(); e.Handled = true; }
+        { SlideToPage(_page - 1); e.Handled = true; }
     }
 
     private void Root_MouseWheel(object sender, MouseWheelEventArgs e)
@@ -440,8 +521,8 @@ public partial class LaunchpadWindow : Window, System.ComponentModel.INotifyProp
         if (pageCount <= 1) return;
         var now = Environment.TickCount64;
         if (now - _lastWheelNavMs < 120) return;   // 触控板惯性节流
-        if (e.Delta < 0 && _page < pageCount - 1) { _page++; _lastWheelNavMs = now; Refresh(); }
-        else if (e.Delta > 0 && _page > 0) { _page--; _lastWheelNavMs = now; Refresh(); }
+        if (e.Delta < 0 && _page < pageCount - 1) { _lastWheelNavMs = now; SlideToPage(_page + 1); }
+        else if (e.Delta > 0 && _page > 0) { _lastWheelNavMs = now; SlideToPage(_page - 1); }
     }
 
     private void Tile_Click(object sender, RoutedEventArgs e)

@@ -95,16 +95,24 @@ public sealed class ScreenBackdrop
             Math.Max(1, panelPx.Height) / f);
         // 越界必须查：TileMode=None 时 Viewbox 超出图像的那部分**什么都不画**，而分层窗口上"不画"
         // = 真透明 → 卡片上出现一块能看穿到桌面的洞（正是 v2 顶栏"露壁纸"的同款故障，绝不能重演）。
-        if (vb.X < 0 || vb.Y < 0 || vb.Right > _imgWidth + 0.5 || vb.Bottom > _imgHeight + 0.5)
+        // 【alpha.25 改钳制不降级】面板比屏幕宽/跨屏时（真机：窄副屏 840px 上控制中心 875px，
+        // 面板探出屏 20px）原实现整卡退实心底——"不像 macOS"的元凶之一。越界段是屏幕外的部分，
+        // 视觉上本就不可见；把 Viewbox 钳进图像边界（越界侧取边缘延伸），可见区域模糊照常、
+        // 屏幕外一侧拉伸补齐，永远有像素可画，不再出现实心卡底的观感跳变。
+        var clampedX = Math.Clamp(vb.X, 0, Math.Max(0, _imgWidth - 1));
+        var clampedY = Math.Clamp(vb.Y, 0, Math.Max(0, _imgHeight - 1));
+        var clampedW = Math.Clamp(vb.Right, clampedX + 1, _imgWidth) - clampedX;
+        var clampedH = Math.Clamp(vb.Bottom, clampedY + 1, _imgHeight) - clampedY;
+        if (clampedX != vb.X || clampedY != vb.Y || clampedW != vb.Width || clampedH != vb.Height)
         {
             if (!_outOfRegionWarned)
             {
                 _outOfRegionWarned = true;
                 Logger.Warn($"背板瞄准越界：面板=({panelPx.Left},{panelPx.Top})-({panelPx.Right},{panelPx.Bottom}) " +
                             $"捕获区=({_region.Left},{_region.Top})-({_region.Right},{_region.Bottom}) " +
-                            $"图={_imgWidth:0}×{_imgHeight:0} → 本次改用实心卡底（四周余量不足）");
+                            $"图={_imgWidth:0}×{_imgHeight:0} → 已钳制到捕获区内（屏幕外一侧边缘延伸）");
             }
-            return false;
+            vb = new Rect(clampedX, clampedY, clampedW, clampedH);
         }
         _brush.Viewbox = vb;
         return true;

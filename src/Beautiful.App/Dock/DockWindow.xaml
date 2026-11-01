@@ -197,7 +197,7 @@
           TextElement.FontFamily="{DynamicResource ThemeFontFamily}">
         <Border x:Name="DockPanelRoot" Padding="10,6"
                 CornerRadius="{DynamicResource ThemePanelCornerRadius}"
-                Background="{DynamicResource ThemeDockBackground}"
+                Background="{DynamicResource ThemeDockGlassBackground}"
                 BorderBrush="{DynamicResource MacDockBorder}" BorderThickness="1"/>
         <!-- 左右停靠（实验）：竖排面板。复用条目模板，但不参与放大场/倒影/拖放排序——
              那套几何是水平轴写的，强行复用会把 Dock 主路径一起改坏。 -->

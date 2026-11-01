@@ -2,6 +2,8 @@ using System.Collections.ObjectModel;
 using System.Collections.Specialized;
 using System.ComponentModel;
 using System.IO;
+using System.Windows;
+using System.Windows.Media.Imaging;
 using Beautiful.App.Interop;
 using Beautiful.App.Services;
 using Beautiful.Core.Dock;
@@ -68,9 +70,17 @@ public sealed class DockViewModel
     /// <summary>自定义图标表（右键"更换图标…"写这里）；测试可注入独立目录。</summary>
     public DockIconOverridesStore IconOverrides => _iconOverrides;
 
+    /// <summary>
+    /// 最小化窗口的帧缓存查询（alpha.25）：Dock 最小化区按 macOS 语义显示<b>窗口内容缩略图</b>
+    /// 而不是应用图标。由装配方注入 MinimizeAnimator.LastFrameFor；null/无帧退应用图标。
+    /// </summary>
+    private readonly Func<IntPtr, BitmapSource?>? _frameProvider;
+
     public DockViewModel(WindowTracker tracker, PinnedAppsStore? pinnedStore = null, bool separatorsEnabled = false,
-        bool importTaskbarPins = false, DockIconOverridesStore? iconOverrides = null)
+        bool importTaskbarPins = false, DockIconOverridesStore? iconOverrides = null,
+        Func<IntPtr, BitmapSource?>? frameProvider = null)
     {
+        _frameProvider = frameProvider;
         _tracker = tracker;
         _iconOverrides = iconOverrides ?? new DockIconOverridesStore();
         _pinnedStore = pinnedStore ?? new PinnedAppsStore();
@@ -370,16 +380,40 @@ public sealed class DockViewModel
 
     // ---------- 运行窗口（实时增删 + 标题刷新） ----------
 
-    private static DockItem ToDockItem(WindowItem w)
-        => new(Id: w.Handle.ToString(),
+    private DockItem ToDockItem(WindowItem w)
+    {
+        // alpha.25：最小化条目的图标优先取窗口内容缩略图（帧缓存在最小化/genie 前就绪），
+        // 居中裁方形适配图标位图管线；无帧（动画器缺席/从未取样）退应用图标。
+        var icon = w.Icon;
+        if (w.IsMinimized && _frameProvider?.Invoke(w.Handle) is { } frame)
+        {
+            try
+            {
+                var side = Math.Min(frame.PixelWidth, frame.PixelHeight);
+                if (side >= 32)
+                {
+                    var crop = new Int32Rect((frame.PixelWidth - side) / 2, (frame.PixelHeight - side) / 2, side, side);
+                    var thumb = new CroppedBitmap(frame, crop);
+                    thumb.Freeze();
+                    icon = thumb;
+                }
+            }
+            catch
+            {
+                // 帧尺寸异常等：保持应用图标，不影响条目本身
+            }
+        }
+
+        return new DockItem(Id: w.Handle.ToString(),
                Label: w.Title,
-               Icon: w.Icon,
+               Icon: icon,
                // alpha.24：最小化窗口换种类 → 驻留在分隔符右侧的最小化区（macOS 语义），
                // 渲染同模板，但指示点不亮、不可拖拽；点击仍走还原。
                Kind: w.IsMinimized ? DockItemKind.MinimizedWindow : DockItemKind.Window,
                LaunchPath: w.ExePath,
                WindowHandle: w.Handle,
                IconSource: w.ExePath);   // 跟踪器就是按 exe 路径取图并缓存的，键与它同源
+    }
 
     private void OnWindowsChanged(object? sender, NotifyCollectionChangedEventArgs e)
     {

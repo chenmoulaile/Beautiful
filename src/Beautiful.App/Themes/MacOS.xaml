@@ -10,7 +10,13 @@
          倒影默认关：现代 macOS Dock 没有倒影（用户仍可在设置页显式打开，设置优先于主题默认）。 -->
 
     <SolidColorBrush x:Key="ThemeAccent" Color="#0A84FF"/>
-    <SolidColorBrush x:Key="ThemeDockBackground" Color="#B4202020"/>
+    <!-- alpha.25：Dock 面板专属玻璃底（上亮下沉的三段渐变）。独立键而非复用 ThemeDockBackground：
+         顶栏/日历浮层/原生预览卡仍要纯色（ThumbnailPreview.ReadColor 只认 SolidColorBrush）。 -->
+    <LinearGradientBrush x:Key="ThemeDockGlassBackground" StartPoint="0,0" EndPoint="0,1">
+        <GradientStop Color="#C838383A" Offset="0"/>
+        <GradientStop Color="#B8242426" Offset="0.5"/>
+        <GradientStop Color="#A8161618" Offset="1"/>
+    </LinearGradientBrush>
     <SolidColorBrush x:Key="ThemeTextPrimary" Color="#FFFFFFFF"/>
     <SolidColorBrush x:Key="ThemePanelBackground" Color="#26FFFFFF"/>
     <!-- Dock 分隔符：约 20% 不透明的亮线（macOS 原生是一道很淡的竖向发丝线，不是实色描边） -->

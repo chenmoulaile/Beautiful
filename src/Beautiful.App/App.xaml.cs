@@ -44,6 +44,12 @@ public partial class App : Application
     /// <summary>最小化/最大化动画（v3.2）：持有两条 WinEvent 钩子，退出必须卸。</summary>
     private Animation.MinimizeAnimator? _animator;
 
+    /// <summary>
+    /// 动画器的全局访问点（alpha.25）：访达窗口首帧渲染后自调 PlayOpenForSelf 播 mac 开窗
+    /// （OBJECT_SHOW 钩子带 SkipOwnProcess，自家窗口走不了事件路径）。null = 动画子系统未启用。
+    /// </summary>
+    public static Animation.MinimizeAnimator? SharedAnimator { get; private set; }
+
     /// <summary>窗口过渡接管器（alpha.21）：关闭原生 DWM 过渡 + 斗篷代管；退出必须全量还原。</summary>
     private Animation.WindowTransitionGuard? _transitionGuard;
 
@@ -150,6 +156,7 @@ public partial class App : Application
                         hwnd => Services.WindowEligibility.IsEligibleWindow(hwnd, (uint)Environment.ProcessId));
 
                     _animator = new Animation.MinimizeAnimator(hwnd => _dock?.IconRectPhysical(hwnd), _transitionGuard);
+                    SharedAnimator = _animator;
 
                     // 过渡接管启动扫描：存量窗口统一关原生过渡（新窗口由 OBJECT_SHOW 钩子接管）。
                     // 斗篷代管的窗口在 Dock/切换器里豁免（ManagedCloakOverride）：不能凭空消失。
@@ -468,6 +475,7 @@ public partial class App : Application
         _tray = null;
         _animator?.Dispose();   // WinEvent 钩子必须卸载（幂等）
         _animator = null;
+        SharedAnimator = null;
         _transitionGuard?.Dispose();   // 解斗篷/还原 DWM 属性（幂等）
         _transitionGuard = null;
         Services.WindowEligibility.ManagedCloakOverride = null;
@@ -1265,6 +1273,7 @@ public partial class App : Application
             _dock?.Close();          // DockWindow.OnClosing：AppBar ABM_REMOVE（hwnd 销毁前）
             _animator?.Dispose();    // WinEvent 钩子：退出过程中任何一次最小化都不该再起动画
             _animator = null;
+            SharedAnimator = null;
             _transitionGuard?.Dispose();   // 解斗篷/还原 DWM 属性必须在这里完成（幂等，二次调用 no-op）
             _transitionGuard = null;
             Services.WindowEligibility.ManagedCloakOverride = null;

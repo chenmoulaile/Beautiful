@@ -65,3 +65,30 @@ OV-01 四路径真机点按 / OV-02 SPI 接管在所有者系统上的可用性 
 1. OV 包回填回收（所有者 30 分钟）→ 按回填结果修触发链残余。
 2. Q4 编排：打开占位帧（捕获重试 8ms×12）+ 关闭 `CloseAnim=true` 开关（默认关）。
 3. 装 MSVC BuildTools → native 动画宿主 + WGC 捕获升级 → AnimLab。
+
+---
+
+## alpha.25（2026-11-01）遮挡重播 + 图标实拍重画
+
+真机反馈（alpha.24 清单留言 + Beautiful-202611.log）定位到四个架构级根因，全部换思路重做：
+
+1. **最小化动画"两条打架"**：24H2 上 SPI/FORCEDISABLED/CLOAK 三条"关原生动画"的路全被系统拒绝
+   （日志：SPI 不响应、0x80070006、0x80070005）。**遮挡重播**：替身第一帧 = 原矩形不透明全尺寸
+   画面，Show 即盖住原生缩放动画；还原方向同理。Cloak("minimize")/SW_HIDE 代管全链退役
+   （SW_HIDE 丢任务栏按钮 + 2s 对账竞态 = 上轮"最小化区没有窗口"的根因）。
+2. **访达开窗动画双重死路**：OBJECT_SHOW 钩子带 SkipOwnProcess（自家事件到不了）+ DWM 拒斗篷。
+   改自导链路：FinderWindow Opacity=0 预藏 → ContentRendered → PlayOpenForSelf（PrintWindow
+   对全透明窗口照常出图）→ 替身 94% 落位 → reveal；1.5s 失败保险。最小化钩子去掉 SkipOwnProcess，
+   自家窗口也播 genie。
+3. **启动台翻页无动画**：Refresh 拆 ApplyPage + SlideToPage——RTB 快照（DPI 对齐）+ 双层
+   TranslateTransform 280ms easeInOut；快照失败退化直切。
+4. **图标不像 macOS**：DockBuiltinIcons 按 MyDockFinder 实拍复刻版逐像素测量重画——访达改
+   "白底+蓝色半脸剪影+深色五官"（旧版误画全蓝底白脸）；启动台火箭旋转方向修正（WPF 正角顺时针，
+   旧 -45° 指向左上）。渲染验证管线 scripts/draw.py（SVG 同几何预览 + 实拍并排对比）后定稿。
+
+附带：最小化区条目图标 = 窗口帧居中裁方缩略图（LastFrameFor 注入 DockViewModel）；
+ScreenBlurBackdrop.Aim 越界改钳制（窄副屏上控制中心不再退化实心卡底）；macOS 主题新增
+ThemeDockGlassBackground（Dock 玻璃渐变，独立键不影响顶栏/原生预览取色）。
+
+验证：Release 构建 0W0E；PE machine=0x8664；单测 1351 过 / 46 失败（全部为 Linux 平台差异基线，
+零新增）。发布包 Beautiful-4.0.0-alpha.25-win64.zip（exe + 测试清单，已去 pdb）。

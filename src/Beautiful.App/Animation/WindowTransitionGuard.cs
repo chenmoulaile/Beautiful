@@ -13,11 +13,14 @@ namespace Beautiful.App.Animation;
 /// <see cref="SystemAnimationSuppressor"/> 的实测注释），拦 SC_MINIMIZE 又需要注入。
 /// </para>
 /// <para>
-/// 【新思路】用两个公开 DWM 属性，把"原生动画"与"可见性"都从系统手里接过来：
-/// ① <c>DWMWA_TRANSITIONS_FORCEDISABLED</c>——按窗口关闭 DWM 全部过渡动画，原生动画<b>从源头不存在</b>；
-/// ② <c>DWMWA_CLOAK</c>——斗篷化窗口：屏幕上隐形、DWM 继续合成内容。最小化期间保持斗篷，
-/// 还原时真窗口先回来但仍隐形，genie 放完才解斗篷——"窗口先弹出再演动画"的那一帧从此看不见。
-/// 两者都是 dwmapi 的公开属性、可跨进程调用、不注入、不改窗口样式。
+/// 【alpha.21 思路 → alpha.25 修订】两个公开 DWM 属性：<c>DWMWA_TRANSITIONS_FORCEDISABLED</c>
+/// 按窗口关闭全部过渡动画（能用则原生动画从源头不存在）；<c>DWMWA_CLOAK</c> 斗篷化窗口
+/// （屏幕上隐形、DWM 继续合成内容），最大化/还原链路仍在用。
+/// 【alpha.25 实测结论】24H2 真机上 SPI、FORCEDISABLED、CLOAK 三条全被系统拒绝——
+/// "把原生动画关掉"这条路在该机器上不存在。最小化/还原改由 <see cref="MinimizeAnimator"/>
+/// 的<b>遮挡重播</b>兜住：替身不透明全尺寸画面直接盖住原生动画，斗篷/SW_HIDE 代管全部退役
+/// （SW_HIDE 会丢任务栏按钮 + 与 2s 对账竞态，实测把 Dock 最小化区搞丢）。本类保留
+/// best-effort 的两项 DWM 属性管理：能用的机器上双保险，不能用的机器上遮挡重播单保险。
 /// </para>
 /// <para>
 /// 【fail-open 是红线】斗篷把窗口藏起来的前提是"我们一定能放它出来"。为此三层保险：
@@ -158,28 +161,11 @@ public sealed class WindowTransitionGuard : IDisposable
         if (hr != 0)
         {
             // 斗篷被拒（真机：自家 WPF 窗口 E_ACCESSDENIED 0x80070005，第三方 GPU 合成窗口同样被拒）。
-            // alpha.24 起对【最小化链路 + 未挂死 + 可见窗口】一律启用 SW_HIDE 代管（不再只限自家进程）：
-            // 最小化方向若没有隐形代管，原生"缩向任务栏"动画（SPI 接管在新系统上不可用）会和
-            // genie 替身同播——用户实测"最小化动画很透明、观感差"的根因就是双动画叠加，
-            // 且第三方窗口（Typora/浏览器）被 DWM 拒斗篷的比例远高于自家窗口，只管自家等于没治。
-            // 【fail-open 依旧成立】代管窗口由 Uncloak 统一恢复（替身收尾/早退路径都会走到），
-            // 看门狗清死窗口，Dispose 退出全量现身；即便本进程被强杀，Dock 条目仍在，
-            // 点击条目走 ShowWindow(SW_RESTORE) 照样能把隐藏窗口放出来。
-            if (reason == "minimize"
-                && NativeMethods.GetWindowThreadProcessId(hwnd, out var pid) != 0
-                && NativeMethods.IsWindowVisible(hwnd)
-                // 挂死窗口不碰：ShowWindow 是 SEND 消息，对挂死窗口调用会把我们的钩子线程一起挂住
-                // （与 WindowEligibility.IsHungAppWindow 早退同一道理）
-                && !NativeMethods.IsHungAppWindow(hwnd))
-            {
-                var own = pid == (uint)Environment.ProcessId;
-                NativeMethods.ShowWindow(hwnd, NativeMethods.SwHide);
-                lock (_gate) _hiddenByUs.Add(hwnd);
-                Logger.Info($"斗篷：0x{hwnd.ToInt64():X} DWM 拒绝 hr=0x{hr:X8}（{reason}）→ SW_HIDE 代管"
-                            + $"（{(own ? "自家" : "第三方")}窗口，替身收尾自动恢复）");
-                return true;
-            }
-            Logger.Info($"斗篷：0x{hwnd.ToInt64():X} DWM 拒绝 hr=0x{hr:X8}（{reason}）→ 无代管降级");
+            // 【alpha.25】SW_HIDE 代管已整体移除：隐藏窗口会丢任务栏按钮、被 2s 对账竞态误删
+            // （用户实测"最小化后 Dock 最小化区没有窗口"的根因链之一），而遮挡重播（替身
+            // 不透明全尺寸画面盖住原生动画）在斗篷不可用的机器上同样只给用户一条动画。
+            // 斗篷被拒 = 调用方降级为"没有隐形代管"继续走，动画照播。
+            Logger.Info($"斗篷：0x{hwnd.ToInt64():X} DWM 拒绝 hr=0x{hr:X8}（{reason}）→ 无斗篷继续（遮挡重播接管）");
             return false;
         }
         lock (_gate) _cloaked[hwnd] = NowMs;
