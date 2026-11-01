@@ -105,8 +105,11 @@ public partial class TopBarWindow : AcrylicWindow
     private TextBlock? _inputText;
     private System.Windows.Threading.DispatcherTimer? _inputTimer;
     private TextBlock? _clockText;
-    private TextBlock? _networkText;
+    // alpha.24：右区图标从 Segoe 字形换为 Symbols.xaml 的 mac 式单色描边矢量（用户反馈"顶栏只有文字没图标"）
+    private System.Windows.Shapes.Path? _networkIcon;
+    private System.Windows.Shapes.Path? _batteryIcon;
     private TextBlock? _batteryText;
+    private Button? _batteryButton;
     private MediaViewModel? _subscribedMedia;
 
     // v3 T7：控制中心面板（宿主 + 入口按钮 + "刚关过"抑制位；见 ToggleControlCenter 的竞态说明）
@@ -604,24 +607,46 @@ public partial class TopBarWindow : AcrylicWindow
         };
         RightHost.Children.Add(_clockButton);
 
-        // 音量（点击 → 自家音量面板；原来是 sndvol.exe，整块 UI 都是 Windows 的）
-        var (vol, _) = MakeStatusItem("\uE767", iconFont: true); // Segoe MDL2 Volume
+        // 音量（点击 → 自家音量面板；原来是 sndvol.exe，整块 UI 都是 Windows 的）。
+        // alpha.24：Segoe 字形 → mac 式描边图标（喇叭 + 声波），资源缺失回退字形。
+        var (vol, _) = MakeSymbolItem("SymbolVolume", "\uE767", "音量");
         _volumeButton = vol;
         vol.Click += Volume_Click;
         RightHost.Children.Add(vol);
 
-        // 网络（点击 → 自家 WiFi 面板；状态由每分钟定时器对账）
-        var (net, netText) = MakeStatusItem("\uE701", iconFont: true); // Segoe MDL2 Globe
-        _networkText = netText;
+        // 网络（点击 → 自家 WiFi 面板；状态由每分钟定时器对账）：Wi-Fi 扇形替代地球字形
+        var (net, netIcon) = MakeSymbolItem("SymbolWifi", "\uE701", "网络");
+        _networkIcon = netIcon;
         _wifiButton = net;
         net.Click += Wifi_Click;
         RightHost.Children.Add(net);
 
-        // 电量（仅存在电池时显示；每分钟刷新）
-        var (bat, batText) = MakeStatusItem("", iconFont: false);
-        _batteryText = batText;
+        // 电量（仅存在电池时显示；每分钟刷新）：电池图标随电量换档、充电态内带闪电（macOS 同款），
+        // 百分比文字保留可读性；不再用 ⚡ emoji 拼接。
+        _batteryIcon = NewSymbolPath("SymbolBattery100");
+        _batteryText = new TextBlock
+        {
+            FontSize = 12,
+            VerticalAlignment = VerticalAlignment.Center,
+            Margin = new Thickness(4, 0, 0, 0),
+        };
+        var batteryPanel = new StackPanel { Orientation = Orientation.Horizontal, VerticalAlignment = VerticalAlignment.Center };
+        batteryPanel.Children.Add(_batteryIcon);
+        batteryPanel.Children.Add(_batteryText);
+        var bat = NewBarButton(batteryPanel);
+        AutomationProperties.SetName(bat, "电量");
+        _batteryIcon.SetBinding(System.Windows.Shapes.Shape.StrokeProperty,
+            new System.Windows.Data.Binding(nameof(Button.Foreground)) { Source = bat });
+        _batteryButton = bat;
         bat.Visibility = Visibility.Collapsed;
         RightHost.Children.Add(bat);
+
+        // 通知中心入口（alpha.24 新增，铃铛）：macOS 菜单栏的"通知"位；与时钟左键同一落地路径
+        // （通知中心开关关着时 OpenClockFlyout 自动回退月历，行为与点时钟一致）。
+        var (bell, _) = MakeSymbolItem("SymbolBell", "\uEA8F", "通知");
+        bell.ToolTip = "通知中心";
+        bell.Click += (_, _) => OpenClockFlyout();
+        RightHost.Children.Add(bell);
 
         // 托盘图标区入口（v3.2）：点开自家面板，把通知区域（含"隐藏的图标"）里的第三方图标平铺出来。
         // 刻意<b>不</b>做"常驻在顶栏上直接排开图标"：经典读取路是从屏幕截图上抠图标，常驻就意味着
@@ -641,8 +666,7 @@ public partial class TopBarWindow : AcrylicWindow
         // 最右一位是"快捷设置"的既有位置（macOS/Win11 都是），新入口不该去抢它，
         // 而验收脚本也是按"控制中心"这个名字点最右一颗的（位置口径不变）。
         // ToolTip 里刻意不写热键：热键是设置项，改了顶栏按钮不会被重建，写上去就会变成过期承诺。
-        var (launcherButton, _) = MakeStatusItem("\uE721", iconFont: true);
-        AutomationProperties.SetName(launcherButton, "启动器");
+        var (launcherButton, _) = MakeSymbolItem("SymbolSearch", "\uE721", "启动器");
         launcherButton.ToolTip = "启动器：搜索并启动应用";
         launcherButton.Click += (_, _) => _context.OpenLauncher();
         RightHost.Children.Add(launcherButton);
@@ -650,9 +674,8 @@ public partial class TopBarWindow : AcrylicWindow
         // 控制中心入口（v3 T7，最右一位 = macOS/Win11 的"快捷设置"位置）：
         // 字形取已在托盘/顶栏菜单里验证过能渲染的 \uE790（与状态项同一套 Segoe 图标字体 + 同一字号），
         // 打开态用样式同款的主题面板底色做持久高亮（见 ToggleControlCenter）。
-        var (controlCenter, _) = MakeStatusItem("\uE790", iconFont: true);
+        var (controlCenter, _) = MakeSymbolItem("SymbolControlCenter", "\uE790", "控制中心");
         _controlCenterButton = controlCenter;
-        AutomationProperties.SetName(controlCenter, "控制中心");
         controlCenter.ToolTip = "控制中心";
         controlCenter.Click += (_, _) => ToggleControlCenter();
         RightHost.Children.Add(controlCenter);
@@ -678,6 +701,59 @@ public partial class TopBarWindow : AcrylicWindow
         var b = NewBarButton(tb);
         return (b, tb);
     }
+
+    /// <summary>
+    /// 创建一枚 mac 式状态图标按钮（alpha.24）：Symbols.xaml 的 SF-Symbols 风格单色描边几何，
+    /// 描边绑定到按钮 Foreground（与文字同色随主题走）。资源缺失时回退 Segoe 字形，按钮照常可点——
+    /// 顶栏是全屏常驻表面，宁可字形丑也不允许出现空按钮或 NRE。
+    /// </summary>
+    private (Button button, System.Windows.Shapes.Path? icon) MakeSymbolItem(string symbolKey, string fallbackGlyph, string automationName)
+    {
+        object content;
+        System.Windows.Shapes.Path? icon = null;
+        if (TryFindResource(symbolKey) is Geometry g)
+        {
+            icon = NewSymbolPath(g);
+            content = icon;
+        }
+        else
+        {
+            // 走不到的防御分支（Symbols.xaml 已在 App.xaml 全局合并）：保留旧字形兜底
+            content = new TextBlock
+            {
+                Text = fallbackGlyph,
+                FontFamily = new FontFamily("Segoe Fluent Icons, Segoe MDL2 Assets"),
+                FontSize = IconFontDip,
+                VerticalAlignment = VerticalAlignment.Center,
+            };
+        }
+        var b = NewBarButton(content);
+        if (icon is not null)
+            icon.SetBinding(System.Windows.Shapes.Shape.StrokeProperty,
+                new System.Windows.Data.Binding(nameof(Button.Foreground)) { Source = b });
+        AutomationProperties.SetName(b, automationName);
+        return (b, icon);
+    }
+
+    /// <summary>按资源键构造描边图标 Path（描边由调用方绑定/赋值；键不存在给空 Path，避免 NRE）。</summary>
+    private System.Windows.Shapes.Path NewSymbolPath(string symbolKey)
+        => TryFindResource(symbolKey) is Geometry g ? NewSymbolPath(g) : new System.Windows.Shapes.Path();
+
+    private System.Windows.Shapes.Path NewSymbolPath(Geometry geometry)
+        => new()
+        {
+            Data = geometry,
+            Width = 16,
+            Height = 16,
+            Stretch = Stretch.Uniform,
+            Fill = System.Windows.Media.Brushes.Transparent,
+            StrokeThickness = 1.5,
+            StrokeStartLineCap = PenLineCap.Round,
+            StrokeEndLineCap = PenLineCap.Round,
+            StrokeLineJoin = PenLineJoin.Round,
+            VerticalAlignment = VerticalAlignment.Center,
+            SnapsToDevicePixels = true,
+        };
 
     // ---------- 顶栏常驻托盘条（v3.4） ----------
 
@@ -862,29 +938,41 @@ public partial class TopBarWindow : AcrylicWindow
 
     private void UpdateNetwork()
     {
-        if (_networkText is null) return;
+        if (_networkIcon is null) return;
         bool on;
         try { on = NetworkInterface.GetIsNetworkAvailable(); }
         catch { on = true; }
-        _networkText.Opacity = on ? 1.0 : 0.4;
-        _networkText.ToolTip = on ? "网络已连接" : "网络不可用";
+        _networkIcon.Opacity = on ? 1.0 : 0.4;
+        if (_wifiButton is not null) _wifiButton.ToolTip = on ? "网络已连接" : "网络不可用";
     }
 
     private void UpdateBattery()
     {
-        if (_batteryText is null) return;
+        if (_batteryText is null || _batteryButton is null) return;
         if (!NativeMethods.GetSystemPowerStatus(out var sps) ||
             sps.BatteryFlag is NativeMethods.BatteryFlagNoBattery or NativeMethods.BatteryFlagUnknown)
         {
             // 无电池（台式机/虚拟机）→ 隐藏电量项
-            if (_batteryText.Parent is FrameworkElement fe) fe.Visibility = Visibility.Collapsed;
+            _batteryButton.Visibility = Visibility.Collapsed;
             return;
         }
         int pct = sps.BatteryLifePercent == NativeMethods.BatteryPercentUnknown ? 0 : sps.BatteryLifePercent;
         bool charging = sps.ACLineStatus == 1 || (sps.BatteryFlag & NativeMethods.BatteryChargingBit) != 0;
-        _batteryText.Text = charging ? $"{pct}% \u26A1" : $"{pct}%";
-        _batteryText.ToolTip = charging ? $"电量 {pct}%（充电中）" : $"电量 {pct}%";
-        if (_batteryText.Parent is FrameworkElement fe2) fe2.Visibility = Visibility.Visible;
+        // 图标随电量换档（macOS 菜单栏同款），充电态电池内带闪电；百分比文字保留可读性
+        var key = charging
+            ? "SymbolBatteryCharging"
+            : pct switch
+            {
+                <= 10 => "SymbolBattery0",
+                <= 30 => "SymbolBattery25",
+                <= 60 => "SymbolBattery50",
+                <= 90 => "SymbolBattery75",
+                _ => "SymbolBattery100",
+            };
+        if (TryFindResource(key) is Geometry g && _batteryIcon is not null) _batteryIcon.Data = g;
+        _batteryText.Text = $"{pct}%";
+        _batteryButton.ToolTip = charging ? $"电量 {pct}%（充电中）" : $"电量 {pct}%";
+        _batteryButton.Visibility = Visibility.Visible;
     }
 
     // ---------- 媒体迷你 ----------

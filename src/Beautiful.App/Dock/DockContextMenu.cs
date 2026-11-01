@@ -46,7 +46,7 @@ internal static class DockContextMenuBuilder
         var related = item.Kind switch
         {
             DockItemKind.Pinned => WindowsOfApp(tracker, item.LaunchPath),
-            DockItemKind.Window => WindowsOfProcess(tracker, item.WindowHandle),
+            DockItemKind.Window or DockItemKind.MinimizedWindow => WindowsOfProcess(tracker, item.WindowHandle),
             _ => new List<WindowItem>()
         };
         var snaps = related.Select(Snap).ToList();
@@ -67,7 +67,8 @@ internal static class DockContextMenuBuilder
             // 固定项天然在固定块里；运行窗口项要查 dock.json 才知道该给"固定"还是"取消固定"
             IsPinned = item.Kind != DockItemKind.Pinned && vm.IsPinnedPath(item.LaunchPath),
             Windows = snaps,
-            ThisWindowHandle = item.Kind == DockItemKind.Window ? item.WindowHandle ?? IntPtr.Zero : IntPtr.Zero,
+            ThisWindowHandle = item.Kind is DockItemKind.Window or DockItemKind.MinimizedWindow
+                ? item.WindowHandle ?? IntPtr.Zero : IntPtr.Zero,
             ForegroundHandle = foreground,
             RecentItems = executable.EndsWith(".exe", StringComparison.OrdinalIgnoreCase)
                 ? RecentItemsService.FindForApp(executable, 6)

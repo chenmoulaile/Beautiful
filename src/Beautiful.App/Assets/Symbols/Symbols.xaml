@@ -40,6 +40,7 @@
     <Geometry x:Key="SymbolBattery50">M3 7 H18 V17 H3 Z M20 10 V14 M6 10 V14 M9 10 V14</Geometry>
     <Geometry x:Key="SymbolBattery75">M3 7 H18 V17 H3 Z M20 10 V14 M6 10 V14 M9 10 V14 M12 10 V14</Geometry>
     <Geometry x:Key="SymbolBattery100">M3 7 H18 V17 H3 Z M20 10 V14 M6 10 V14 M9 10 V14 M12 10 V14 M15 10 V14</Geometry>
+    <Geometry x:Key="SymbolBatteryCharging">M3 7 H18 V17 H3 Z M20 10 V14 M11 8 L8.5 12.2 H10.4 L9.4 16 L12.6 11.6 H10.7 L11.9 8 Z</Geometry>
     <Geometry x:Key="SymbolInputMethod">M4 6 H20 V18 H4 Z M7 10 H11 M7 14 H11 M14 10 L17 14 M17 10 L14 14</Geometry>
     <Geometry x:Key="SymbolAccount">M12 4 A4 4 0 1 1 12 12 A4 4 0 0 1 12 4 M4 21 A8 8 0 0 1 20 21</Geometry>
     <Geometry x:Key="SymbolUsb">M12 3 V21 M12 7 L8 11 H16 Z M8 11 V15 M16 11 V15 M6 15 H10 M14 15 H18</Geometry>

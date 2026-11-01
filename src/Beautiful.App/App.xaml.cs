@@ -155,6 +155,10 @@ public partial class App : Application
                     // 斗篷代管的窗口在 Dock/切换器里豁免（ManagedCloakOverride）：不能凭空消失。
                     Services.WindowEligibility.ManagedCloakOverride =
                         hwnd => _transitionGuard!.IsCloakedByUs(hwnd);
+                    // SW_HIDE 代管窗口（alpha.24）同理豁免：斗篷被拒的第三方窗口被我们藏起来播 genie，
+                    // 不豁免就会在 2s 对账里从 Dock 消失，用户失去还原入口。
+                    Services.WindowEligibility.HiddenByUsOverride =
+                        hwnd => _transitionGuard!.IsHiddenByUs(hwnd);
                     _transitionGuard.ScanExistingWindows();
 
                     // v3.0 §Q2-2：接管系统"缩向任务栏"动画，消除两条动画打架。

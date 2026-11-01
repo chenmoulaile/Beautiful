@@ -1329,6 +1329,7 @@ public partial class DockWindow : AcrylicWindow
                 break;
 
             case DockItemKind.Window:
+            case DockItemKind.MinimizedWindow:   // alpha.24：最小化区驻留格点击 = 还原（与运行窗口同路）
                 var wi = item.WindowHandle is { } h
                     ? _tracker.Windows.FirstOrDefault(w => w.Handle == h)
                     : null;

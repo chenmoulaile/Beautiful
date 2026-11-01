@@ -374,7 +374,9 @@ public sealed class DockViewModel
         => new(Id: w.Handle.ToString(),
                Label: w.Title,
                Icon: w.Icon,
-               Kind: DockItemKind.Window,
+               // alpha.24：最小化窗口换种类 → 驻留在分隔符右侧的最小化区（macOS 语义），
+               // 渲染同模板，但指示点不亮、不可拖拽；点击仍走还原。
+               Kind: w.IsMinimized ? DockItemKind.MinimizedWindow : DockItemKind.Window,
                LaunchPath: w.ExePath,
                WindowHandle: w.Handle,
                IconSource: w.ExePath);   // 跟踪器就是按 exe 路径取图并缓存的，键与它同源
@@ -440,14 +442,28 @@ public sealed class DockViewModel
 
     private void OnWindowItemPropertyChanged(object? sender, PropertyChangedEventArgs e)
     {
-        if (e.PropertyName != nameof(WindowItem.Title) || sender is not WindowItem w) return;
+        if (sender is not WindowItem w) return;
+        // alpha.24：最小化状态翻转 → 种类变（Window ↔ MinimizedWindow）→ 在行里的语义块变，
+        // 必须重导（条目会从应用区移进/移出分隔符右侧的最小化区）。最小差异写回下
+        // 实际集合事件只有这一条目的删+插，与 mac 上“缩略图滑到分隔符右侧”同构。
+        if (e.PropertyName == nameof(WindowItem.IsMinimized))
+        {
+            var mi = _windows.FindIndex(it => it.WindowHandle == w.Handle);
+            if (mi < 0) return;
+            _windows[mi] = ToDockItem(w);
+            Reconcile();
+            return;
+        }
+
+        if (e.PropertyName != nameof(WindowItem.Title)) return;
         var i = _windows.FindIndex(it => it.WindowHandle == w.Handle);
         if (i < 0) return;
         var replacement = ToDockItem(w); // record 不可变 → 原位替换新实例
         _windows[i] = replacement;
-        // 仍走 Replace（不是先删后插）：DockSurface 的 Replace 快路径只换 DataContext，避免整树重建闪烁
+        // 仍走 Replace（不是先删后插）：DockSurface 的 Replace 快路径只换 DataContext，避免整树重建闪烁。
+        // 快路径要求种类一致（种类不一致说明位置块也变了，直接重导）。
         var real = ToRealIndex(_pinned.Count + i);
-        if (real >= 0 && real < Items.Count && Items[real].Kind == DockItemKind.Window) Items[real] = replacement;
+        if (real >= 0 && real < Items.Count && Items[real].Kind == replacement.Kind) Items[real] = replacement;
         else Reconcile();
     }
 
@@ -483,7 +499,18 @@ public sealed class DockViewModel
         semantic.Add(_finder); kinds.Add(_finder.Kind);
         semantic.Add(_launchpad); kinds.Add(_launchpad.Kind);
         AddBlock(semantic, kinds, _pinned);
-        AddBlock(semantic, kinds, _windows);
+        // alpha.24：窗口按状态分两块——运行中留在应用区（与固定应用混排，macOS 不在此分界），
+        // 已最小化的移到分隔符右侧的最小化区（在回收站之前）。
+        for (var i = 0; i < _windows.Count; i++)
+        {
+            if (_windows[i].Kind != DockItemKind.Window) continue;
+            semantic.Add(_windows[i]); kinds.Add(DockItemKind.Window);
+        }
+        for (var i = 0; i < _windows.Count; i++)
+        {
+            if (_windows[i].Kind != DockItemKind.MinimizedWindow) continue;
+            semantic.Add(_windows[i]); kinds.Add(DockItemKind.MinimizedWindow);
+        }
         semantic.Add(_recycleBin); kinds.Add(_recycleBin.Kind);
         semantic.Add(_media); kinds.Add(_media.Kind);
 

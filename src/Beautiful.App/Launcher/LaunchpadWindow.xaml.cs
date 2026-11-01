@@ -61,6 +61,14 @@ public partial class LaunchpadWindow : Window, System.ComponentModel.INotifyProp
     private ObservableCollection<LaunchpadTile> _pageTiles = new();
     private int _page;
 
+    /// <summary>全量 tile（不含分页）：翻页与键盘导航算总页数必须用它——
+    /// Tiles.Items 只装当前页，用它算页数是 alpha.23 之前滚轮"永远停在第 0 页"的根因。</summary>
+    private IReadOnlyList<LaunchpadTile> _allTiles = Array.Empty<LaunchpadTile>();
+
+    /// <summary>滚轮翻页节流（TickCount64 ms）：触控板惯性一次能送出十几笔滚轮，
+    /// 不节流就会一滚翻好几页；鼠标滚轮一笔 ±120 不受影响。</summary>
+    private long _lastWheelNavMs;
+
     /// <summary>当前页图标分帧泵的取消源：翻页/搜索/关闭时取消，防止旧页继续提取。</summary>
     private CancellationTokenSource? _iconPump;
 
@@ -311,7 +319,8 @@ public partial class LaunchpadWindow : Window, System.ComponentModel.INotifyProp
             : _service.Search(query, 200).Select(m => m.App).ToList();
 
         // 文件夹只在"无搜索"时参与排版：搜索是"找应用"，把文件夹塞进结果只会让人多点一次。
-        var allTiles = BuildTiles(query.Length == 0);
+        _allTiles = BuildTiles(query.Length == 0);
+        var allTiles = _allTiles;
         BuildFolderStrip(query.Length == 0);
         var pageCount = LaunchpadPagination.PageCount(allTiles.Count, PageSize);
         _page = Math.Clamp(_page, 0, Math.Max(0, pageCount - 1));
@@ -410,7 +419,9 @@ public partial class LaunchpadWindow : Window, System.ComponentModel.INotifyProp
     {
         if (e.Key == Key.Escape) { Close(); e.Handled = true; return; }
         if (e.Key == Key.Enter) { LaunchSelected(); e.Handled = true; return; }
-        if (e.Key == Key.Right && _page < LaunchpadPagination.PageCount(Tiles.Items.Count + (_page * PageSize), PageSize) - 1)
+        // 总页数必须用全量 tile 数（Tiles.Items 只有当前页，见 _allTiles 字段注释）
+        var pageCount = LaunchpadPagination.PageCount(_allTiles.Count, PageSize);
+        if (e.Key == Key.Right && _page < pageCount - 1)
         { _page++; Refresh(); e.Handled = true; }
         if (e.Key == Key.Left && _page > 0)
         { _page--; Refresh(); e.Handled = true; }
@@ -418,13 +429,19 @@ public partial class LaunchpadWindow : Window, System.ComponentModel.INotifyProp
 
     private void Root_MouseWheel(object sender, MouseWheelEventArgs e)
     {
-        var pageCount = LaunchpadPagination.PageCount(Tiles.Items.Count + (_page * PageSize), PageSize);
-        if (pageCount <= 1) return;
-        if (e.Delta < 0 && _page < pageCount - 1) _page++;
-        else if (e.Delta > 0 && _page > 0) _page--;
-        else return;
-        Refresh();
+        // 文件夹覆盖层打开时滚轮归它的内层列表（Root 的隧道事件先于覆盖层触发，
+        // 这里不放手就会把覆盖层列表的滚动一并吞掉）。
+        if (FolderOverlay.Visibility == Visibility.Visible) return;
+
+        var pageCount = LaunchpadPagination.PageCount(_allTiles.Count, PageSize);
+        // 滚轮在启动台里只承担翻页：标记已处理，不让它再落进 Tiles 内层 ScrollViewer
+        // （那里无内容可滚，alpha.23 前的"没反应"观感就是它吃掉事件后什么都不做）。
         e.Handled = true;
+        if (pageCount <= 1) return;
+        var now = Environment.TickCount64;
+        if (now - _lastWheelNavMs < 120) return;   // 触控板惯性节流
+        if (e.Delta < 0 && _page < pageCount - 1) { _page++; _lastWheelNavMs = now; Refresh(); }
+        else if (e.Delta > 0 && _page > 0) { _page--; _lastWheelNavMs = now; Refresh(); }
     }
 
     private void Tile_Click(object sender, RoutedEventArgs e)

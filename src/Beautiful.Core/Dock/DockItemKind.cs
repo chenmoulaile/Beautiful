@@ -13,6 +13,14 @@ public enum DockItemKind
     /// <summary>正在运行且未固定的窗口。</summary>
     Window,
 
+    /// <summary>
+    /// 已最小化的窗口（alpha.24）：驻留在**分隔符右侧**的最小化区（macOS 语义——最小化窗口不是
+    /// 消失了，而是缩成图标停在分隔符右边、废纸篓左边）。渲染上与 Window 同模板，但：
+    /// 运行指示点不亮（macOS 最小化缩略图没有圆点）、不参与拖拽排序、悬停无实时预览
+    /// （iconic 窗口没有可抓的画面）。点击 = 还原。
+    /// </summary>
+    MinimizedWindow,
+
     /// <summary>回收站 / macOS 废纸篓。</summary>
     RecycleBin,
 

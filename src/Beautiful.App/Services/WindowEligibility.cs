@@ -23,6 +23,14 @@ internal static class WindowEligibility
     public static Func<IntPtr, bool>? ManagedCloakOverride;
 
     /// <summary>
+    /// "被我们 SW_HIDE 代管的窗口"豁免（alpha.24）：斗篷被拒时以 SW_HIDE 隐形代管，
+    /// IsWindowVisible=false，不豁免就会在 2s 对账里从 Dock/切换器里被移除——
+    /// 用户从此没有还原入口（这违反“绝不允许窗口凭空消失”红线）。装配方注入
+    /// WindowTransitionGuard.IsHiddenByUs；null = 未接管。
+    /// </summary>
+    public static Func<IntPtr, bool>? HiddenByUsOverride;
+
+    /// <summary>
     /// 是否作为"可切换窗口"呈现：可见 + 有标题 + 非本进程 + 未被 DWM cloak + 非工具窗口 +
     /// 非任务栏/桌面/ UWP 宿主类窗口。规则与 v1 WindowTracker 完全一致。
     /// </summary>
@@ -30,7 +38,9 @@ internal static class WindowEligibility
     /// <param name="ownProcessId">本进程 PID（自身 Dock/顶栏/弹层窗口一律排除）。</param>
     public static bool IsEligibleWindow(IntPtr h, uint ownProcessId)
     {
-        if (!NativeMethods.IsWindowVisible(h)) return false;
+        // SW_HIDE 代管窗口（alpha.24）：我们主动藏起来的最小化窗口必须继续算合格，
+        // 否则会在下一次对账里从 Dock/切换器消失（用户失去还原入口）。
+        if (!NativeMethods.IsWindowVisible(h) && HiddenByUsOverride?.Invoke(h) != true) return false;
         // 【终审 I-7 · 键盘钩子的承重墙，勿删】IsHungAppWindow 必须早于任何窗口文本查询：
         // GetWindowTextLength/GetWindowText 是 **SEND** 消息——同步发送到窗口所属线程，对方挂死
         // 时调用线程一并被挂住。本判定运行在两条 2s UI 线程定时器驱动的 EnumWindows 遍历中

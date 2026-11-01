@@ -4,7 +4,8 @@ using Xunit;
 
 /// <summary>
 /// 分隔符插位与放大场资格（<see cref="DockSeparatorPlan"/>）。
-/// macOS 原生 Dock 的结构是「固定应用 | 正在运行的应用 | 废纸篓」：分隔符只在语义块边界上，
+/// macOS 原生 Dock 的结构是「应用区（固定+运行混排，不分界） | 最小化窗口区 | 废纸篓」：
+/// 分隔符只出现在语义块边界上——运行窗口与固定应用之间**不**画线（alpha.24 改为 mac 真实语义），
 /// 而且**一条也不会出现在媒体胶囊旁边**（胶囊无会话时宽度归零，细线会浮在面板末端）。
 /// </summary>
 public class DockSeparatorPlanTests
@@ -16,6 +17,7 @@ public class DockSeparatorPlanTests
     {
         DockItemKind.Pinned, DockItemKind.Pinned,
         DockItemKind.Window, DockItemKind.Window,
+        DockItemKind.MinimizedWindow,
         DockItemKind.RecycleBin, DockItemKind.Media
     };
 
@@ -24,7 +26,7 @@ public class DockSeparatorPlanTests
     {
         Assert.False(DockSeparatorPlan.IsMagnifiable(DockItemKind.Separator));
         Assert.False(DockSeparatorPlan.IsInteractive(DockItemKind.Separator));
-        foreach (var kind in new[] { DockItemKind.Pinned, DockItemKind.Window, DockItemKind.RecycleBin, DockItemKind.Media })
+        foreach (var kind in new[] { DockItemKind.Pinned, DockItemKind.Window, DockItemKind.MinimizedWindow, DockItemKind.RecycleBin, DockItemKind.Media })
         {
             Assert.True(DockSeparatorPlan.IsMagnifiable(kind), $"{kind} 应参与放大场");
             Assert.True(DockSeparatorPlan.IsInteractive(kind), $"{kind} 应可命中");
@@ -40,41 +42,62 @@ public class DockSeparatorPlanTests
     }
 
     [Fact]
-    public void macos结构_固定区与运行区之间和废纸篓之前各一道()
+    public void macos结构_最小化区前与废纸篓前各一道_固定与运行之间不画线()
     {
         var slots = DockSeparatorPlan.Slots(Native, On);
         Assert.Equal(2, slots.Count);
-        Assert.Equal(2, slots[0].Index);                       // 第一个 Window 之前
+        Assert.Equal(4, slots[0].Index);                       // 第一个 MinimizedWindow 之前
         Assert.Equal(DockSeparatorRole.AppsBoundary, slots[0].Role);
-        Assert.Equal(4, slots[1].Index);                       // 回收站之前
+        Assert.Equal(5, slots[1].Index);                       // 回收站之前
         Assert.Equal(DockSeparatorRole.TrashBoundary, slots[1].Role);
     }
 
     [Fact]
-    public void 插入后正是原生三段_固定区_运行区_废纸篓()
+    public void 插入后正是原生三段_应用区_最小化区_废纸篓()
     {
         var slots = DockSeparatorPlan.Slots(Native, On);
         var drawn = Compose(Native, slots);
         Assert.Equal(
-            "Pinned,Pinned,SEP,Window,Window,SEP,RecycleBin,Media",
+            "Pinned,Pinned,Window,Window,SEP,MinimizedWindow,SEP,RecycleBin,Media",
             string.Join(",", drawn));
+    }
+
+    [Fact]
+    public void 运行窗口与固定应用之间不留线_无论谁在前()
+    {
+        // 固定→运行：应用区内部，macOS 不分界
+        Assert.Empty(DockSeparatorPlan.Slots(new[] { DockItemKind.Pinned, DockItemKind.Window }, On));
+        // 运行→固定：同上（alpha.23 之前这里的旧规则也不画线，行为保持）
+        Assert.Empty(DockSeparatorPlan.Slots(new[] { DockItemKind.Window, DockItemKind.Pinned }, On));
+    }
+
+    [Fact]
+    public void 没有最小化窗口时应用区与废纸篓之间只有一道()
+    {
+        var kinds = new[] { DockItemKind.Finder, DockItemKind.Launchpad, DockItemKind.Pinned, DockItemKind.Window, DockItemKind.RecycleBin, DockItemKind.Media };
+        var slots = DockSeparatorPlan.Slots(kinds, On);
+        var only = Assert.Single(slots);
+        Assert.Equal(4, only.Index);
+        Assert.Equal(DockSeparatorRole.TrashBoundary, only.Role);
     }
 
     [Fact]
     public void 只有固定区时不在其前后画线()
     {
-        // 没有运行窗口也没有回收站在首位：固定块右端不留悬空细线（macOS 无运行窗口时就是只有一段）
+        // 没有最小化窗口也没有回收站在首位：固定块右端不留悬空细线
         Assert.Empty(DockSeparatorPlan.Slots(new[] { DockItemKind.Pinned, DockItemKind.Pinned }, On));
     }
 
     [Fact]
-    public void 无固定项时只在回收站前留一道()
+    public void 无固定项时最小化区前与回收站前各留一道()
     {
-        var kinds = new[] { DockItemKind.Window, DockItemKind.Window, DockItemKind.RecycleBin, DockItemKind.Media };
+        var kinds = new[] { DockItemKind.Window, DockItemKind.MinimizedWindow, DockItemKind.RecycleBin, DockItemKind.Media };
         var slots = DockSeparatorPlan.Slots(kinds, On);
-        var only = Assert.Single(slots);
-        Assert.Equal(2, only.Index);
-        Assert.Equal(DockSeparatorRole.TrashBoundary, only.Role);
+        Assert.Equal(2, slots.Count);
+        Assert.Equal(1, slots[0].Index);
+        Assert.Equal(DockSeparatorRole.AppsBoundary, slots[0].Role);
+        Assert.Equal(2, slots[1].Index);
+        Assert.Equal(DockSeparatorRole.TrashBoundary, slots[1].Role);
     }
 
     [Fact]
@@ -98,11 +121,11 @@ public class DockSeparatorPlanTests
     [Fact]
     public void 媒体胶囊之前永不插线()
     {
-        // 回收站被隐藏/胶囊单独在场时也不能出现"胶囊左边浮一道线"
-        var kinds = new[] { DockItemKind.Pinned, DockItemKind.Window, DockItemKind.Media };
+        // 有最小化窗口时细线在 MinimizedWindow 之前，而不是 Media 之前
+        var kinds = new[] { DockItemKind.Pinned, DockItemKind.Window, DockItemKind.MinimizedWindow, DockItemKind.Media };
         var slots = DockSeparatorPlan.Slots(kinds, On);
         var slot = Assert.Single(slots);
-        Assert.Equal(1, slot.Index);   // Window 之前，而不是 Media 之前（回收站也不在场）
+        Assert.Equal(2, slot.Index);   // MinimizedWindow 之前（回收站也不在场，无 TrashBoundary）
         Assert.Equal(DockSeparatorRole.AppsBoundary, slot.Role);
         Assert.DoesNotContain(kinds.Length - 1, Array.ConvertAll(slots.ToArray(), s => s.Index));
     }
@@ -114,12 +137,12 @@ public class DockSeparatorPlanTests
         var kinds = new[]
         {
             DockItemKind.Pinned, DockItemKind.Separator, DockItemKind.Pinned,
-            DockItemKind.Window, DockItemKind.RecycleBin, DockItemKind.Media
+            DockItemKind.Window, DockItemKind.MinimizedWindow, DockItemKind.RecycleBin, DockItemKind.Media
         };
         var slots = DockSeparatorPlan.Slots(kinds, On);
         Assert.Equal(2, slots.Count);
-        Assert.Equal(3, slots[0].Index);   // Window 之前（与 SEP 相邻的那个边界被跳过）
-        Assert.Equal(4, slots[1].Index);   // 回收站之前
+        Assert.Equal(4, slots[0].Index);   // MinimizedWindow 之前（与 SEP 相邻的那个边界被跳过）
+        Assert.Equal(5, slots[1].Index);   // 回收站之前
         Assert.True(slots[0].Index < slots[1].Index, "槽位必须升序，倒序插入会把语义下标算歪");
     }
 

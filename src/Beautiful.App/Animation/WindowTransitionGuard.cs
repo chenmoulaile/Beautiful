@@ -157,18 +157,26 @@ public sealed class WindowTransitionGuard : IDisposable
         var hr = NativeMethods.DwmSetWindowAttribute(hwnd, NativeMethods.DwmwaCloak, ref one, sizeof(int));
         if (hr != 0)
         {
-            // 斗篷被拒（真机：自家 WPF 窗口 E_ACCESSDENIED 0x80070005）。只对【最小化链路 + 自家窗口】
-            // 启用 SW_HIDE 代管：最小化方向若没有隐形代管，原生"缩向任务栏"动画（SPI 接管在新系统
-            // 上不可用）会和 genie 替身同播——用户实测"最小化动画很透明、观感差"的根因就是双动画叠加。
-            // 代管窗口由 Uncloak 统一恢复（动画收尾/早退路径都会走到），死窗口由看门狗清表。
+            // 斗篷被拒（真机：自家 WPF 窗口 E_ACCESSDENIED 0x80070005，第三方 GPU 合成窗口同样被拒）。
+            // alpha.24 起对【最小化链路 + 未挂死 + 可见窗口】一律启用 SW_HIDE 代管（不再只限自家进程）：
+            // 最小化方向若没有隐形代管，原生"缩向任务栏"动画（SPI 接管在新系统上不可用）会和
+            // genie 替身同播——用户实测"最小化动画很透明、观感差"的根因就是双动画叠加，
+            // 且第三方窗口（Typora/浏览器）被 DWM 拒斗篷的比例远高于自家窗口，只管自家等于没治。
+            // 【fail-open 依旧成立】代管窗口由 Uncloak 统一恢复（替身收尾/早退路径都会走到），
+            // 看门狗清死窗口，Dispose 退出全量现身；即便本进程被强杀，Dock 条目仍在，
+            // 点击条目走 ShowWindow(SW_RESTORE) 照样能把隐藏窗口放出来。
             if (reason == "minimize"
                 && NativeMethods.GetWindowThreadProcessId(hwnd, out var pid) != 0
-                && pid == (uint)Environment.ProcessId
-                && NativeMethods.IsWindowVisible(hwnd))
+                && NativeMethods.IsWindowVisible(hwnd)
+                // 挂死窗口不碰：ShowWindow 是 SEND 消息，对挂死窗口调用会把我们的钩子线程一起挂住
+                // （与 WindowEligibility.IsHungAppWindow 早退同一道理）
+                && !NativeMethods.IsHungAppWindow(hwnd))
             {
+                var own = pid == (uint)Environment.ProcessId;
                 NativeMethods.ShowWindow(hwnd, NativeMethods.SwHide);
                 lock (_gate) _hiddenByUs.Add(hwnd);
-                Logger.Info($"斗篷：0x{hwnd.ToInt64():X} DWM 拒绝 hr=0x{hr:X8}（{reason}）→ SW_HIDE 代管（自家窗口，替身收尾自动恢复）");
+                Logger.Info($"斗篷：0x{hwnd.ToInt64():X} DWM 拒绝 hr=0x{hr:X8}（{reason}）→ SW_HIDE 代管"
+                            + $"（{(own ? "自家" : "第三方")}窗口，替身收尾自动恢复）");
                 return true;
             }
             Logger.Info($"斗篷：0x{hwnd.ToInt64():X} DWM 拒绝 hr=0x{hr:X8}（{reason}）→ 无代管降级");

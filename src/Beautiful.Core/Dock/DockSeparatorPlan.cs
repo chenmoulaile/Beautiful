@@ -20,13 +20,19 @@ public readonly record struct DockSeparatorSlot(int Index, DockSeparatorRole Rol
 /// <summary>
 /// Dock 行分隔符的插位规则（纯函数，可单测）。
 /// <para>
-/// macOS 原生 Dock 的结构是「固定应用 | 正在运行的应用 | 最小化窗口/废纸篓」——分隔符只出现在
-/// **语义块边界**上，而不是任意两项之间。Linux（GNOME dash）与鸿蒙的原生 dock 是**一条连续列表**，
+/// macOS 原生 Dock 的结构是「应用区（固定+正在运行，混排不分界） | 最小化窗口区 | 废纸篓」——
+/// 分隔符只出现在**语义块边界**上，而不是任意两项之间：正在运行的未固定应用**不**与固定应用之间
+/// 画线（它们同属应用区，macOS 同款），真正的界线是"应用区 → 最小化区"（alpha.24 起）与
+/// "（最小化区）→ 废纸篓"。Linux（GNOME dash）与鸿蒙的原生 dock 是**一条连续列表**，
 /// 没有分隔符：主题把 <c>DockSeparatorsEnabled</c> 关掉即可，App 侧不需要任何 <c>if (theme == mac)</c> 分支。
 /// </para>
 /// </summary>
 public static class DockSeparatorPlan
 {
+    /// <summary>应用区成员：常驻功能格 + 固定应用 + 正在运行的窗口（固定/运行混排不分界，macOS 同款）。</summary>
+    private static bool IsAppKind(DockItemKind kind)
+        => kind is DockItemKind.Finder or DockItemKind.Launchpad or DockItemKind.Pinned or DockItemKind.Window;
+
     /// <summary>
     /// 该条目是否参与放大场。分隔符固定宽、缩放恒 1，**不进场**：邻居图标长大时它既不会被拉伸，
     /// 也不会作为"可拉伸图标"参与前缀和的推挤（画出间距仍恒等于 Spacing）。
@@ -43,7 +49,7 @@ public static class DockSeparatorPlan
     /// <summary>
     /// 计算分隔符槽位（升序）。规则：
     /// <list type="number">
-    /// <item><description>固定块 → 运行块边界（两侧都非空才插，否则会出现一道悬空细线）；</description></item>
+    /// <item><description>应用区 → 最小化区边界（第一个 MinimizedWindow 之前；两侧都非空才插，否则会出现一道悬空细线）；</description></item>
     /// <item><description>回收站之前（下标 ≥1，即其前已有图标项才插）；</description></item>
     /// <item><description>序列首尾不插；媒体胶囊（后缀槽）与其邻居之间永不插——胶囊无会话时宽度归零，
     /// 若把细线留在它前面就会浮在面板末端。</description></item>
@@ -64,8 +70,9 @@ public static class DockSeparatorPlan
             if (prev == DockItemKind.Separator || cur == DockItemKind.Separator) continue;
             if (cur == DockItemKind.Media) continue;   // 规则 3：胶囊前不留细线
 
-            // 同一角色只插一道：固定块可能因窗口增删出现多个"固定→运行"相邻对（防御性去重）
-            if (!appsDone && cur == DockItemKind.Window && prev == DockItemKind.Pinned)
+            // 同一角色只插一道：最小化窗口可能不止一个（防御性去重）。
+            // 运行窗口与固定应用之间**不**插线（alpha.24 改为 macOS 语义：它们同属应用区）。
+            if (!appsDone && cur == DockItemKind.MinimizedWindow && IsAppKind(prev))
             {
                 appsDone = true;
                 slots.Add(new DockSeparatorSlot(i, DockSeparatorRole.AppsBoundary));

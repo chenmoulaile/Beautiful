@@ -235,7 +235,7 @@ public static class DockContextMenuPlan
     public static IReadOnlyList<DockContextMenuEntry> Build(DockContextMenuInput input) => input.Kind switch
     {
         DockItemKind.Pinned => PinnedMenu(input),
-        DockItemKind.Window => WindowMenu(input),
+        DockItemKind.Window or DockItemKind.MinimizedWindow => WindowMenu(input),
         DockItemKind.RecycleBin => RecycleBinMenu(input),
         _ => Array.Empty<DockContextMenuEntry>()
     };
