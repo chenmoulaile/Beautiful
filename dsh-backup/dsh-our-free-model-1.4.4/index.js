@@ -1,0 +1,1692 @@
+/**
+ * Our Free Model — plugin entry (Host half).
+ *
+ * Wiring: one adapter instance, two provider routes (usable now / region-limited
+ * on this egress), a live-catalog + availability-probe loop behind them, the
+ * browser-facing JSON API the settings page reads, and the OpenAI-compatible
+ * forward listener.
+ *
+ * On top of the model lane the plugin owns a small distribution channel of its
+ * own: a remote announcement feed the repository owner publishes by pushing a
+ * JSON document, an in-app self-updater that verifies and installs new releases
+ * from the same repository, and a self hot-reload that swaps the running plugin
+ * for the code now on disk. All three report to the browser over one
+ * Server-Sent-Events route, because the kernel has no notification service and
+ * the settings page should not have to poll.
+ *
+ * Every harness facility is reached through `ctx`, and only the one the plugin
+ * cannot exist without is declared in `inject`, so a composition that omits the
+ * rest degrades a feature rather than failing the plugin: no web server means no
+ * in-app dashboard, no attachments means image blocks fall back to the text
+ * projection the runtime already performs. See `inject` below.
+ *
+ * @module index.js
+ */
+
+import os from 'node:os'
+import path from 'node:path'
+import fs from 'node:fs'
+import { fileURLToPath } from 'node:url'
+import { FreeModelAdapter, ROUTE_LABELS, ROUTE_MAIN, ROUTE_REGION } from './src/adapter.js'
+import { JsonStore, SETTINGS_INITIAL, STATS_INITIAL, STATS_VERSION, DATA_DIR_NAME, MIN_DECODE_MS, decodeWindow, migrateStats, pruneDays, recordTurn, recordUsage, resolveDshHome } from './src/store.js'
+import { buildCatalog, buildEacCatalog, isEacEntry, parseListing } from './src/catalog.js'
+import { STATE, detectEgress, probeCatalog } from './src/probe.js'
+import { generateKey, startForwardServer, startLanRelay, toOpenAiUsage } from './src/forward.js'
+import { CODE, UpstreamError, getJson } from './src/http.js'
+import { fetchSealedListing } from './src/eac.js'
+import { unlockSealedLane } from './src/vault.js'
+import { mintRequestId, sessionForConversation } from './src/upstream.js'
+import { DEFAULT_LEVEL, budgetLadder } from './src/effort.js'
+import { windowTokens } from './src/stream.js'
+import { AnnouncementFeed } from './src/feed.js'
+import { PluginUpdater, restoreBackup } from './src/updater.js'
+import { selfReload, watchPackage, isReloading } from './src/reload.js'
+import { createPushHub } from './src/push.js'
+import { rejectionFor, isLoopbackHost } from './src/trust.js'
+import { resolveAttributionUserAgent } from './adapter/kernel.js'
+
+export const name = 'our-free-model'
+
+/** The installed package directory — the self-updater and hot reload operate here. */
+const PKG_URL = new URL('./', import.meta.url)
+const PKG_DIR = fileURLToPath(PKG_URL)
+const ENTRY_URL = new URL('index.js', import.meta.url).href
+
+/** Published version of the installed package, read once at load. */
+function readPackageVersion() {
+  try {
+    return String(JSON.parse(fs.readFileSync(path.join(PKG_DIR, 'package.json'), 'utf8')).version ?? '')
+  } catch {
+    return ''
+  }
+}
+
+/**
+ * `llm` is what the plugin exists for, so it is the only hard requirement of the
+ * plugin itself.
+ *
+ * Cordis withholds from a context any service its fiber does not name in
+ * `inject`, and keeps that fiber PENDING while a named one is absent — which is
+ * how v1.2.1 stayed permanently inactive on a composition with no HTTP server,
+ * the surface issue #4 reported. So nothing else may be named here: a headless
+ * composition would rather serve models without a settings page than serve
+ * nothing.
+ *
+ * What that costs and what still works:
+ * - `webServer` — the in-app dashboard and the SSE push channel. Reached through
+ *   a nested `ctx.inject` fiber (see the browser-facing API section), which pends
+ *   on its own and never blocks the lane above.
+ * - `timer` (`ctx.interval`) — nothing. The background loops are plain unref'd
+ *   timers (see `every`), because reading a mixin off an undeclared service
+ *   throws rather than answering `undefined`.
+ * - `connection`, `attachments` — one feature each: the fence falls back to its
+ *   structural replica, image blocks to the text projection. Both are read with
+ *   `ctx.get()`, which is the opportunistic lookup that answers `undefined`.
+ */
+export const inject = ['llm']
+
+/** Static fallback catalog, so a cold start with no network still lists models. */
+const FALLBACK_CATALOG = buildCatalog([
+  'mimo-v2.6-flash-free', 'mimo-v2.5-free', 'ling-3.0-flash-fin-free',
+  'nemotron-3-ultra-free', 'nemotron-3.5-lightning-free', 'space-bunny-free',
+  'muse-spark-1.3-contributor-free', 'muse-spark-1.2-contributor-free',
+])
+
+/** Where the plugin's own announcement copy lives; bump it to re-announce. */
+export const ANNOUNCEMENT_VERSION = '2026-09-25.1'
+
+/**
+ * Who owns the plugin's bytes — the distribution mode:
+ *
+ * - `self` (default): the plugin updates itself from its repository, publishes
+ *   its announcement feed, and hot-reloads, exactly as before.
+ * - `managed`: the plugin arrived through a distribution pack (an EAC
+ *   integration pack, a Mojobox install). The pack manager owns the bytes now,
+ *   so the in-app updater, the announcement channel and the hot reload stand
+ *   down — two writers to one installed directory is a corrupted install. The
+ *   model lane is untouched; this is about who ships the code, not what it does.
+ *
+ * `config.distribution` (what a pack's bundle patch passes) outranks the
+ * settings file, and the settings API never accepts the field back, so an
+ * install that shipped managed stays managed.
+ */
+const MANAGED_MESSAGE = 'this installation is managed; updates are handled by the pack that installed it'
+
+/** Effective distribution mode: config override first, then the settings file. */
+function distributionOf(config, settings) {
+  if (config?.distribution === 'managed' || settings.get().distribution === 'managed') return 'managed'
+  return 'self'
+}
+
+export function apply(ctx, config) {
+  const logger = ctx.logger ?? console
+  const home = resolveDshHome()
+  const dataDir = path.join(home, DATA_DIR_NAME)
+  fs.mkdirSync(dataDir, { recursive: true })
+  const packageVersion = readPackageVersion()
+
+  // A hot reload re-enters apply with fresh stores; the generation counter lives
+  // on globalThis so the new instance knows it replaced a predecessor, and does
+  // the post-swap bookkeeping itself (the old closure must not touch stores
+  // after its own dispose — that would race the new instance's writes).
+  const generation = (globalThis[Symbol.for('our-free-model.generation')] ?? 0) + 1
+  globalThis[Symbol.for('our-free-model.generation')] = generation
+
+  const settings = new JsonStore(path.join(dataDir, 'settings.json'), SETTINGS_INITIAL, { log: message => logger.warn?.(message) })
+  const stats = new JsonStore(path.join(dataDir, 'stats.json'), STATS_INITIAL, { log: message => logger.warn?.(message) })
+  const availability = new JsonStore(path.join(dataDir, 'availability.json'), { version: 1, at: 0, egress: null, results: {} }, { log: message => logger.warn?.(message) })
+  const catalogStore = new JsonStore(path.join(dataDir, 'catalog.json'), { version: 1, at: 0, entries: FALLBACK_CATALOG.map(entry => entry.id) }, { log: message => logger.warn?.(message) })
+
+  if (stats.get().version !== STATS_VERSION) stats.edit(migrateStats)
+
+  if (generation > 1) {
+    settings.update({ reloadedAt: Date.now(), reloadCount: generation - 1 })
+    settings.flush()
+  }
+
+  /** `managed` stands down everything that would rewrite the installed bytes. */
+  const distribution = distributionOf(config, settings)
+  const managed = distribution === 'managed'
+
+  let catalog = materializeCatalog(catalogStore.get().entries ?? [])
+  let attributionUserAgent = 'deepseek-harness'
+  let egress = availability.get().egress ?? null
+  let forward = null
+  let forwardError = ''
+  // Non-fatal: the listener is up, but not where the settings asked for it.
+  let forwardNotice = ''
+  /** The optional LAN relay: a second door, with a key of its own. */
+  let relay = null
+  let relayError = ''
+
+  // ── the co-paid lane ────────────────────────────────────────────────────────
+  /**
+   * The sealed lane is invisible until the host gate passes and the seal opens,
+   * both re-checked per use. Its roster persists under `sealIds` in the catalog
+   * store so a desktop restart offline still shows what it served last. A host
+   * the gate refuses never reads that list — `sealedCatalog` starts and stays
+   * empty, and no entry, request, or error of the lane is observable — but the
+   * persisted list survives the refusal, and the refusal itself is logged, so
+   * an empty EAC group has a reason in the log instead of silence.
+   */
+  const profileNameOf = () => {
+    const context = typeof ctx.get === 'function' ? ctx.get('profileContext') : undefined
+    return typeof context?.name === 'string' ? context.name : undefined
+  }
+  const sealedCredentialOf = () => unlockSealedLane({ profileName: profileNameOf() })
+  let sealedCatalog = sealedCredentialOf() === null ? [] : buildEacCatalog(catalogStore.get().sealIds ?? [])
+  const mergeCatalogs = () => { catalog = [...catalog, ...sealedCatalog.filter(row => !catalog.some(entry => entry.id === row.id))] }
+  mergeCatalogs()
+
+  // ── push channel ────────────────────────────────────────────────────────────
+  const push = createPushHub({ logger })
+
+  /** Set of announcement ids the user has acknowledged. */
+  const ackedIds = () => new Set(Array.isArray(settings.get().announcementsAcked) ? settings.get().announcementsAcked : [])
+
+  const feed = new AnnouncementFeed({
+    settings: () => settings.get(),
+    cacheFile: path.join(dataDir, 'feed.json'),
+    onArrival: items => {
+      push.emit('announcements', { items, unread: feedView().unread })
+      refreshUpdatePush?.()
+    },
+    log: message => logger.info?.(message),
+  })
+  feed.load()
+
+  /**
+   * The announcement view the settings page reads. A managed install polls no
+   * feed and caches no copy — the pack speaks for the plugin — so its view is a
+   * fixed empty one that names its source honestly.
+   */
+  const MANAGED_FEED_VIEW = { items: [], unread: 0, fetchedAt: 0, source: 'managed', error: '', lastError: '' }
+  function feedView() {
+    return managed ? MANAGED_FEED_VIEW : feed.view({ ackedIds: ackedIds() })
+  }
+
+  const updater = new PluginUpdater({
+    pkgDir: PKG_DIR,
+    dataDir,
+    settings: () => settings.get(),
+    log: message => logger.info?.(message),
+  })
+  /** Update versions we have already pushed a notification for. */
+  let updateNotifiedFor = typeof settings.get().updateNotifiedFor === 'string' ? settings.get().updateNotifiedFor : ''
+
+  /** Push an `update` event once per version (manual checks force a re-push). */
+  function pushUpdate(force = false) {
+    if (disposed || managed) return
+    const status = updater.status()
+    if (status.available !== true || status.latest === '') return
+    if (!force && status.latest === updateNotifiedFor) return
+    updateNotifiedFor = status.latest
+    settings.update({ updateNotifiedFor: status.latest })
+    push.emit('update', { current: status.current, latest: status.latest, notes: status.notes })
+  }
+  let refreshUpdatePush = undefined
+  /** Set when this generation is disposed; late async callbacks must stand down. */
+  let disposed = false
+
+  /** The immutable snapshot every adapter call binds to. */
+  const state = () => ({
+    catalog,
+    membership: computeMembership(catalog, availability.get(), settings.get()),
+    settings: settings.get(),
+    attributionUserAgent,
+  })
+
+  /** A turn refused for geography means the egress moved; re-classify promptly. */
+  let reprobeTimer
+  function scheduleReprobe() {
+    if (disposed || reprobeTimer !== undefined) return
+    reprobeTimer = setTimeout(() => {
+      reprobeTimer = undefined
+      // Teardown clears this handle, but the trigger comes from a turn that can
+      // land the instant after `disposed` was set; a forced round against
+      // disposed stores would be swallowed whole and still spend the quota.
+      if (disposed) return
+      void refreshAvailability(true)
+        .catch(error => logger.warn?.(`our-free-model: region reprobe failed (${error?.message ?? error})`))
+    }, 4000)
+    reprobeTimer.unref?.()
+  }
+
+  const adapter = new FreeModelAdapter({
+    state,
+    resolveImage: imageResolver(ctx, logger),
+    sealedCredential: sealedCredentialOf,
+    recordUsage: record => {
+      recordUsage(stats, record)
+      stats.edit(state => pruneDays(state, 120))
+    },
+    recordTurn: record => recordTurn(stats, record),
+    warn: message => logger.warn?.(message) ?? logger.log?.(message),
+    onRegionBlocked: () => scheduleReprobe(),
+  })
+
+  // ── registration ────────────────────────────────────────────────────────────
+  const routes = () => Object.keys(computeMembership(catalog, availability.get(), settings.get()))
+  const registration = ctx.llm.registerAdapter([ROUTE_MAIN, ROUTE_REGION], adapter)
+  ctx.llm.registerConfigurableProviders?.([
+    { provider: ROUTE_MAIN, displayName: ROUTE_LABELS[ROUTE_MAIN], settingsNs: ctx.fiber?.entry?.options?.id ?? name, settingsPath: [] },
+  ])
+
+  // Advertise a probe endpoint for the in-app "detect models" button. It offers
+  // what the picker itself advertises — a model the gateway refuses to route at
+  // all must not be addable to a profile just because it still appears in the
+  // upstream listing.
+  ctx.llm.registerModelDiscovery?.(ctx.fiber?.entry?.options?.id ?? name, async () => {
+    await refreshCatalog({ probe: true, force: true })
+    const advertised = new Set(Object.values(state().membership).flat())
+    return catalog
+      .filter(entry => advertised.has(entry.id))
+      .map(entry => ({
+        id: entry.id,
+        name: entry.name,
+        contextWindow: entry.contextWindow,
+        maxTokens: entry.maxOutput,
+        inputModalities: entry.vision ? ['text', 'image'] : ['text'],
+      }))
+  })
+
+  ctx.on?.('loader/volatile-update', () => {
+    registration.replace(routes())
+  })
+
+  // ── catalog + availability ──────────────────────────────────────────────────
+  // One round at a time, coalesced: the boot refresh, a model discovery, and
+  // the refresh button all arrive together at startup, and each used to fetch
+  // the listing and probe the lane on its own. A forced round covers every
+  // waiter; one that still needs forcing (a reprobe inside the 429 backoff,
+  // where an unforced round deliberately skips the probe) runs its own after
+  // the shared round rather than inheriting its softer options.
+  let catalogRefresh = null
+  let catalogRefreshForced = false
+  async function refreshCatalog(opts) {
+    const { probe = true, force = false } = opts ?? {}
+    while (catalogRefresh !== null) {
+      const shared = catalogRefresh
+      const sharedForced = catalogRefreshForced
+      const value = await shared
+      if (!force || sharedForced) return value
+    }
+    const run = refreshCatalogOnce({ probe, force })
+    catalogRefresh = run
+    catalogRefreshForced = force
+    try { return await run } finally {
+      if (catalogRefresh === run) { catalogRefresh = null; catalogRefreshForced = false }
+    }
+  }
+  async function refreshCatalogOnce({ probe, force }) {
+    let ids = []
+    try {
+      ids = parseListing(await fetchListing())
+    } catch (error) {
+      logger.warn?.(`our-free-model: model listing refresh failed (${error?.message ?? error}); keeping the cached catalog`)
+    }
+    if (ids.length > 0) {
+      catalog = buildCatalog(ids)
+      catalogStore.update({ at: Date.now(), entries: catalog.map(entry => entry.id) })
+      catalogStore.flush()
+      settings.update({ catalogSyncedAt: Date.now() })
+    } else {
+      catalog = materializeCatalog(catalogStore.get().entries ?? [])
+    }
+    await refreshSealedRoster()
+    mergeCatalogs()
+    if (probe) await refreshAvailability(force)
+    emitTopology()
+    return catalog
+  }
+
+  /**
+   * One roster round for the sealed lane, after the free lane's.
+   *
+   * A transient listing failure keeps the roster it served last; a credential
+   * refusal means the lane is closed to this install, so the roster and its
+   * persisted ids are dropped — a picker full of models the relay now refuses
+   * is worse than an empty group with the failure in the log. Every log line
+   * carries the failure class only, never the endpoint or the credential.
+   *
+   * A host the gate refuses is different: the lane was never open here, so
+   * nothing this install did was wrong, and the persisted ids belong to a
+   * machine that may be back on the supported host tomorrow. They stay, and
+   * the refusal is logged — this branch used to wipe the cache in silence,
+   * which made every "the EAC models are gone" report undiscoverable.
+   */
+  async function refreshSealedRoster() {
+    const credential = sealedCredentialOf()
+    if (credential === null) {
+      sealedCatalog = []
+      logger.warn?.('our-free-model: the sealed lane is not available on this host; its models stay hidden')
+      return
+    }
+    try {
+      const ids = parseListing(await fetchSealedListing(credential))
+      if (ids.length > 0) {
+        sealedCatalog = buildEacCatalog(ids)
+        catalogStore.update({ sealIds: sealedCatalog.map(entry => entry.id) })
+      }
+    } catch (error) {
+      if (error?.code === CODE.credential) {
+        sealedCatalog = []
+        catalogStore.update({ sealIds: [] })
+        logger.warn?.('our-free-model: the sealed lane refused its credential; its models are hidden until it is accepted again')
+        return
+      }
+      logger.warn?.(`our-free-model: sealed lane listing failed (${error?.code ?? 'unknown'}); keeping its cached roster`)
+    }
+  }
+
+  async function fetchListing() {
+    // Read straight from the listing path rather than the probe helper: a listing
+    // needs no session identity, and a failure should be a plain throw. Through
+    // `getJson` so the base URL stays the one override every other request uses.
+    return await getJson('/zen/v1/models', {
+      session: sessionForConversation('catalog:our-free-model'),
+      requestId: mintRequestId(),
+      attributionUserAgent,
+    })
+  }
+
+  async function runProbeRound() {
+    // The sealed lane gets no per-model probes: its verdicts would be spent
+    // against a different relay, and a roster the listing named is advertised
+    // as-is (its health is the listing round's, refreshed on the same cadence).
+    const probeable = catalog.filter(entry => !isEacEntry(entry))
+    const results = await probeCatalog(probeable, { attributionUserAgent }, (id, result) => {
+      availability.edit(state => ({ ...state, results: { ...state.results, [id]: { state: result.state, ...result.detail === undefined ? {} : { detail: result.detail }, ...result.ttftMs === undefined ? {} : { ttftMs: result.ttftMs }, latencyMs: result.latencyMs, at: Date.now() } } }))
+    }, 2)
+    availability.update({ at: Date.now(), egress })
+    availability.flush()
+    // Say it out loud when a round refuses everything: `computeMembership` keeps
+    // the roster advertised in that case, and without this line the log would
+    // read as a healthy probe while the gateway was turning every model down.
+    const verdicts = Object.values(results)
+    if (verdicts.length > 0 && verdicts.every(row => row.state === STATE.unavailable)) {
+      logger.warn?.(`our-free-model: the gateway refused all ${verdicts.length} models this round (${verdicts[0].detail ?? 'no detail'}); keeping them advertised`)
+    }
+    // A round the lane answered with nothing but 429s is the lane saying "this
+    // egress is out of quota". The probe draws from the same per-IP pool as the
+    // user's turns, so answering "how full is the pool?" by draining it again
+    // every period makes the shortage permanent. Back the next periodic round
+    // off (doubling, capped) and let real traffic — a manual reprobe, an egress
+    // change, the boot round — through regardless: those are worth their cost.
+    const allThrottled = verdicts.length > 0 && verdicts.every(row => row.state === STATE.throttled)
+    probeThrottleStreak = allThrottled ? probeThrottleStreak + 1 : 0
+    probeBackoffUntil = allThrottled
+      ? Date.now() + Math.min(30 * 2 ** (probeThrottleStreak - 1), 120) * 60_000
+      : 0
+    if (allThrottled) {
+      logger.warn?.(`our-free-model: the probe round hit the lane's quota; availability probes pause for ${Math.round((probeBackoffUntil - Date.now()) / 60_000)} minutes (your own requests are unaffected, and the reprobe button forces a round)`)
+    }
+    emitTopology()
+    return results
+  }
+
+  /**
+   * One catalog round at a time, for every caller.
+   *
+   * Four things start a round: the periodic catalog loop, the 2-minute egress
+   * watch, a mid-turn `RegionError`, and the two settings buttons. Each awaited a
+   * fresh `probeCatalog`, so a slow round and a trigger arriving during it ran
+   * whole catalogs side by side — against a lane whose 429 carries a growing
+   * `retry-after`, that is the user's own quota spent on the same question. A
+   * caller that arrives mid-round joins the round in flight instead of starting
+   * another, which is what the feed poll above already does.
+   *
+   * `force` is for the callers whose round is worth its quota no matter what the
+   * lane just said: a manual reprobe, the boot round, an egress change. The
+   * periodic loop passes nothing and is the one that gets held off while a
+   * quota-backoff window is open (see {@link runProbeRound}).
+   */
+  let probeRound = null
+  let probeThrottleStreak = 0
+  let probeBackoffUntil = 0
+  async function refreshAvailability(force = false) {
+    if (!force && probeBackoffUntil > Date.now()) return {}
+    if (probeRound !== null) return probeRound
+    const round = runProbeRound()
+    probeRound = round
+    try {
+      return await round
+    } finally {
+      if (probeRound === round) probeRound = null
+    }
+  }
+
+
+  async function watchEgress() {
+    const seen = await detectEgress()
+    if (seen === undefined) return
+    const previous = availability.get().egress
+    const changed = previous === null || previous === undefined
+      || previous.ip !== seen.ip || (seen.country !== undefined && previous.country !== seen.country)
+    egress = seen
+    if (changed) {
+      availability.update({ egress: seen })
+      availability.flush()
+      logger.info?.(`our-free-model: egress changed to ${seen.ip}${seen.country ? ` (${seen.country})` : ''}; re-probing availability`)
+      await refreshAvailability(true)
+    }
+  }
+
+  // ── forward listener ────────────────────────────────────────────────────────
+  // Both reconciles get a serialisation gate: two callers (the boot refresh and
+  // every settings POST) used to overlap, and whichever bind finished last wrote
+  // its entry-time snapshot of the settings back over the other one - rolling
+  // the user's just-saved `enabled` edits back, or leaving an orphan listener
+  // behind. The waiter re-runs after the first settles; the early-exit below
+  // makes that rerun free when nothing changed.
+  let forwardSyncInFlight = null
+  async function syncForward() {
+    while (forwardSyncInFlight !== null) await forwardSyncInFlight.catch(() => {})
+    const run = syncForwardOnce()
+    forwardSyncInFlight = run
+    try { await run } finally { if (forwardSyncInFlight === run) forwardSyncInFlight = null }
+  }
+  async function syncForwardOnce() {
+    const desired = settings.get().forward ?? {}
+    const wanted = desired.enabled === true
+    // A listener already bound where the settings want it is left alone. Two
+    // callers reconcile the same state — the boot refresh and every settings
+    // POST — and the second one used to close and re-bind the port anyway,
+    // resetting whatever request was in flight on the old socket.
+    if (forward !== null && wanted
+      && forward.host === (desired.host || '127.0.0.1')
+      && forward.port === (Number.isFinite(Number(desired.port)) ? Number(desired.port) : 0)) return
+    if (forward === null && !wanted) return
+    if (forward !== null) {
+      const closing = forward
+      forward = null
+      await closing.close().catch(() => {})
+    }
+    if (!wanted) {
+      forwardError = ''
+      forwardNotice = ''
+      return
+    }
+    // Checked again here, not only where the settings page posts: a headless
+    // composition has no page to click, and `settings.json` is the way in. A
+    // routable bind would spend this machine's free lane on the whole subnet.
+    if (!isLoopbackHost(desired.host || '127.0.0.1')) {
+      forwardError = 'the forward listener binds a loopback address only'
+      logger.warn?.(`our-free-model: forward listener not started (${forwardError})`)
+      return
+    }
+    try {
+      forward = await startForwardServer({
+        config: () => {
+          const current = settings.get().forward ?? {}
+          return { host: current.host || '127.0.0.1', port: current.port ?? 0, enabled: current.enabled === true, key: forwardKey() }
+        },
+        complete: (request, onChunk) => runForwarded(request, onChunk),
+        modelRows: () => publicModelRows(),
+        log: message => logger.warn?.(`our-free-model forward: ${message}`),
+        onTrace: event => logger.info?.(`our-free-model request: ${JSON.stringify(event)}`),
+      })
+      forwardError = ''
+      // The requested port is somebody else's for good — a `netsh interface
+      // portproxy` rule outlives this plugin, and on Windows it surfaces as
+      // EACCES on a loopback bind. `startForwardServer` walks to a free port
+      // rather than leaving the feature down; the port it settled on is what
+      // gets persisted below, and this notice is what says so.
+      forwardNotice = forward.fellBack === true && forward.bindError !== null
+        ? `port ${forward.requestedPort} is not available on this machine (${forward.bindError.code}); the listener is on port ${forward.port} instead`
+        : ''
+      if (forwardNotice !== '') logger.warn?.(`our-free-model forward: ${forwardNotice}`)
+      // Persist the port that actually answers, but out of the CURRENT
+      // settings - not the desired snapshot from before the await. An
+      // overlapped save would otherwise be rolled back to entry-time values.
+      const settledForward = settings.get().forward ?? {}
+      settings.update({ forward: { ...settledForward, port: forward.port, host: forward.host || desired.host || '127.0.0.1' } })
+      settings.flush()
+    } catch (error) {
+      forwardError = String(error?.message ?? error)
+      logger.warn?.(`our-free-model: forward listener could not start (${forwardError})`)
+    }
+  }
+
+  function forwardKey() {
+    const current = settings.get()
+    if (typeof current.forwardKey === 'string' && current.forwardKey !== '') return current.forwardKey
+    const minted = generateKey()
+    settings.update({ forwardKey: minted })
+    settings.flush()
+    return minted
+  }
+
+  /**
+   * The relay's own key. Never the local one: a key that has to travel to other
+   * devices on a network is a key that will eventually leak, and a leak must
+   * cost a rotation here rather than every tool already wired to the local port.
+   */
+  function relayKey() {
+    const current = settings.get()
+    if (typeof current.forwardLanKey === 'string' && current.forwardLanKey !== '') return current.forwardLanKey
+    const minted = generateKey()
+    settings.update({ forwardLanKey: minted })
+    settings.flush()
+    return minted
+  }
+
+  /** IPv4 addresses another machine on this network could dial. */
+  function lanAddresses() {
+    const out = []
+    for (const entries of Object.values(os.networkInterfaces())) {
+      for (const entry of entries ?? []) {
+        if (entry.family === 'IPv4' && entry.internal !== true) out.push(entry.address)
+      }
+    }
+    return out
+  }
+
+  /**
+   * Reconcile the optional LAN relay.
+   *
+   * Deliberately not folded into `syncForward`: the two doors have separate
+   * lives, and toggling the relay must not close and re-bind the local port
+   * under a request that is already in flight on it.
+   */
+  let relaySyncInFlight = null
+  async function syncRelay() {
+    while (relaySyncInFlight !== null) await relaySyncInFlight.catch(() => {})
+    const run = syncRelayOnce()
+    relaySyncInFlight = run
+    try { await run } finally { if (relaySyncInFlight === run) relaySyncInFlight = null }
+  }
+  async function syncRelayOnce() {
+    const desired = settings.get().forward ?? {}
+    const lan = desired.lan ?? {}
+    const wanted = lan.enabled === true
+    const host = String(lan.host ?? '').trim() || '0.0.0.0'
+    const port = Number.isFinite(Number(lan.port)) && Number(lan.port) > 0 ? Math.trunc(Number(lan.port)) : 0
+    if (relay !== null && wanted && forward !== null && relay.host === host && relay.port === port) return
+    if (relay === null && !wanted) return
+    if (relay !== null) {
+      const closing = relay
+      relay = null
+      await closing.close().catch(() => {})
+    }
+    if (!wanted) {
+      relayError = ''
+      return
+    }
+    // Without the local listener there is nothing to relay to, and a relay on
+    // the local port would dial itself. Both are settings mistakes worth naming
+    // here rather than surfacing as a socket error later.
+    if (desired.enabled !== true || forward === null) {
+      relayError = 'the local forward listener is not running'
+      return
+    }
+    if (port !== 0 && port === forward.port) {
+      relayError = 'the LAN relay needs a port of its own'
+      logger.warn?.(`our-free-model: LAN relay not started (${relayError})`)
+      return
+    }
+    try {
+      relay = await startLanRelay({
+        config: () => {
+          const current = settings.get().forward ?? {}
+          const currentLan = current.lan ?? {}
+          return {
+            enabled: currentLan.enabled === true,
+            host: String(currentLan.host ?? '').trim() || '0.0.0.0',
+            port: currentLan.port ?? 0,
+            lanKey: relayKey(),
+            localKey: forwardKey(),
+            targetPort: forward?.port ?? 0,
+          }
+        },
+        log: message => logger.warn?.(`our-free-model lan relay: ${message}`),
+        onTrace: event => logger.info?.(`our-free-model request: ${JSON.stringify(event)}`),
+      })
+      relayError = ''
+      // The port that was actually bound goes back into the settings, so the
+      // address the page shows is the address that answers. Out of the CURRENT
+      // settings — not the entry-time snapshot: an overlapped save during the
+      // bind would otherwise be rolled back to the values this run started with.
+      const settledForward = settings.get().forward ?? {}
+      settings.update({ forward: { ...settledForward, lan: { ...(settledForward.lan ?? {}), port: relay.port } } })
+      settings.flush()
+    } catch (error) {
+      relayError = String(error?.message ?? error)
+      logger.warn?.(`our-free-model: LAN relay could not start (${relayError})`)
+    }
+  }
+
+  /**
+   * Run one forwarded OpenAI request through the adapter.
+   *
+   * The caller's spelling is translated into harness messages, and the resulting
+   * chunk stream is handed straight back to the caller's callback while an
+   * outcome summary accumulates for the non-streaming path.
+   */
+  async function runForwarded(request, onChunk) {
+    const entry = catalog.find(candidate => candidate.id === request.model)
+    // OpenAI semantics: a model the roster does not carry is the caller's
+    // mistake (404 model_not_found), not the gateway's — a 502 here read as
+    // "the plugin is broken" to every client that inspects the status. The same
+    // gate as `/v1/models` below: a model the picker hides for having no route
+    // must not become dialable just by naming it in a request body.
+    if (entry === undefined || !routableModelIds().has(entry.id)) throw httpError(404, `model "${request.model}" not found`)
+    const openAi = request.openAi ?? {}
+    const messages = fromOpenAiMessages(openAi, request.responses === true)
+    // The caller's defs reach the adapter in the harness's own flat spelling,
+    // and the adapter re-shapes them for the endpoint it picked. Pre-converting
+    // them here fed `{type,function:{…}}` wrappers back into that same
+    // conversion, which reads `tool.name`: every tool was dropped, the request
+    // went upstream with none, and the model answered "no tool is available"
+    // instead of calling the one the caller offered.
+    const tools = (openAi.tools ?? []).map(normalizeTool).filter(Boolean)
+    const handler = typeof onChunk === 'function' ? onChunk : () => {}
+    const outcome = { text: '', toolCalls: [], usage: undefined, truncated: false, error: undefined }
+
+    const options = {
+      provider: ROUTE_MAIN,
+      model: entry.id,
+      messages,
+      tools: tools.length > 0 ? tools : undefined,
+      ...typeof openAi.temperature === 'number' ? { temperature: openAi.temperature } : {},
+      ...typeof openAi.max_tokens === 'number' ? { maxTokens: openAi.max_tokens } : {},
+      ...typeof openAi.reasoning_effort === 'string' ? { reasoningEffort: openAi.reasoning_effort } : {},
+      sessionId: `forward:${String(openAi.user ?? openAi.conversation ?? 'shared')}`,
+      signal: request.signal,
+    }
+
+    for await (const chunk of adapter.stream(options, entry, state())) {
+      handler(chunk)
+      foldForwardOutcome(outcome, chunk)
+    }
+    // A max-tokens finish means the adapter judged a tool call unexecutable
+    // (arguments cut mid-JSON); keep the OpenAI answer consistent with its
+    // finish_reason by not reporting the broken call alongside `length`.
+    if (outcome.truncated === true) {
+      outcome.toolCalls = outcome.toolCalls.filter(call => {
+        try { JSON.parse(call.arguments === '' ? '{}' : call.arguments); return true } catch { return false }
+      })
+    }
+    return outcome
+  }
+
+  /** What the picker selects and the forward port may dial — one definition, two surfaces. */
+  function routableModelIds() {
+    const membership = new Set(state().membership[ROUTE_MAIN] ?? [])
+    if (settings.get().exposeRegionModels !== false) for (const id of state().membership[ROUTE_REGION] ?? []) membership.add(id)
+    return membership
+  }
+
+  function publicModelRows() {
+    const membership = routableModelIds()
+    return catalog
+      .filter(entry => membership.has(entry.id))
+      .map(entry => ({
+        id: entry.id,
+        object: 'model',
+        created: Math.floor(Date.now() / 1000),
+        owned_by: 'our-free-model',
+        ...entry.contextWindow === undefined ? {} : { context_window: entry.contextWindow },
+      }))
+  }
+
+  // ── hot reload + in-app upgrade ─────────────────────────────────────────────
+  /**
+   * Swap the running plugin for the code on disk. Called for explicit reloads
+   * and at the end of an upgrade; the updater's rollback directory is the disk
+   * safety net when the new code cannot start.
+   */
+  async function reloadFromDisk() {
+    const result = await selfReload(ctx, { logger, packageUrl: PKG_URL, entryUrl: ENTRY_URL })
+    if (result.ok) return result
+    // The registry is back on the old code; make the disk match it.
+    try { restoreBackup(updater.backupDir, PKG_DIR) } catch { /* best effort */ }
+    throw new Error(result.error)
+  }
+
+  async function applyUpgrade(version) {
+    if (managed) throw httpError(409, MANAGED_MESSAGE)
+    if (isReloading()) throw new Error('a reload is already in progress')
+    const result = await updater.apply({ version })
+    // The next apply() picks this up and pushes `upgraded` once it is live.
+    globalThis[Symbol.for('our-free-model.pending-upgrade')] = result.version
+    try {
+      await reloadFromDisk()
+    } catch (error) {
+      // The successor will never boot, so it can never consume the marker —
+      // clear it or the next cold start would announce a phantom upgrade.
+      globalThis[Symbol.for('our-free-model.pending-upgrade')] = undefined
+      throw error
+    }
+    return { ...result, reloaded: true }
+  }
+
+  /**
+   * Watch the installed package and hot-reload when its files change.
+   * Off by default; the settings page flips it for development and demos.
+   */
+  let watcher = undefined
+  function syncWatcher() {
+    const wanted = settings.get().autoReloadWatch === true
+    if (wanted && watcher === undefined) {
+      watcher = watchPackage(PKG_DIR, {
+        logger,
+        onChange: () => {
+          if (isReloading()) return
+          logger.info?.('our-free-model: watched files changed; hot-reloading')
+          void reloadFromDisk().catch(error => logger.warn?.(`our-free-model: hot reload failed (${error?.message ?? error})`))
+        },
+      })
+    } else if (!wanted && watcher !== undefined) {
+      watcher()
+      watcher = undefined
+    }
+  }
+
+  // ── browser-facing API ──────────────────────────────────────────────────────
+  /**
+   * Read a service the composition may or may not mount.
+   *
+   * `ctx.get` is cordis' opportunistic lookup: it answers `undefined` instead of
+   * throwing when the service is absent — and also while it is merely not
+   * provided yet, which matters because plugins load before the browser half has
+   * published anything. So a service read this way is a snapshot: `connection` is
+   * therefore resolved per request below, and `webServer` gets its own fiber (see
+   * the `ctx.inject` at the end of this section).
+   */
+  const optional = service => (typeof ctx.get === 'function' ? ctx.get(service) : undefined)
+  /**
+   * The trust fence's view of the connection service, looked up per request.
+   *
+   * The browser half publishes `connection` after plugins have loaded, so reading
+   * it once here would freeze in "absent" and leave every request on the replica
+   * fence for the life of the process. The getter answers `undefined` — not a
+   * no-op function — while the service is missing, which is what makes the fence
+   * fall through to its own structural check instead of reading as "admitted".
+   */
+  const fenceConnection = {
+    get admit() {
+      const current = optional('connection')
+      return current === undefined ? undefined : (req => current.admit(req))
+    },
+  }
+  const api = createApiRoutes({
+    settings, stats, availability, catalog: () => catalog, state,
+    refreshCatalog, refreshAvailability, syncForward, syncRelay,
+    forwardInfo: () => ({
+      running: forward !== null,
+      port: forward?.port ?? 0,
+      error: forwardError,
+      notice: forwardNotice,
+      egress,
+      lan: {
+        running: relay !== null,
+        port: relay?.port ?? 0,
+        host: relay?.host ?? '',
+        error: relayError,
+        addresses: lanAddresses(),
+      },
+    }),
+    rotateKey: () => {
+      const minted = generateKey()
+      settings.update({ forwardKey: minted })
+      settings.flush()
+      return minted
+    },
+    rotateLanKey: () => {
+      const minted = generateKey()
+      settings.update({ forwardLanKey: minted })
+      settings.flush()
+      return minted
+    },
+    testModel: async (id, effort) => {
+      const entry = catalog.find(candidate => candidate.id === id)
+      if (entry === undefined) throw new UpstreamError(`unknown model "${id}"`, CODE.server)
+      const started = Date.now()
+      let firstFrame
+      let sawReasoning = false
+      let text = ''
+      let usage
+      for await (const chunk of adapter.stream({
+        provider: ROUTE_MAIN,
+        model: entry.id,
+        messages: [{ role: 'user', content: 'Reply with exactly: OK' }],
+        reasoningEffort: effort === undefined || effort === '' ? DEFAULT_LEVEL : effort,
+        sessionId: `bench:${entry.id}:${effort ?? DEFAULT_LEVEL}`,
+      }, entry, state())) {
+        if (chunk.type === 'text-delta' || chunk.type === 'reasoning-delta' || chunk.type === 'tool-call-delta') {
+          if (firstFrame === undefined) firstFrame = Date.now()
+          if (chunk.type === 'reasoning-delta') sawReasoning = true
+          if (chunk.type === 'text-delta') text += chunk.text
+        }
+        if (chunk.type === 'usage') usage = chunk.usage
+        if (chunk.type === 'finish' && chunk.reason.kind !== 'stop' && chunk.reason.kind !== 'tool-calls') {
+          throw new UpstreamError(chunk.reason.failure?.message ?? chunk.reason.kind, chunk.reason.failure?.code ?? CODE.server)
+        }
+      }
+      const ms = Date.now() - started
+      // Same rule as the recorded calls: the rate divides only by a window that
+      // actually covers the tokens in its numerator.
+      const measured = decodeWindow(firstFrame === undefined ? 0 : ms - firstFrame, windowTokens(usage, sawReasoning), true)
+      return {
+        model: entry.id, effort: effort ?? DEFAULT_LEVEL, ok: true,
+        totalMs: ms,
+        ttftMs: firstFrame === undefined ? ms : firstFrame - started,
+        outputTokens: usage?.outputTokens ?? 0,
+        reasoningTokens: usage?.reasoningTokens ?? 0,
+        tokensPerSecond: measured.tps,
+        sample: text.slice(0, 60),
+      }
+    },
+    meta: () => ({
+      version: packageVersion,
+      distribution,
+      generation,
+      reloadedAt: settings.get().reloadedAt ?? 0,
+      reloadCount: settings.get().reloadCount ?? 0,
+      dataDir,
+      autoReloadWatch: settings.get().autoReloadWatch === true,
+      lastReload: globalThis[Symbol.for('our-free-model.last-reload')] ?? undefined,
+      purgeSample: globalThis[Symbol.for('our-free-model.purge-sample')] ?? undefined,
+    }),
+    announcements: {
+      view: feedView,
+      /** Persist the complete acked set the caller assembled (full-replace
+       *  semantics: the caller decides additions *and* clearings). */
+      ack: ids => {
+        settings.update({ announcementsAcked: [...ids] })
+        settings.flush()
+        return feedView()
+      },
+      refresh: () => feed.poll(),
+    },
+    update: {
+      status: () => managed
+        ? { ...updater.status(), managed: true, available: false, latest: '' }
+        : { ...updater.status(), notifiedFor: updateNotifiedFor },
+      check: async () => {
+        if (managed) throw httpError(409, MANAGED_MESSAGE)
+        const result = await updater.check()
+        pushUpdate(true)
+        return result
+      },
+      apply: applyUpgrade,
+    },
+    hotReload: () => {
+      if (managed) throw httpError(409, MANAGED_MESSAGE)
+      return reloadFromDisk()
+    },
+    /** Fixed for this generation; the settings API cannot flip it (see below). */
+    managedDistribution: managed,
+    push,
+    connection: fenceConnection,
+    logger,
+  })
+
+  // The dashboard half runs in its own fiber so that a composition without an
+  // HTTP server cannot take the model lane down with it.
+  //
+  // `ctx.inject(deps, callback)` is cordis' "run this once these services exist":
+  // the callback pends while `webServer` is absent *or merely not provided yet*,
+  // and is re-run if the service is replaced. That pending is the whole point —
+  // reading `ctx.get('webServer')` once at apply time answered `undefined` in the
+  // real web composition (plugins load before the browser half publishes it), the
+  // routes never registered, and the settings page had no data source while a web
+  // server was busy serving it.
+  ctx.inject(['webServer'], scoped => {
+    const server = scoped.webServer
+    scoped.effect(() => server.register({ kind: 'prefix', path: '/api/our-free-model', handler: api }), 'our-free-model: api routes')
+    // The events stream is an exact route: exact dispatch outranks the prefix, so
+    // the hub's handler owns the socket while every other path still lands on the
+    // JSON API.
+    scoped.effect(() => server.register({ kind: 'exact', path: '/api/our-free-model/events', handler: eventsRoute }), 'our-free-model: events stream')
+    logger.info?.('our-free-model: settings API mounted at /api/our-free-model')
+  })
+
+  /** Adopt one request as a live push stream, after the trust fence. */
+  function eventsRoute(req, res) {
+    const rejection = rejectionFor(req, fenceConnection)
+    if (rejection !== undefined) {
+      res.writeHead(rejection, { 'content-type': 'text/plain; charset=utf-8' })
+      res.end(rejection === 401 ? 'unauthorized' : 'forbidden')
+      return
+    }
+    push.attach(req, res, helloPayload())
+  }
+
+  function helloPayload() {
+    return {
+      version: packageVersion,
+      announcements: { unread: feedView().unread, fetchedAt: feedView().fetchedAt },
+      update: { available: updater.status().available, latest: updater.status().latest },
+      reloadedAt: settings.get().reloadedAt ?? 0,
+    }
+  }
+
+  // ── boot + background loop ──────────────────────────────────────────────────
+  ctx.effect(() => () => {
+    settings.dispose(); stats.dispose(); availability.dispose(); catalogStore.dispose()
+  }, 'our-free-model: stores')
+
+  ctx.effect(() => () => {
+    void forward?.close().catch(() => {})
+    void relay?.close().catch(() => {})
+  }, 'our-free-model: forward listener')
+
+  ctx.effect(() => () => { registration() }, 'our-free-model: adapter routes')
+
+  ctx.effect(() => () => {
+    disposed = true
+    // The geography-reprobe timer belongs to this generation; without this it
+    // outlives teardown and fires a forced probe round after the stores it
+    // reads have been disposed (the rejection gets swallowed, quota burned).
+    clearTimeout(reprobeTimer)
+    push.dispose()
+    watcher?.()
+  }, 'our-free-model: push + watcher')
+
+  ctx.effect(() => {
+    void (async () => {
+      attributionUserAgent = await resolveAttributionUserAgent(logger)
+      if (disposed) return
+      await refreshCatalog({ probe: true, force: true })
+      // Every await here is a chance for teardown to have run underneath this
+      // boot: a resumed refresh would start listeners the disposer already
+      // closed and force a probe round against stores it disposed.
+      if (disposed) return
+      await syncForward()
+      if (disposed) return
+      await syncRelay()
+      if (disposed) return
+      syncWatcher()
+      emitTopology()
+      push.emit('hello', helloPayload())
+      // An upgrade that ended in a hot reload reports from its successor.
+      const pending = globalThis[Symbol.for('our-free-model.pending-upgrade')]
+      if (pending !== undefined) {
+        globalThis[Symbol.for('our-free-model.pending-upgrade')] = undefined
+        settings.update({ installedVersion: pending })
+        settings.flush()
+        push.emit('upgraded', { version: pending, clientChanged: true })
+      }
+    })().catch(error => logger.warn?.(`our-free-model: startup refresh failed (${error?.message ?? error})`))
+  }, 'our-free-model: boot refresh')
+
+  // Feed poll: shortly after boot, then on the configured period. Concurrency
+  // with a manual refresh is harmless — polls share one in-flight request.
+  // A managed install polls nothing: the pack speaks for the plugin.
+  ctx.effect(() => {
+    if (managed) return
+    const first = setTimeout(() => { void feed.poll() }, 12_000)
+    first.unref?.()
+    return () => clearTimeout(first)
+  }, 'our-free-model: first feed poll')
+
+  /**
+   * Run one task every `ms` for as long as this generation lives.
+   *
+   * A plain unref'd timer chain, on purpose. `ctx.interval` is a mixin over the
+   * `timer` service, and reading it from a fiber that did not name `timer` in
+   * `inject` throws inside the real cordis proxy (`cannot get property "timer"
+   * without inject`) instead of answering `undefined` — that one read is what
+   * stopped the whole plugin from activating. `timer` is not worth declaring on a
+   * headless composition, and the mixin adds nothing here beyond `setTimeout` plus
+   * a disposer: it must not hold the process open, and `disposed` ends it when the
+   * fiber goes away. Without any loop the availability probe would run once at
+   * boot, so a model that throttled, recovered, or moved behind the region gate
+   * would keep the picker position it was first given.
+   */
+  // `ms` may be a function: the period is re-read on every re-arm, so an
+  // interval changed on the settings page takes effect from the next cycle
+  // instead of echoing a number the running timer will never observe.
+  function every(task, ms) {
+    const period = () => typeof ms === 'function' ? ms() : ms
+    let handle = setTimeout(function tick() {
+      if (disposed) return
+      task()
+      handle = setTimeout(tick, period())
+      handle.unref?.()
+    }, period())
+    handle.unref?.()
+    ctx.effect(() => () => clearTimeout(handle), 'our-free-model: interval')
+  }
+
+  if (!managed) {
+    every(() => {
+      void feed.poll()
+      const hours = settings.get().updateCheckHours ?? 6
+      if (hours > 0) void updater.check().then(() => pushUpdate(false)).catch(() => {})
+    }, () => positiveOr(settings.get().feedPollMinutes, 30, 5) * 60_000)
+  }
+  // The probe period is in minutes, and one minute is the floor — a value of 0 or
+  // a negative one would otherwise spin. This used to read `Math.max(60, …)`,
+  // which floored every interval below an hour *including the shipped default of
+  // 15*, so the number on the settings page was silently ignored.
+  every(() => {
+    void (async () => {
+      await watchEgress()
+      await refreshCatalog({ probe: true })
+    })().catch(error => logger.warn?.(`our-free-model: periodic refresh failed (${error?.message ?? error})`))
+  }, () => positiveOr(settings.get().probeIntervalMinutes, 15, 1) * 60_000)
+  // A failing egress watch means the network is down, which is worth one line —
+  // and only the first of a streak, or a dead link would write every two minutes
+  // until the next restart. A success resets the flag for the next outage.
+  let egressWarned = false
+  every(() => {
+    void watchEgress()
+      .then(() => { egressWarned = false })
+      .catch(error => {
+        if (!egressWarned) logger.warn?.(`our-free-model: egress watch failed (${error?.message ?? error})`)
+        egressWarned = true
+      })
+  }, 120_000)
+  // The first update check waits for the boot refresh to settle, then runs once
+  // even when the periodic poll is disabled (hours === 0 means opt out fully).
+  // Managed installs check nothing — the pack that installed them decides.
+  ctx.effect(() => {
+    if (managed) return
+    const first = setTimeout(() => {
+      const hours = settings.get().updateCheckHours ?? 6
+      if (hours <= 0) return
+      void updater.check().then(() => pushUpdate(false)).catch(() => {})
+    }, 40_000)
+    first.unref?.()
+    return () => clearTimeout(first)
+  }, 'our-free-model: first update check')
+
+  // Keep the module-level "notified" marker in sync with the stored one so a
+  // reload does not re-toast the same version.
+  refreshUpdatePush = () => pushUpdate(false)
+
+  function emitTopology() {
+    try { ctx.emit?.('llm/adapters-updated') } catch { /* no listener surface */ }
+    registration.replace(routes())
+  }
+}
+
+// ── helpers ─────────────────────────────────────────────────────────────────
+
+/**
+ * An error the settings API presents with its own status line, not a bare 500.
+ * Used where a refusal is the *correct* answer — a managed install declining to
+ * update itself — so the page can say why instead of blaming a fault.
+ */
+function httpError(statusCode, message) {
+  const error = new Error(message)
+  error.statusCode = statusCode
+  return error
+}
+
+/**
+ * A period that cannot become a hot loop.
+ *
+ * `setTimeout(fn, NaN)` is `setTimeout(fn, 1)` in Node, and a settings file the
+ * user edits by hand (the only way in on a headless composition) can carry
+ * anything. Both timers below take their period from a stored number, so the
+ * guard belongs here rather than in each caller.
+ */function positiveOr(value, fallback, floor = 1) {
+  const number = Number(value)
+  if (!Number.isFinite(number) || number <= 0) return fallback
+  return Math.max(floor, Math.trunc(number))
+}
+
+/**
+ * Coerce the settings a timer or the wire reads.
+ *
+ * The settings page's own cleared input field posts `0`: on the output ceiling
+ * that read as `min(model capacity, 0)` and every turn came back capped at the
+ * 512-token floor, and on a period it asked for a probe round a minute. A value
+ * that is not a positive number is "the user did not set one", so it falls back
+ * to what ships rather than being clamped into an extreme.
+ */
+function sanitizeSettings(patch, current) {
+  const next = { ...patch }
+  const positive = (key, fallback) => {
+    if (next[key] === undefined) return
+    const value = Number(next[key])
+    next[key] = Number.isFinite(value) && value > 0 ? Math.trunc(value) : (Number(current[key]) || fallback)
+  }
+  positive('probeIntervalMinutes', 15)
+  positive('feedPollMinutes', 30)
+  positive('defaultMaxTokens', 32768)
+  if (next.updateCheckHours !== undefined) {
+    // Zero is a real answer here: it means "stop checking for updates".
+    const hours = Number(next.updateCheckHours)
+    next.updateCheckHours = Number.isFinite(hours) && hours >= 0 ? Math.trunc(hours) : (Number(current.updateCheckHours) || 6)
+  }
+  return next
+}
+
+/**
+ * Which route advertises which model, given the last probe.
+ *
+ * Region-gated models move to their dedicated route, and only while the user
+ * wants them shown. Everything else sits on the main route, including models a
+ * probe could not reach this round — a call that never got an answer is not a
+ * verdict, and a flaky network must not empty the picker.
+ *
+ * A model the gateway named in its listing but refused to route at all is the
+ * exception: it cannot answer any prompt, so advertising it trades the user's
+ * turn for a guaranteed failure. Those come out of both routes until a later
+ * probe reverses the verdict, which the periodic re-probe does by itself if the
+ * lane brings the id back.
+ *
+ * A catalog entry with no verdict at all is normal, not an edge case: a fresh
+ * install has no probe history until the boot round lands (one ping per model,
+ * two at a time, each with a 45 second budget), and a model the listing just
+ * added has none until the next one does. Such an entry is advertised — not
+ * knowing is not the same as knowing it is refused.
+ *
+ * The one thing that may never happen is an empty result. Every model failing
+ * the same way means the lane or the client fingerprint is broken, not that the
+ * whole roster went away, and a picker with no models at all is worse than one
+ * with a stale entry — so a round that refused everything is ignored, geography
+ * grouping and all.
+ */
+function computeMembership(catalog, availabilitySnapshot, settings) {
+  const results = availabilitySnapshot?.results ?? {}
+  const expose = settings?.exposeRegionModels !== false
+  const verdictOf = entry => results[entry.id]?.state
+  let usable = catalog.filter(entry => verdictOf(entry) !== STATE.unavailable)
+  if (catalog.length > 0 && usable.length === 0) usable = catalog
+  const main = []
+  const region = []
+  for (const entry of usable) {
+    const verdict = verdictOf(entry)
+    if (verdict !== STATE.regionBlocked) main.push(entry.id)
+    else if (expose) region.push(entry.id)
+  }
+  const membership = {}
+  if (main.length > 0) membership[ROUTE_MAIN] = main
+  if (region.length > 0) membership[ROUTE_REGION] = region
+  return membership
+}
+
+function materializeCatalog(ids) {
+  const rebuilt = buildCatalog(ids)
+  return rebuilt.length > 0 ? rebuilt : FALLBACK_CATALOG
+}
+
+/**
+ * Resolve an image attachment into a data URL the provider can accept.
+ *
+ * The attachment service exposes a host path, not bytes; reading it here keeps the
+ * plugin free of a second credential path. An unresolvable image is reported as a
+ * warning and dropped — the runtime has already text-projected files, and a
+ * text-only model never sees an image block in the first place.
+ */
+function imageResolver(ctx, logger) {
+  if (typeof ctx.get !== 'function') return undefined
+  const cache = new Map()
+  const MAX_IMAGE_BYTES = 8 * 1024 * 1024
+  return ref => {
+    // Looked up per call, not once at apply time: this is the third instance of
+    // the same cordis trap the release note describes for `webServer` and
+    // `connection` — a service that plugins load before is not provided yet, so a
+    // one-shot read silently cost the whole feature (here: image attachments,
+    // with nothing in the log to say so).
+    const attachments = ctx.get('attachments')
+    if (attachments === undefined || typeof attachments.imageHostPath !== 'function') return undefined
+    const id = String(ref?.attachmentId ?? '')
+    if (id === '') return undefined
+    const cached = cache.get(id)
+    if (cached !== undefined) return cached
+    try {
+      const hostPath = attachments.imageHostPath(ref)
+      if (typeof hostPath !== 'string' || hostPath === '') return undefined
+      const size = fs.statSync(hostPath).size
+      if (size > MAX_IMAGE_BYTES) { logger.warn?.(`our-free-model: image ${id} is ${size} bytes, above the ${MAX_IMAGE_BYTES} send limit`); return undefined }
+      const media = typeof ref.mediaType === 'string' ? ref.mediaType : 'image/png'
+      const url = `data:${media};base64,${fs.readFileSync(hostPath).toString('base64')}`
+      if (cache.size > 48) cache.clear()
+      cache.set(id, url)
+      return url
+    } catch (error) {
+      logger.warn?.(`our-free-model: could not read image ${id} (${error?.message ?? error})`)
+      return undefined
+    }
+  }
+}
+
+/** OpenAI request messages -> harness messages, for the forward listener. */
+function fromOpenAiMessages(body, isResponses) {
+  const out = []
+  const rows = isResponses
+    ? normaliseResponsesInput(body.input)
+    : (Array.isArray(body.messages) ? body.messages : [])
+  for (const row of rows) {
+    const role = row.role ?? 'user'
+    const content = []
+    if (typeof row.content === 'string') {
+      if (row.content !== '') content.push({ type: 'text', text: row.content })
+    } else if (Array.isArray(row.content)) {
+      for (const part of row.content) {
+        if (typeof part === 'string') { if (part !== '') content.push({ type: 'text', text: part }); continue }
+        const text = part?.text ?? part?.input_text ?? part?.output_text
+        if (typeof text === 'string' && text !== '') content.push({ type: 'text', text })
+        const image = part?.image_url?.url ?? part?.image_url
+        if (typeof image === 'string' && image !== '') {
+          content.push({ type: 'image', attachment: { attachmentId: `url:${image.slice(0, 64)}`, mediaType: 'image/png', bytes: 0, width: 0, height: 0, url: image } })
+        }
+      }
+    }
+    if (role === 'tool') {
+      out.push({ role: 'tool', content: [{ type: 'text', text: typeof row.content === 'string' ? row.content : JSON.stringify(row.content ?? '') }], toolCallId: row.tool_call_id ?? '', source: { kind: 'tool', callId: row.tool_call_id ?? '' } })
+      continue
+    }
+    if (role === 'assistant' && Array.isArray(row.tool_calls)) {
+      for (const call of row.tool_calls) {
+        content.push({ type: 'tool-call', id: call.id ?? '', name: call.function?.name ?? '', arguments: call.function?.arguments ?? '{}' })
+      }
+    }
+    if (content.length === 0) continue
+    out.push({
+      role: role === 'developer' ? 'developer' : role === 'system' ? 'system' : role === 'assistant' ? 'assistant' : 'user',
+      content,
+      ...role === 'assistant' ? { source: { kind: 'model' } } : {},
+    })
+  }
+  return out
+}
+
+function normaliseResponsesInput(input) {
+  if (typeof input === 'string') return [{ role: 'user', content: input }]
+  if (!Array.isArray(input)) return []
+  return input.map(row => {
+    if (typeof row === 'string') return { role: 'user', content: row }
+    if (row.type === 'function_call') return { role: 'assistant', content: [], tool_calls: [{ id: row.call_id, function: { name: row.name, arguments: row.arguments } }] }
+    if (row.type === 'function_call_output') return { role: 'tool', content: String(row.output ?? ''), tool_call_id: row.call_id }
+    return row
+  })
+}
+
+function normalizeTool(tool) {
+  const name = tool?.name ?? tool?.function?.name
+  if (typeof name !== 'string' || name.trim() === '') return null
+  const parameters = tool?.parameters ?? tool?.function?.parameters ?? { type: 'object', properties: {} }
+  return { name, description: String(tool?.description ?? tool?.function?.description ?? ''), parameters }
+}
+
+function foldForwardOutcome(outcome, chunk) {
+  switch (chunk.type) {
+    case 'text-delta': outcome.text += chunk.text; break
+    case 'tool-call-delta': {
+      let call = outcome.toolCalls.find(candidate => candidate.slot === chunk.index)
+      if (call === undefined) { call = { slot: chunk.index, id: chunk.id ?? '', name: chunk.name ?? '', arguments: chunk.argumentsDelta ?? '' }; outcome.toolCalls.push(call) }
+      else call.arguments += chunk.argumentsDelta ?? ''
+      if (chunk.name) call.name = chunk.name
+      if (chunk.id) call.id = chunk.id
+      break
+    }
+    case 'block-end':
+      if (chunk.block?.type === 'tool-call') {
+        const existing = outcome.toolCalls.find(candidate => candidate.id === chunk.block.id)
+        if (existing === undefined) outcome.toolCalls.push({ slot: chunk.index, id: chunk.block.id, name: chunk.block.name, arguments: chunk.block.arguments })
+      }
+      break
+    case 'usage': outcome.usage = toOpenAiUsage(chunk.usage); break
+    case 'finish':
+      if (chunk.reason?.kind === 'max-tokens') outcome.truncated = true
+      // An aborted turn carries the same in-body nothing as an errored one; both
+      // are the caller's failure to report, not an empty completion.
+      if (chunk.reason?.kind === 'error' || chunk.reason?.kind === 'aborted') outcome.error = chunk.reason.failure?.message
+      break
+    default: break
+  }
+  return outcome
+}
+
+/**
+ * The settings page's HTTP surface.
+ *
+ * Every route runs the trust fence first: the connection service's own
+ * admission when the composition mounts it (the same check the kernel applies
+ * to `/api`), otherwise the structural replica in src/trust.js. The plugin's
+ * prefix outranks `/api` in webServer's longest-prefix dispatch, so without
+ * this fence these routes would answer callers the app itself would refuse.
+ */
+function createApiRoutes(deps) {
+  return async function handler(req, res) {
+    const url = new URL(req.url ?? '/', 'http://localhost')
+    const routePath = url.pathname.replace(/^\/api\/our-free-model/, '').replace(/\/+$/, '') || '/'
+    const method = String(req.method ?? 'GET').toUpperCase()
+    const rejection = rejectionFor(req, deps.connection)
+    const send = (status, payload) => {
+      const body = JSON.stringify(payload)
+      res.writeHead(status, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' })
+      res.end(body)
+    }
+    if (rejection !== undefined) return send(rejection, { error: rejection === 401 ? 'unauthorized' : 'forbidden' })
+    try {
+      if (method === 'GET' && routePath === '/summary') {
+        return send(200, buildSummary(deps))
+      }
+      if (method === 'GET' && routePath === '/stats') {
+        return send(200, buildStats(deps.stats.get(), deps.catalog()))
+      }
+      if (method === 'GET' && routePath === '/meta') {
+        return send(200, { ...deps.meta(), feed: { fetchedAt: deps.announcements.view().fetchedAt, source: deps.announcements.view().source, error: deps.announcements.view().error }, update: deps.update.status() })
+      }
+      if (method === 'GET' && routePath === '/announcement') {
+        // A managed install also stands down the owner's onboarding copy: the
+        // pack, not the plugin, speaks for what is new.
+        const acknowledged = deps.managedDistribution === true || deps.settings.get().announcementAck === ANNOUNCEMENT_VERSION
+        return send(200, { version: ANNOUNCEMENT_VERSION, acknowledged })
+      }
+      if (method === 'POST' && routePath === '/announcement/ack') {
+        // Bounded like every other write to this file: the query string is
+        // caller-controlled, and the comparison downstream only ever matches a
+        // version id — nothing needs the whole string.
+        deps.settings.update({ announcementAck: String(url.searchParams.get('version') ?? ANNOUNCEMENT_VERSION).slice(0, 64) })
+        deps.settings.flush()
+        return send(200, { ok: true })
+      }
+      if (method === 'GET' && routePath === '/announcements') {
+        const view = deps.announcements.view()
+        return send(200, { ...view, acked: [...ackedSet(deps)], notifyOs: deps.settings.get().notifyOs === true })
+      }
+      if (method === 'POST' && routePath === '/announcements/ack') {
+        const body = await readJson(req)
+        const acked = ackedSet(deps)
+        if (body.all === true) {
+          // "mark all read": every announcement currently in the feed.
+          for (const item of deps.announcements.view().items) acked.add(item.id)
+        }
+        if (typeof body.id === 'string' && body.id !== '') acked.add(body.id)
+        deps.announcements.ack(acked)
+        return send(200, { ok: true, view: deps.announcements.view() })
+      }
+      if (method === 'POST' && routePath === '/announcements/refresh') {
+        // Managed installs poll no feed; a manual refresh is a polite no-op
+        // rather than a network round the pack never asked for.
+        if (deps.managedDistribution !== true) await deps.announcements.refresh()
+        return send(200, { ok: true, view: deps.announcements.view() })
+      }
+      if (method === 'GET' && routePath === '/update/status') {
+        return send(200, deps.update.status())
+      }
+      if (method === 'POST' && routePath === '/update/check') {
+        const result = await deps.update.check()
+        return send(200, { ...result, status: deps.update.status() })
+      }
+      if (method === 'POST' && routePath === '/update/apply') {
+        const body = await readJson(req)
+        const result = await deps.update.apply(body?.version === undefined ? undefined : String(body.version))
+        return send(200, { ok: true, ...result })
+      }
+      if (method === 'POST' && routePath === '/reload') {
+        // A managed install does not swap its own bytes; the pack owns them.
+        if (deps.managedDistribution === true) return send(409, { error: 'this installation is managed; updates are handled by the pack that installed it' })
+        // Answer first, then swap: the response rides an already-accepted
+        // socket, but the client should not wait on the reload finishing. The
+        // swap closure is `deps.hotReload`, applied inside `apply` — this
+        // module-level handler has no access to the fiber's own context.
+        send(202, { ok: true, note: 'hot reload started' })
+        setTimeout(() => {
+          Promise.resolve()
+            .then(() => deps.hotReload())
+            .catch(error => deps.logger?.warn?.(`our-free-model: hot reload failed (${error?.message ?? error})`))
+        }, 50).unref?.()
+        return
+      }
+      if (method === 'POST' && routePath === '/settings') {
+        const patch = await readJson(req)
+        const current = deps.settings.get()
+        const next = sanitizeSettings({ ...current, ...pick(patch, ['enabled', 'exposeRegionModels', 'probeIntervalMinutes', 'defaultMaxTokens', 'announcementAck', 'feedUrl', 'feedPollMinutes', 'notifyOs', 'updateCheckHours', 'autoReloadWatch']) }, current)
+        if (patch.forward !== undefined) {
+          const forward = { ...(current.forward ?? {}), ...pick(patch.forward, ['enabled', 'host', 'port']) }
+          // The listener spends this machine's lane, and a routable bind address
+          // would let the whole subnet spend it too. Refused here so the settings
+          // page says why, and again in `syncForward` for a hand-edited file.
+          if (forward.enabled === true && !isLoopbackHost(forward.host ?? '127.0.0.1')) {
+            return send(400, { error: 'the forward listener binds a loopback address only' })
+          }
+          if (forward.port !== undefined) {
+            const port = Number(forward.port)
+            forward.port = Number.isFinite(port) && port >= 1 && port <= 65535 ? Math.trunc(port) : (current.forward?.port ?? 0)
+          }
+          // The LAN relay is a second door on the same feature, so it travels in
+          // the same `forward` patch — but it does *not* inherit the loopback
+          // rule, because reaching another machine is its entire purpose.
+          if (patch.forward.lan !== undefined) {
+            const lan = { ...(current.forward?.lan ?? {}), ...pick(patch.forward.lan, ['enabled', 'port']) }
+            if (lan.port !== undefined) {
+              const port = Number(lan.port)
+              // Zero asks the OS to choose, which is the sane default here: the
+              // local port is frequently taken on a machine that already runs
+              // something else.
+              lan.port = Number.isFinite(port) && port >= 0 && port <= 65535 ? Math.trunc(port) : (current.forward?.lan?.port ?? 0)
+            }
+            forward.lan = lan
+          }
+          next.forward = forward
+        }
+        deps.settings.update(next)
+        deps.settings.flush()
+        await deps.syncForward()
+        await deps.syncRelay()
+        return send(200, { ok: true, settings: publicSettings(deps.settings.get(), deps.forwardInfo()) })
+      }
+      if (method === 'POST' && routePath === '/refresh') {
+        await deps.refreshCatalog({ probe: true, force: true })
+        return send(200, { ok: true, ...buildSummary(deps) })
+      }
+      if (method === 'POST' && routePath === '/reprobe') {
+        await deps.refreshAvailability(true)
+        return send(200, { ok: true, ...buildSummary(deps) })
+      }
+      if (method === 'GET' && routePath === '/forward/key') {
+        return send(200, { key: deps.settings.get().forwardKey ?? '' })
+      }
+      if (method === 'POST' && routePath === '/forward/rotate') {
+        return send(200, { key: deps.rotateKey() })
+      }
+      if (method === 'GET' && routePath === '/forward/lan/key') {
+        return send(200, { key: deps.settings.get().forwardLanKey ?? '' })
+      }
+      if (method === 'POST' && routePath === '/forward/lan/rotate') {
+        return send(200, { key: deps.rotateLanKey() })
+      }
+      if (method === 'POST' && routePath === '/bench') {
+        const body = await readJson(req)
+        const result = await deps.testModel(String(body.model ?? ''), body.effort === undefined ? undefined : String(body.effort))
+        return send(200, result)
+      }
+      return send(404, { error: 'not found' })
+    } catch (error) {
+      const status = Number(error?.statusCode)
+      return send(Number.isInteger(status) && status >= 400 && status <= 599 ? status : 500, { error: String(error?.message ?? error) })
+    }
+  }
+}
+
+function ackedSet(deps) {
+  const value = deps.settings.get().announcementsAcked
+  return new Set(Array.isArray(value) ? value : [])
+}
+
+function pick(source, keys) {
+  const out = {}
+  for (const key of keys) if (source?.[key] !== undefined) out[key] = source[key]
+  return out
+}
+
+/** The most a browser-API request body may weigh. The settings patch and the
+ *  announcement acks are the largest real payloads here by orders of magnitude;
+ *  without a cap, any caller past the fence could buffer unbounded bytes into
+ *  the host process — a different standard than the forward listener's 8 MB. */
+const MAX_API_BODY_BYTES = 1024 * 1024
+
+async function readJson(req) {
+  const chunks = []
+  let size = 0
+  for await (const chunk of req) {
+    size += chunk.length
+    if (size > MAX_API_BODY_BYTES) throw httpError(413, 'request body too large')
+    chunks.push(chunk)
+  }
+  if (chunks.length === 0) return {}
+  const text = Buffer.concat(chunks).toString('utf8')
+  try { return JSON.parse(text) } catch (error) {
+    // A body that was sent but is not JSON is a client bug, not "no body":
+    // answering {} made POST /settings a silent 200 no-op. Empty bodies stay
+    // legal ({} above) because no-body POSTs are real routes here.
+    throw httpError(400, `invalid JSON body (${error?.message ?? error})`)
+  }
+}
+
+function publicSettings(settings, forwardInfo) {
+  return {
+    enabled: settings.enabled !== false,
+    exposeRegionModels: settings.exposeRegionModels !== false,
+    probeIntervalMinutes: settings.probeIntervalMinutes ?? 15,
+    defaultMaxTokens: settings.defaultMaxTokens ?? 32768,
+    announcementAck: settings.announcementAck ?? '',
+    feedUrl: typeof settings.feedUrl === 'string' ? settings.feedUrl : '',
+    feedPollMinutes: settings.feedPollMinutes ?? 30,
+    notifyOs: settings.notifyOs === true,
+    updateCheckHours: settings.updateCheckHours ?? 6,
+    autoReloadWatch: settings.autoReloadWatch === true,
+    reloadedAt: settings.reloadedAt ?? 0,
+    reloadCount: settings.reloadCount ?? 0,
+    forward: {
+      ...(settings.forward ?? {}),
+      running: forwardInfo.running,
+      actualPort: forwardInfo.port,
+      error: forwardInfo.error,
+      notice: forwardInfo.notice ?? '',
+      lan: {
+        ...(settings.forward?.lan ?? {}),
+        running: forwardInfo.lan?.running === true,
+        actualPort: forwardInfo.lan?.port ?? 0,
+        host: forwardInfo.lan?.host ?? '',
+        error: forwardInfo.lan?.error ?? '',
+        addresses: forwardInfo.lan?.addresses ?? [],
+      },
+    },
+  }
+}
+
+function buildSummary(deps) {
+  const state = deps.state()
+  const snapshot = deps.availability.get()
+  const forwardInfo = deps.forwardInfo()
+  const update = deps.update.status()
+  const feedView = deps.announcements.view()
+  const defaultMaxTokens = deps.settings.get().defaultMaxTokens
+  return {
+    catalog: state.catalog.map(entry => ({
+      ...entry,
+      // The sealed lane is not probed: its presence in the roster is the
+      // verdict — the listing round named it after the host gate opened.
+      availability: isEacEntry(entry) ? STATE.available : (snapshot.results?.[entry.id]?.state ?? STATE.unknown),
+      detail: isEacEntry(entry) ? '' : (snapshot.results?.[entry.id]?.detail ?? ''),
+      probedAt: isEacEntry(entry) ? 0 : (snapshot.results?.[entry.id]?.at ?? 0),
+      ttftMs: isEacEntry(entry) ? undefined : snapshot.results?.[entry.id]?.ttftMs,
+      latencyMs: isEacEntry(entry) ? undefined : snapshot.results?.[entry.id]?.latencyMs,
+      // What each rung of the effort menu will really put on the wire for this
+      // model, so the page never shows a 32K "output ceiling" beside a call that
+      // was cut off at 8K. A model with no effort menu has no ladder to show.
+      ...(entry.reasoning === true ? { budgets: budgetLadder(entry, undefined, defaultMaxTokens) } : {}),
+      // `null` here is what the picker does not advertise; the roster still lists
+      // those models, because "the probe refused it" is the user's only evidence.
+      route: (state.membership[ROUTE_MAIN] ?? []).includes(entry.id) ? ROUTE_MAIN
+        : (state.membership[ROUTE_REGION] ?? []).includes(entry.id) ? ROUTE_REGION : null,
+    })),
+    settings: publicSettings(deps.settings.get(), forwardInfo),
+    egress: forwardInfo.egress ?? snapshot.egress ?? null,
+    probedAt: snapshot.at ?? 0,
+    announcementVersion: ANNOUNCEMENT_VERSION,
+    version: deps.meta().version,
+    distribution: deps.meta().distribution,
+    announcements: { unread: feedView.unread, fetchedAt: feedView.fetchedAt },
+    update: { available: update.available, latest: update.latest, current: update.current, checkedAt: update.checkedAt, applying: update.applying, managed: update.managed === true },
+  }
+}
+
+export function buildStats(stats, catalog) {
+  const days = stats.days ?? {}
+  const series = Object.keys(days).sort().map(day => ({
+    day,
+    total: days[day].total ?? 0,
+    models: Object.entries(days[day].models ?? {}).map(([model, value]) => ({ model, ...value })),
+  }))
+  const totals = {}
+  for (const entry of series) for (const row of entry.models) {
+    const previous = totals[row.model] ?? {
+      model: row.model, input: 0, output: 0, reasoning: 0, calls: 0, failed: 0,
+      ttftMs: 0, ttftSamples: 0, decodeMs: 0, decodeTokens: 0,
+    }
+    totals[row.model] = {
+      ...previous,
+      input: previous.input + row.input,
+      output: previous.output + row.output,
+      reasoning: previous.reasoning + row.reasoning,
+      calls: previous.calls + row.calls,
+      failed: previous.failed + row.failed,
+      ttftMs: previous.ttftMs + (row.ttftMs ?? 0),
+      ttftSamples: previous.ttftSamples + (row.ttftSamples ?? 0),
+      decodeMs: previous.decodeMs + (row.decodeMs ?? 0),
+      decodeTokens: previous.decodeTokens + (row.decodeTokens ?? 0),
+    }
+  }
+  const logical = stats.logical ?? {}
+  const logicalModels = logical.models ?? {}
+  const logicalReady = Number.isSafeInteger(logical.turns)
+  const lifetimeModels = stats.models ?? {}
+  const empty = model => ({
+    model, input: 0, output: 0, reasoning: 0, cacheRead: 0, calls: 0, failed: 0,
+    ttftMs: 0, ttftSamples: 0, decodeMs: 0, decodeTokens: 0,
+  })
+  const modelIds = new Set([...Object.keys(totals), ...Object.keys(lifetimeModels)])
+  const named = [...modelIds].map(model => {
+    const row = totals[model] ?? empty(model)
+    const lifetime = lifetimeModels[model] ?? {}
+    const physical = {
+      ...row,
+      input: Number.isSafeInteger(lifetime.input) ? lifetime.input : row.input,
+      output: Number.isSafeInteger(lifetime.output) ? lifetime.output : row.output,
+      reasoning: Number.isSafeInteger(lifetime.reasoning) ? lifetime.reasoning : row.reasoning,
+      cacheRead: Number.isSafeInteger(lifetime.cacheRead) ? lifetime.cacheRead : row.cacheRead,
+      calls: Number.isSafeInteger(lifetime.calls) ? lifetime.calls : row.calls,
+      failed: Number.isSafeInteger(lifetime.failed) ? lifetime.failed : row.failed,
+    }
+    return {
+      ...physical,
+      turns: logicalModels[model]?.turns ?? (logicalReady ? 0 : row.calls),
+      failedTurns: logicalModels[model]?.failed ?? (logicalReady ? 0 : row.failed),
+      recoveredTurns: logicalModels[model]?.recovered ?? 0,
+      name: catalog.find(entry => entry.id === model)?.name ?? model,
+      // A rate over too few measurable calls is a rounding error with a unit on it.
+      tps: row.decodeMs >= MIN_DECODE_MS ? Math.round(row.decodeTokens / (row.decodeMs / 1000)) : null,
+      avgTtftMs: row.ttftSamples > 0 ? Math.round(row.ttftMs / row.ttftSamples) : null,
+    }
+  })
+  const physicalFailed = named.reduce((sum, row) => sum + row.failed, 0)
+  const turns = logicalReady ? logical.turns : named.reduce((sum, row) => sum + row.turns, 0)
+  const failedTurns = Number.isSafeInteger(logical.failed) ? logical.failed : named.reduce((sum, row) => sum + row.failedTurns, 0)
+  const recoveredTurns = Number.isSafeInteger(logical.recovered) ? logical.recovered : named.reduce((sum, row) => sum + row.recoveredTurns, 0)
+  const hasLifetimeFailures = Number.isSafeInteger(stats.failedRequests)
+  return {
+    requests: stats.requests ?? 0,
+    requestFailures: hasLifetimeFailures ? stats.failedRequests : physicalFailed,
+    requestFailuresEstimated: stats.failedRequestsEstimated === true || !hasLifetimeFailures,
+    logicalEstimated: logical.estimated === true,
+    turns,
+    failedTurns,
+    recoveredTurns,
+    days: series,
+    models: named,
+    samples: (stats.samples ?? []).slice(-200),
+    grand: {
+      input: named.reduce((sum, row) => sum + row.input, 0),
+      output: named.reduce((sum, row) => sum + row.output, 0),
+      reasoning: named.reduce((sum, row) => sum + row.reasoning, 0),
+      calls: named.reduce((sum, row) => sum + row.calls, 0),
+      failed: hasLifetimeFailures ? stats.failedRequests : physicalFailed,
+      turns,
+      failedTurns,
+      recoveredTurns,
+    },
+  }
+}

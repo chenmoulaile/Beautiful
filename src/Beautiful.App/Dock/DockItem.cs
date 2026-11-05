@@ -22,6 +22,11 @@ namespace Beautiful.App.Dock;
 /// 单独一个字段而不是塞进 <see cref="Label"/>：Label 是工具提示/无障碍名称，
 /// 把温度拼进去会让读屏把"14:05 23° 晴"当成应用名念一遍。
 /// </param>
+/// <param name="IsRunning">
+/// 固定项背后有在跑的窗口时置 true（「一格 = 一个应用」合并后，窗口格被并入固定格）。
+/// 单独一个布尔而不改 <see cref="Kind"/>：Kind 决定右键菜单与点击语义，改成 Window 会让固定项
+/// 失去「取消固定/以管理员运行」并随窗口关闭而消失；运行指示只该多亮一颗点。
+/// </param>
 public record DockItem(
     string Id,
     string Label,
@@ -30,4 +35,5 @@ public record DockItem(
     string LaunchPath,
     IntPtr? WindowHandle = null,
     string? IconSource = null,
-    string? Detail = null);
+    string? Detail = null,
+    bool IsRunning = false);

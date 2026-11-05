@@ -1,0 +1,1715 @@
+{
+  "hoistPattern": [
+    "*"
+  ],
+  "included": {
+    "dependencies": true,
+    "devDependencies": true,
+    "optionalDependencies": true
+  },
+  "injectedDeps": {},
+  "layoutVersion": 5,
+  "hoistedLocations": {
+    "dsh-our-free-model@git+https://github.com/zouyuxuan122/dsh-our-free-model.git#603a6aa51f398f2c9e9dd7c7f240daaaf8767f67": [
+      "node_modules\\dsh-our-free-model"
+    ],
+    "@eghrhegpe/dsh-connect-qoder@0.7.0(@deepseek-ai/schemastery@3.18.4)(@earendil-works/pi-ai@0.82.1(ws@8.22.0)(zod@4.6.5))": [
+      "node_modules\\@eghrhegpe\\dsh-connect-qoder"
+    ],
+    "@linxin666/dsh-pet@0.4.5": [
+      "node_modules\\@linxin666\\dsh-pet"
+    ],
+    "@linxin666/dsh-client-ui-skill-explorer@0.4.5": [
+      "node_modules\\@linxin666\\dsh-client-ui-skill-explorer"
+    ],
+    "@liustack/modlens@3.26.6": [
+      "node_modules\\@liustack\\modlens"
+    ],
+    "@michengai/dsh-archive-manager@1.1.1": [
+      "node_modules\\@michengai\\dsh-archive-manager"
+    ],
+    "@michengai/dsh-btw@0.1.15": [
+      "node_modules\\@michengai\\dsh-btw"
+    ],
+    "@michengai/dsh-code-review@0.1.12": [
+      "node_modules\\@michengai\\dsh-code-review"
+    ],
+    "@michengai/dsh-codex-pet@0.1.12": [
+      "node_modules\\@michengai\\dsh-codex-pet"
+    ],
+    "@michengai/dsh-codex-ui@1.1.26": [
+      "node_modules\\@michengai\\dsh-codex-ui"
+    ],
+    "@michengai/dsh-im-connect@0.1.63(@deepseek-ai/schemastery@3.18.4)": [
+      "node_modules\\@michengai\\dsh-im-connect"
+    ],
+    "@opencode2dsh/dsh-plugin@0.3.12(ws@8.22.0)(zod@4.6.5)": [
+      "node_modules\\@opencode2dsh\\dsh-plugin"
+    ],
+    "@michengai/dsh-skills-manager@1.2.6": [
+      "node_modules\\@michengai\\dsh-skills-manager"
+    ],
+    "@michengai/dsh-simplify@0.1.14": [
+      "node_modules\\@michengai\\dsh-simplify"
+    ],
+    "dsh-connect-workbuddy@4.8.1(@earendil-works/pi-ai@0.82.1(ws@8.22.0)(zod@4.6.5))": [
+      "node_modules\\dsh-connect-workbuddy"
+    ],
+    "dsh-plugin-session-import@0.1.1": [
+      "node_modules\\dsh-plugin-session-import"
+    ],
+    "dsh-purge@https://codeload.github.com/YuJunZhiXue/dsh-purge/tar.gz/refs/heads/master": [
+      "node_modules\\dsh-purge"
+    ],
+    "dsh-remote-web@0.7.0": [
+      "node_modules\\dsh-remote-web"
+    ],
+    "dsh-responses-replay-fix@0.1.2(@deepseek-ai/schemastery@3.18.4)": [
+      "node_modules\\dsh-responses-replay-fix"
+    ],
+    "dsh-token-usage-stats@0.3.15": [
+      "node_modules\\dsh-token-usage-stats"
+    ],
+    "dsh-workbuddy-connect@0.7.1(@deepseek-ai/schemastery@3.18.4)(@earendil-works/pi-ai@0.82.1(ws@8.22.0)(zod@4.6.5))": [
+      "node_modules\\dsh-workbuddy-connect"
+    ],
+    "dsh-zcode-browser-use@0.9.0": [
+      "node_modules\\dsh-zcode-browser-use"
+    ],
+    "superpowers-dsh@0.3.0": [
+      "node_modules\\superpowers-dsh"
+    ],
+    "clsx@2.1.1": [
+      "node_modules\\clsx"
+    ],
+    "@deepseek-ai/schemastery@3.18.4": [
+      "node_modules\\@deepseek-ai\\schemastery"
+    ],
+    "yaml@2.9.1": [
+      "node_modules\\yaml"
+    ],
+    "qrcode.react@4.2.0": [
+      "node_modules\\qrcode.react"
+    ],
+    "@linxin666/dsh-ssh@0.4.4": [
+      "node_modules\\@linxin666\\dsh-ssh"
+    ],
+    "@linxin666/dsh-i18n@0.4.4": [
+      "node_modules\\@linxin666\\dsh-i18n"
+    ],
+    "cloudflared@0.7.3": [
+      "node_modules\\cloudflared"
+    ],
+    "@linxin666/dsh-usage@0.4.4": [
+      "node_modules\\@linxin666\\dsh-usage"
+    ],
+    "@linxin666/dsh-liangshen@0.4.4": [
+      "node_modules\\@linxin666\\dsh-liangshen"
+    ],
+    "@linxin666/dsh-session-archive@0.4.4": [
+      "node_modules\\@linxin666\\dsh-session-archive"
+    ],
+    "@linxin666/dsh-client-ui-market@0.4.4": [
+      "node_modules\\@linxin666\\dsh-client-ui-market"
+    ],
+    "@linxin666/dsh-client-ui-task-board@0.4.4": [
+      "node_modules\\@linxin666\\dsh-client-ui-task-board"
+    ],
+    "@linxin666/dsh-client-ui-git-graph@0.4.4": [
+      "node_modules\\@linxin666\\dsh-client-ui-git-graph"
+    ],
+    "@linxin666/dsh-client-ui-plugin-manager@0.4.4": [
+      "node_modules\\@linxin666\\dsh-client-ui-plugin-manager"
+    ],
+    "@linxin666/dsh-client-ui-preset-center@0.4.4": [
+      "node_modules\\@linxin666\\dsh-client-ui-preset-center"
+    ],
+    "@linxin666/dsh-update@0.4.4": [
+      "node_modules\\@linxin666\\dsh-update"
+    ],
+    "@linxin666/dsh-client-ui-skin-center@0.4.4": [
+      "node_modules\\@linxin666\\dsh-client-ui-skin-center"
+    ],
+    "@linxin666/dsh-client-ui-community-plugins@0.4.4": [
+      "node_modules\\@linxin666\\dsh-client-ui-community-plugins"
+    ],
+    "@linxin666/dsh-client-ui-web-ui-settings@0.4.4": [
+      "node_modules\\@linxin666\\dsh-client-ui-web-ui-settings"
+    ],
+    "@linxin666/dsh-client-ui-model-capabilities@0.4.4": [
+      "node_modules\\@linxin666\\dsh-client-ui-model-capabilities"
+    ],
+    "undici@8.11.2": [
+      "node_modules\\undici"
+    ],
+    "commander@13.1.0": [
+      "node_modules\\commander"
+    ],
+    "luxon@3.7.2": [
+      "node_modules\\luxon"
+    ],
+    "antd@6.6.5(luxon@3.7.2)": [
+      "node_modules\\antd"
+    ],
+    "lucide-react@1.50.0": [
+      "node_modules\\lucide-react"
+    ],
+    "dingtalk-stream@2.1.4": [
+      "node_modules\\dingtalk-stream"
+    ],
+    "@wecom/aibot-node-sdk@1.0.7": [
+      "node_modules\\@wecom\\aibot-node-sdk"
+    ],
+    "@tencent-connect/qqbot-connector@1.2.0": [
+      "node_modules\\@tencent-connect\\qqbot-connector"
+    ],
+    "fflate@0.8.3": [
+      "node_modules\\fflate"
+    ],
+    "@larksuiteoapi/node-sdk@1.74.0": [
+      "node_modules\\@larksuiteoapi\\node-sdk"
+    ],
+    "imapflow@2.0.6": [
+      "node_modules\\imapflow"
+    ],
+    "mailparser@3.9.28": [
+      "node_modules\\mailparser"
+    ],
+    "nodemailer@10.0.10": [
+      "node_modules\\nodemailer"
+    ],
+    "@tencent-connect/qqbot-nodejs@1.0.4": [
+      "node_modules\\@tencent-connect\\qqbot-nodejs"
+    ],
+    "sharp@0.35.4": [
+      "node_modules\\sharp"
+    ],
+    "@tencent-qqmail/agently-cli@1.0.18": [
+      "node_modules\\@tencent-qqmail\\agently-cli"
+    ],
+    "@matrix-org/olm@3.2.15": [
+      "node_modules\\@matrix-org\\olm"
+    ],
+    "selfsigned@5.5.0": [
+      "node_modules\\selfsigned"
+    ],
+    "bonjour-service@1.4.4": [
+      "node_modules\\bonjour-service"
+    ],
+    "playwright@1.59.1": [
+      "node_modules\\playwright"
+    ],
+    "js-yaml@4.3.2": [
+      "node_modules\\js-yaml"
+    ],
+    "@deepseek-ai/cosmokit@1.8.5": [
+      "node_modules\\@deepseek-ai\\cosmokit"
+    ],
+    "@xterm/xterm@6.0.0": [
+      "node_modules\\@xterm\\xterm"
+    ],
+    "@standard-schema/spec@1.1.0": [
+      "node_modules\\@standard-schema\\spec"
+    ],
+    "ws@8.21.3": [
+      "node_modules\\ws"
+    ],
+    "ssh2@1.17.0": [
+      "node_modules\\ssh2"
+    ],
+    "schemastery@3.18.0": [
+      "node_modules\\schemastery"
+    ],
+    "@xterm/addon-fit@0.11.0": [
+      "node_modules\\@xterm\\addon-fit"
+    ],
+    "jpeg-js@0.4.4": [
+      "node_modules\\jpeg-js"
+    ],
+    "lightningcss@1.33.0": [
+      "node_modules\\lightningcss"
+    ],
+    "dayjs@1.11.23": [
+      "node_modules\\dayjs"
+    ],
+    "@ant-design/icons@6.3.4": [
+      "node_modules\\@ant-design\\icons"
+    ],
+    "@babel/runtime@7.29.7": [
+      "node_modules\\@babel\\runtime"
+    ],
+    "@ant-design/colors@8.0.1": [
+      "node_modules\\@ant-design\\colors"
+    ],
+    "@rc-component/form@1.8.6": [
+      "node_modules\\@rc-component\\form"
+    ],
+    "throttle-debounce@5.0.2": [
+      "node_modules\\throttle-debounce"
+    ],
+    "@rc-component/menu@1.5.0": [
+      "node_modules\\@rc-component\\menu"
+    ],
+    "@rc-component/tabs@1.13.0": [
+      "node_modules\\@rc-component\\tabs"
+    ],
+    "@rc-component/tour@2.4.0": [
+      "node_modules\\@rc-component\\tour"
+    ],
+    "@rc-component/rate@1.0.1": [
+      "node_modules\\@rc-component\\rate"
+    ],
+    "@rc-component/tree@1.4.0": [
+      "node_modules\\@rc-component\\tree"
+    ],
+    "@rc-component/util@1.13.0": [
+      "node_modules\\@rc-component\\util"
+    ],
+    "@ant-design/cssinjs@2.1.2": [
+      "node_modules\\@ant-design\\cssinjs"
+    ],
+    "@rc-component/input@1.3.1": [
+      "node_modules\\@rc-component\\input"
+    ],
+    "@rc-component/image@1.10.0": [
+      "node_modules\\@rc-component\\image"
+    ],
+    "@rc-component/listy@1.2.3": [
+      "node_modules\\@rc-component\\listy"
+    ],
+    "@rc-component/steps@1.2.3": [
+      "node_modules\\@rc-component\\steps"
+    ],
+    "@rc-component/table@1.11.1": [
+      "node_modules\\@rc-component\\table"
+    ],
+    "@rc-component/motion@1.3.3": [
+      "node_modules\\@rc-component\\motion"
+    ],
+    "@rc-component/drawer@1.4.2": [
+      "node_modules\\@rc-component\\drawer"
+    ],
+    "@rc-component/dialog@1.10.0": [
+      "node_modules\\@rc-component\\dialog"
+    ],
+    "@rc-component/picker@1.12.2(dayjs@1.11.23)(luxon@3.7.2)": [
+      "node_modules\\@rc-component\\picker"
+    ],
+    "@rc-component/qrcode@2.0.0": [
+      "node_modules\\@rc-component\\qrcode"
+    ],
+    "@rc-component/select@1.10.1": [
+      "node_modules\\@rc-component\\select"
+    ],
+    "@rc-component/slider@1.1.1": [
+      "node_modules\\@rc-component\\slider"
+    ],
+    "@rc-component/switch@1.0.3": [
+      "node_modules\\@rc-component\\switch"
+    ],
+    "@rc-component/upload@1.1.1": [
+      "node_modules\\@rc-component\\upload"
+    ],
+    "@rc-component/trigger@3.10.1": [
+      "node_modules\\@rc-component\\trigger"
+    ],
+    "@rc-component/tooltip@1.5.2": [
+      "node_modules\\@rc-component\\tooltip"
+    ],
+    "@ant-design/fast-color@3.0.1": [
+      "node_modules\\@ant-design\\fast-color"
+    ],
+    "@rc-component/cascader@1.22.0": [
+      "node_modules\\@rc-component\\cascader"
+    ],
+    "@rc-component/checkbox@2.0.0": [
+      "node_modules\\@rc-component\\checkbox"
+    ],
+    "@rc-component/collapse@1.2.0": [
+      "node_modules\\@rc-component\\collapse"
+    ],
+    "@rc-component/progress@1.0.3": [
+      "node_modules\\@rc-component\\progress"
+    ],
+    "@rc-component/dropdown@1.0.3": [
+      "node_modules\\@rc-component\\dropdown"
+    ],
+    "@rc-component/mentions@1.12.0": [
+      "node_modules\\@rc-component\\mentions"
+    ],
+    "@ant-design/cssinjs-utils@2.1.2": [
+      "node_modules\\@ant-design\\cssinjs-utils"
+    ],
+    "@rc-component/pagination@1.4.0": [
+      "node_modules\\@rc-component\\pagination"
+    ],
+    "@ant-design/react-slick@2.0.0": [
+      "node_modules\\@ant-design\\react-slick"
+    ],
+    "@rc-component/color-picker@3.1.1": [
+      "node_modules\\@rc-component\\color-picker"
+    ],
+    "@rc-component/tree-select@1.16.1": [
+      "node_modules\\@rc-component\\tree-select"
+    ],
+    "@rc-component/input-number@1.6.2": [
+      "node_modules\\@rc-component\\input-number"
+    ],
+    "@rc-component/notification@2.0.9": [
+      "node_modules\\@rc-component\\notification"
+    ],
+    "@rc-component/mutate-observer@2.0.1": [
+      "node_modules\\@rc-component\\mutate-observer"
+    ],
+    "scroll-into-view-if-needed@3.1.0": [
+      "node_modules\\scroll-into-view-if-needed"
+    ],
+    "@rc-component/resize-observer@1.1.2": [
+      "node_modules\\@rc-component\\resize-observer"
+    ],
+    "yargs@15.4.1": [
+      "node_modules\\yargs"
+    ],
+    "debug@4.4.3": [
+      "node_modules\\debug"
+    ],
+    "dijkstrajs@1.0.3": [
+      "node_modules\\dijkstrajs"
+    ],
+    "eventemitter3@5.0.4": [
+      "node_modules\\eventemitter3"
+    ],
+    "qs@6.16.0": [
+      "node_modules\\qs"
+    ],
+    "protobufjs@7.6.6": [
+      "node_modules\\protobufjs"
+    ],
+    "lodash.merge@4.6.2": [
+      "node_modules\\lodash.merge"
+    ],
+    "lodash.pickby@4.6.0": [
+      "node_modules\\lodash.pickby"
+    ],
+    "lodash.identity@3.0.0": [
+      "node_modules\\lodash.identity"
+    ],
+    "typebox@1.1.38": [
+      "node_modules\\typebox"
+    ],
+    "partial-json@0.1.7": [
+      "node_modules\\partial-json"
+    ],
+    "qrcode-terminal@0.12.0": [
+      "node_modules\\qrcode-terminal"
+    ],
+    "openai@6.26.0(ws@8.22.0)(zod@4.6.5)": [
+      "node_modules\\openai"
+    ],
+    "https-proxy-agent@7.0.6": [
+      "node_modules\\https-proxy-agent"
+    ],
+    "http-proxy-agent@7.0.2": [
+      "node_modules\\http-proxy-agent"
+    ],
+    "@anthropic-ai/sdk@0.91.1(zod@4.6.5)": [
+      "node_modules\\@anthropic-ai\\sdk"
+    ],
+    "@opentelemetry/api@1.9.0": [
+      "node_modules\\@opentelemetry\\api"
+    ],
+    "@aws-sdk/client-bedrock-runtime@3.1048.0": [
+      "node_modules\\@aws-sdk\\client-bedrock-runtime"
+    ],
+    "tslib@2.8.1": [
+      "node_modules\\tslib"
+    ],
+    "@smithy/core@3.35.1": [
+      "node_modules\\@smithy\\core"
+    ],
+    "@smithy/types@4.19.0": [
+      "node_modules\\@smithy\\types"
+    ],
+    "pino@10.3.1": [
+      "node_modules\\pino"
+    ],
+    "socks@2.8.10": [
+      "node_modules\\socks"
+    ],
+    "libmime@5.4.4": [
+      "node_modules\\libmime"
+    ],
+    "libqp@2.1.1": [
+      "node_modules\\libqp"
+    ],
+    "libbase64@1.3.0": [
+      "node_modules\\libbase64"
+    ],
+    "iconv-lite@0.7.3": [
+      "node_modules\\iconv-lite"
+    ],
+    "@zone-eu/mailsplit@5.4.17": [
+      "node_modules\\@zone-eu\\mailsplit"
+    ],
+    "encoding-japanese@2.4.0": [
+      "node_modules\\encoding-japanese"
+    ],
+    "tlds@1.261.0": [
+      "node_modules\\tlds"
+    ],
+    "he@1.2.0": [
+      "node_modules\\he"
+    ],
+    "linkify-it@5.0.2": [
+      "node_modules\\linkify-it"
+    ],
+    "punycode.js@2.3.1": [
+      "node_modules\\punycode.js"
+    ],
+    "html-to-text@10.0.1": [
+      "node_modules\\html-to-text"
+    ],
+    "semver@7.8.5": [
+      "node_modules\\semver"
+    ],
+    "detect-libc@2.1.2": [
+      "node_modules\\detect-libc"
+    ],
+    "@img/colour@1.1.0": [
+      "node_modules\\@img\\colour"
+    ],
+    "@img/sharp-win32-x64@0.35.4": [
+      "node_modules\\@img\\sharp-win32-x64"
+    ],
+    "@tencent-qqmail/agently-cli-win32-x64@1.0.18": [
+      "node_modules\\@tencent-qqmail\\agently-cli-win32-x64"
+    ],
+    "@jimp/js-gif@1.6.1": [
+      "node_modules\\@jimp\\js-gif"
+    ],
+    "@jimp/js-jpeg@1.6.1": [
+      "node_modules\\@jimp\\js-jpeg"
+    ],
+    "@jimp/js-tiff@1.6.1": [
+      "node_modules\\@jimp\\js-tiff"
+    ],
+    "@jimp/plugin-circle@1.6.1": [
+      "node_modules\\@jimp\\plugin-circle"
+    ],
+    "@jimp/plugin-dither@1.6.1": [
+      "node_modules\\@jimp\\plugin-dither"
+    ],
+    "@jimp/plugin-flip@1.6.1": [
+      "node_modules\\@jimp\\plugin-flip"
+    ],
+    "@jimp/plugin-mask@1.6.1": [
+      "node_modules\\@jimp\\plugin-mask"
+    ],
+    "@jimp/plugin-quantize@1.6.1": [
+      "node_modules\\@jimp\\plugin-quantize"
+    ],
+    "@jimp/types@1.6.1": [
+      "node_modules\\@jimp\\types"
+    ],
+    "zod@3.25.76": [
+      "node_modules\\zod"
+    ],
+    "tinycolor2@1.6.0": [
+      "node_modules\\tinycolor2"
+    ],
+    "@peculiar/x509@1.14.3": [
+      "node_modules\\@peculiar\\x509"
+    ],
+    "pkijs@3.4.1": [
+      "node_modules\\pkijs"
+    ],
+    "multicast-dns@7.2.5": [
+      "node_modules\\multicast-dns"
+    ],
+    "fast-deep-equal@3.1.3": [
+      "node_modules\\fast-deep-equal"
+    ],
+    "timm@1.7.1": [
+      "node_modules\\timm"
+    ],
+    "regenerator-runtime@0.13.11": [
+      "node_modules\\regenerator-runtime"
+    ],
+    "@jimp/bmp@0.14.0(@jimp/custom@0.14.0(debug@4.4.3))": [
+      "node_modules\\@jimp\\bmp"
+    ],
+    "@jimp/png@0.14.0(@jimp/custom@0.14.0(debug@4.4.3))": [
+      "node_modules\\@jimp\\png"
+    ],
+    "@jimp/tiff@0.14.0(@jimp/custom@0.14.0(debug@4.4.3))": [
+      "node_modules\\@jimp\\tiff"
+    ],
+    "@jimp/jpeg@0.14.0(@jimp/custom@0.14.0(debug@4.4.3))": [
+      "node_modules\\@jimp\\jpeg"
+    ],
+    "devtools-protocol@0.0.1696802": [
+      "node_modules\\devtools-protocol"
+    ],
+    "typed-query-selector@2.12.3": [
+      "node_modules\\typed-query-selector"
+    ],
+    "webdriver-bidi-protocol@1.0.1": [
+      "node_modules\\webdriver-bidi-protocol"
+    ],
+    "playwright-core@1.59.1": [
+      "node_modules\\playwright-core"
+    ],
+    "argparse@2.0.1": [
+      "node_modules\\argparse"
+    ],
+    "asn1@0.2.6": [
+      "node_modules\\asn1"
+    ],
+    "nan@2.29.0": [
+      "node_modules\\nan"
+    ],
+    "bcrypt-pbkdf@1.0.2": [
+      "node_modules\\bcrypt-pbkdf"
+    ],
+    "cpu-features@0.0.10": [
+      "node_modules\\cpu-features"
+    ],
+    "cosmokit@1.8.1": [
+      "node_modules\\cosmokit"
+    ],
+    "lightningcss-win32-x64-msvc@1.33.0": [
+      "node_modules\\lightningcss-win32-x64-msvc"
+    ],
+    "@ant-design/icons-svg@4.6.0": [
+      "node_modules\\@ant-design\\icons-svg"
+    ],
+    "@rc-component/overflow@1.0.1": [
+      "node_modules\\@rc-component\\overflow"
+    ],
+    "@rc-component/async-validator@6.0.0": [
+      "node_modules\\@rc-component\\async-validator"
+    ],
+    "@rc-component/portal@2.2.1": [
+      "node_modules\\@rc-component\\portal"
+    ],
+    "react-is@19.3.0": [
+      "node_modules\\react-is"
+    ],
+    "is-mobile@5.0.0": [
+      "node_modules\\is-mobile"
+    ],
+    "csstype@3.2.3": [
+      "node_modules\\csstype"
+    ],
+    "stylis@4.4.0": [
+      "node_modules\\stylis"
+    ],
+    "json2mq@0.2.0": [
+      "node_modules\\json2mq"
+    ],
+    "@emotion/unitless@0.7.5": [
+      "node_modules\\@emotion\\unitless"
+    ],
+    "@emotion/hash@0.8.0": [
+      "node_modules\\@emotion\\hash"
+    ],
+    "@rc-component/context@2.0.2": [
+      "node_modules\\@rc-component\\context"
+    ],
+    "@rc-component/mini-decimal@1.1.4": [
+      "node_modules\\@rc-component\\mini-decimal"
+    ],
+    "y18n@4.0.3": [
+      "node_modules\\y18n"
+    ],
+    "compute-scroll-into-view@3.1.1": [
+      "node_modules\\compute-scroll-into-view"
+    ],
+    "find-up@4.1.0": [
+      "node_modules\\find-up"
+    ],
+    "set-blocking@2.0.0": [
+      "node_modules\\set-blocking"
+    ],
+    "decamelize@1.2.0": [
+      "node_modules\\decamelize"
+    ],
+    "yargs-parser@18.1.3": [
+      "node_modules\\yargs-parser"
+    ],
+    "which-module@2.0.1": [
+      "node_modules\\which-module"
+    ],
+    "require-directory@2.1.1": [
+      "node_modules\\require-directory"
+    ],
+    "require-main-filename@2.0.0": [
+      "node_modules\\require-main-filename"
+    ],
+    "get-caller-file@2.0.5": [
+      "node_modules\\get-caller-file"
+    ],
+    "ms@2.1.3": [
+      "node_modules\\ms"
+    ],
+    "form-data@4.0.6": [
+      "node_modules\\form-data"
+    ],
+    "proxy-from-env@2.1.0": [
+      "node_modules\\proxy-from-env"
+    ],
+    "side-channel@1.1.1": [
+      "node_modules\\side-channel"
+    ],
+    "follow-redirects@1.16.0(debug@4.4.3)": [
+      "node_modules\\follow-redirects"
+    ],
+    "es-define-property@1.0.1": [
+      "node_modules\\es-define-property"
+    ],
+    "@types/node@26.6.4": [
+      "node_modules\\@types\\node"
+    ],
+    "long@5.3.2": [
+      "node_modules\\long"
+    ],
+    "@protobufjs/pool@1.1.0": [
+      "node_modules\\@protobufjs\\pool"
+    ],
+    "@protobufjs/utf8@1.1.2": [
+      "node_modules\\@protobufjs\\utf8"
+    ],
+    "@protobufjs/path@1.1.2": [
+      "node_modules\\@protobufjs\\path"
+    ],
+    "@protobufjs/fetch@1.1.1": [
+      "node_modules\\@protobufjs\\fetch"
+    ],
+    "@protobufjs/float@1.0.2": [
+      "node_modules\\@protobufjs\\float"
+    ],
+    "@protobufjs/base64@1.1.2": [
+      "node_modules\\@protobufjs\\base64"
+    ],
+    "@protobufjs/aspromise@1.1.2": [
+      "node_modules\\@protobufjs\\aspromise"
+    ],
+    "@protobufjs/codegen@2.0.5": [
+      "node_modules\\@protobufjs\\codegen"
+    ],
+    "@protobufjs/eventemitter@1.1.1": [
+      "node_modules\\@protobufjs\\eventemitter"
+    ],
+    "json-schema-to-ts@3.1.1": [
+      "node_modules\\json-schema-to-ts"
+    ],
+    "google-auth-library@10.9.1": [
+      "node_modules\\google-auth-library"
+    ],
+    "agent-base@7.1.4": [
+      "node_modules\\agent-base"
+    ],
+    "@opentelemetry/semantic-conventions@1.43.0": [
+      "node_modules\\@opentelemetry\\semantic-conventions"
+    ],
+    "p-retry@4.6.2": [
+      "node_modules\\p-retry"
+    ],
+    "@aws-sdk/core@3.978.1": [
+      "node_modules\\@aws-sdk\\core"
+    ],
+    "@aws-sdk/types@3.974.6": [
+      "node_modules\\@aws-sdk\\types"
+    ],
+    "@aws-crypto/sha256-js@5.2.0": [
+      "node_modules\\@aws-crypto\\sha256-js"
+    ],
+    "@aws-crypto/sha256-browser@5.2.0": [
+      "node_modules\\@aws-crypto\\sha256-browser"
+    ],
+    "@smithy/node-http-handler@4.12.1": [
+      "node_modules\\@smithy\\node-http-handler"
+    ],
+    "@smithy/fetch-http-handler@5.8.0": [
+      "node_modules\\@smithy\\fetch-http-handler"
+    ],
+    "@aws-sdk/middleware-websocket@3.972.54": [
+      "node_modules\\@aws-sdk\\middleware-websocket"
+    ],
+    "@aws-sdk/middleware-eventstream@3.972.30": [
+      "node_modules\\@aws-sdk\\middleware-eventstream"
+    ],
+    "@aws-sdk/credential-provider-node@3.972.84": [
+      "node_modules\\@aws-sdk\\credential-provider-node"
+    ],
+    "@aws-sdk/eventstream-handler-node@3.972.35": [
+      "node_modules\\@aws-sdk\\eventstream-handler-node"
+    ],
+    "sonic-boom@4.2.1": [
+      "node_modules\\sonic-boom"
+    ],
+    "atomic-sleep@1.0.0": [
+      "node_modules\\atomic-sleep"
+    ],
+    "real-require@0.2.0": [
+      "node_modules\\real-require"
+    ],
+    "process-warning@5.1.0": [
+      "node_modules\\process-warning"
+    ],
+    "@pinojs/redact@0.4.0": [
+      "node_modules\\@pinojs\\redact"
+    ],
+    "on-exit-leak-free@2.1.2": [
+      "node_modules\\on-exit-leak-free"
+    ],
+    "pino-std-serializers@7.1.0": [
+      "node_modules\\pino-std-serializers"
+    ],
+    "safe-stable-stringify@2.5.0": [
+      "node_modules\\safe-stable-stringify"
+    ],
+    "quick-format-unescaped@4.0.4": [
+      "node_modules\\quick-format-unescaped"
+    ],
+    "pino-abstract-transport@3.0.0": [
+      "node_modules\\pino-abstract-transport"
+    ],
+    "smart-buffer@4.2.0": [
+      "node_modules\\smart-buffer"
+    ],
+    "ip-address@10.7.2": [
+      "node_modules\\ip-address"
+    ],
+    "uc.micro@2.1.0": [
+      "node_modules\\uc.micro"
+    ],
+    "safer-buffer@2.1.2": [
+      "node_modules\\safer-buffer"
+    ],
+    "selderee@0.12.0": [
+      "node_modules\\selderee"
+    ],
+    "deepmerge-ts@8.0.2": [
+      "node_modules\\deepmerge-ts"
+    ],
+    "@aws-sdk/token-providers@3.1048.0": [
+      "node_modules\\@aws-sdk\\token-providers"
+    ],
+    "dom-serializer@2.0.0": [
+      "node_modules\\dom-serializer"
+    ],
+    "@selderee/plugin-htmlparser2@0.12.0(selderee@0.12.0)": [
+      "node_modules\\@selderee\\plugin-htmlparser2"
+    ],
+    "@jimp/file-ops@1.6.1": [
+      "node_modules\\@jimp\\file-ops"
+    ],
+    "file-type@21.3.4": [
+      "node_modules\\file-type"
+    ],
+    "exif-parser@0.1.12": [
+      "node_modules\\exif-parser"
+    ],
+    "await-to-js@3.0.0": [
+      "node_modules\\await-to-js"
+    ],
+    "mime@3.0.0": [
+      "node_modules\\mime"
+    ],
+    "bmp-ts@1.0.9": [
+      "node_modules\\bmp-ts"
+    ],
+    "gifwrap@0.10.1": [
+      "node_modules\\gifwrap"
+    ],
+    "omggif@1.0.10": [
+      "node_modules\\omggif"
+    ],
+    "utif2@4.1.0": [
+      "node_modules\\utif2"
+    ],
+    "any-base@1.1.0": [
+      "node_modules\\any-base"
+    ],
+    "parse-bmfont-binary@1.0.6": [
+      "node_modules\\parse-bmfont-binary"
+    ],
+    "parse-bmfont-ascii@1.0.6": [
+      "node_modules\\parse-bmfont-ascii"
+    ],
+    "parse-bmfont-xml@1.1.6": [
+      "node_modules\\parse-bmfont-xml"
+    ],
+    "simple-xml-to-json@1.2.7": [
+      "node_modules\\simple-xml-to-json"
+    ],
+    "pvtsutils@1.3.6": [
+      "node_modules\\pvtsutils"
+    ],
+    "reflect-metadata@0.2.2": [
+      "node_modules\\reflect-metadata"
+    ],
+    "@peculiar/asn1-cms@2.10.0": [
+      "node_modules\\@peculiar\\asn1-cms"
+    ],
+    "@peculiar/asn1-csr@2.10.0": [
+      "node_modules\\@peculiar\\asn1-csr"
+    ],
+    "@peculiar/asn1-x509@2.10.0": [
+      "node_modules\\@peculiar\\asn1-x509"
+    ],
+    "@peculiar/asn1-ecc@2.10.0": [
+      "node_modules\\@peculiar\\asn1-ecc"
+    ],
+    "asn1js@3.0.10": [
+      "node_modules\\asn1js"
+    ],
+    "pvutils@1.2.0": [
+      "node_modules\\pvutils"
+    ],
+    "bytestreamjs@2.0.1": [
+      "node_modules\\bytestreamjs"
+    ],
+    "@peculiar/asn1-schema@2.10.0": [
+      "node_modules\\@peculiar\\asn1-schema"
+    ],
+    "@noble/hashes@1.8.0": [
+      "node_modules\\@noble\\hashes"
+    ],
+    "@peculiar/asn1-rsa@2.10.0": [
+      "node_modules\\@peculiar\\asn1-rsa"
+    ],
+    "thunky@1.1.0": [
+      "node_modules\\thunky"
+    ],
+    "dns-packet@5.6.1": [
+      "node_modules\\dns-packet"
+    ],
+    "@peculiar/asn1-pkcs9@2.10.0": [
+      "node_modules\\@peculiar\\asn1-pkcs9"
+    ],
+    "mkdirp@0.5.6": [
+      "node_modules\\mkdirp"
+    ],
+    "@jimp/utils@0.14.0": [
+      "node_modules\\@jimp\\utils"
+    ],
+    "pngjs@3.4.0": [
+      "node_modules\\pngjs"
+    ],
+    "@jimp/plugin-blit@0.14.0(@jimp/custom@0.14.0(debug@4.4.3))": [
+      "node_modules\\@jimp\\plugin-blit"
+    ],
+    "@jimp/plugin-blur@0.14.0(@jimp/custom@0.14.0(debug@4.4.3))": [
+      "node_modules\\@jimp\\plugin-blur"
+    ],
+    "@jimp/plugin-gaussian@0.14.0(@jimp/custom@0.14.0(debug@4.4.3))": [
+      "node_modules\\@jimp\\plugin-gaussian"
+    ],
+    "@jimp/plugin-resize@0.14.0(@jimp/custom@0.14.0(debug@4.4.3))": [
+      "node_modules\\@jimp\\plugin-resize"
+    ],
+    "@jimp/plugin-invert@0.14.0(@jimp/custom@0.14.0(debug@4.4.3))": [
+      "node_modules\\@jimp\\plugin-invert"
+    ],
+    "@jimp/plugin-normalize@0.14.0(@jimp/custom@0.14.0(debug@4.4.3))": [
+      "node_modules\\@jimp\\plugin-normalize"
+    ],
+    "@jimp/plugin-scale@0.14.0(@jimp/custom@0.14.0(debug@4.4.3))(@jimp/plugin-resize@0.14.0(@jimp/custom@0.14.0(debug@4.4.3)))": [
+      "node_modules\\@jimp\\plugin-scale"
+    ],
+    "buffer@5.7.1": [
+      "node_modules\\buffer"
+    ],
+    "@jimp/plugin-shadow@0.14.0(@jimp/custom@0.14.0(debug@4.4.3))(@jimp/plugin-blur@0.14.0(@jimp/custom@0.14.0(debug@4.4.3)))(@jimp/plugin-resize@0.14.0(@jimp/custom@0.14.0(debug@4.4.3)))": [
+      "node_modules\\@jimp\\plugin-shadow"
+    ],
+    "mitt@3.0.1": [
+      "node_modules\\mitt"
+    ],
+    "modern-tar@0.8.5": [
+      "node_modules\\modern-tar"
+    ],
+    "bmp-js@0.1.0": [
+      "node_modules\\bmp-js"
+    ],
+    "utif@2.0.1": [
+      "node_modules\\utif"
+    ],
+    "phin@2.9.3": [
+      "node_modules\\phin"
+    ],
+    "escalade@3.2.0": [
+      "node_modules\\escalade"
+    ],
+    "get-east-asian-width@1.7.0": [
+      "node_modules\\get-east-asian-width"
+    ],
+    "tweetnacl@0.14.5": [
+      "node_modules\\tweetnacl"
+    ],
+    "string-convert@0.2.1": [
+      "node_modules\\string-convert"
+    ],
+    "buildcheck@0.0.7": [
+      "node_modules\\buildcheck"
+    ],
+    "ansi-regex@5.0.1": [
+      "node_modules\\ansi-regex"
+    ],
+    "locate-path@5.0.0": [
+      "node_modules\\locate-path"
+    ],
+    "emoji-regex@8.0.0": [
+      "node_modules\\emoji-regex"
+    ],
+    "path-exists@4.0.0": [
+      "node_modules\\path-exists"
+    ],
+    "camelcase@5.3.1": [
+      "node_modules\\camelcase"
+    ],
+    "is-fullwidth-code-point@3.0.0": [
+      "node_modules\\is-fullwidth-code-point"
+    ],
+    "asynckit@0.4.0": [
+      "node_modules\\asynckit"
+    ],
+    "mime-types@2.1.35": [
+      "node_modules\\mime-types"
+    ],
+    "hasown@2.0.4": [
+      "node_modules\\hasown"
+    ],
+    "es-set-tostringtag@2.1.0": [
+      "node_modules\\es-set-tostringtag"
+    ],
+    "combined-stream@1.0.8": [
+      "node_modules\\combined-stream"
+    ],
+    "es-errors@1.3.0": [
+      "node_modules\\es-errors"
+    ],
+    "object-inspect@1.13.4": [
+      "node_modules\\object-inspect"
+    ],
+    "side-channel-map@1.0.1": [
+      "node_modules\\side-channel-map"
+    ],
+    "side-channel-list@1.0.1": [
+      "node_modules\\side-channel-list"
+    ],
+    "side-channel-weakmap@1.0.2": [
+      "node_modules\\side-channel-weakmap"
+    ],
+    "undici-types@8.9.0": [
+      "node_modules\\undici-types"
+    ],
+    "@types/retry@0.12.0": [
+      "node_modules\\@types\\retry"
+    ],
+    "jws@4.0.1": [
+      "node_modules\\jws"
+    ],
+    "retry@0.13.1": [
+      "node_modules\\retry"
+    ],
+    "gaxios@7.3.1": [
+      "node_modules\\gaxios"
+    ],
+    "ecdsa-sig-formatter@1.0.11": [
+      "node_modules\\ecdsa-sig-formatter"
+    ],
+    "base64-js@1.5.1": [
+      "node_modules\\base64-js"
+    ],
+    "gcp-metadata@8.1.2": [
+      "node_modules\\gcp-metadata"
+    ],
+    "ts-algebra@2.0.0": [
+      "node_modules\\ts-algebra"
+    ],
+    "google-logging-utils@1.1.3": [
+      "node_modules\\google-logging-utils"
+    ],
+    "bowser@2.14.1": [
+      "node_modules\\bowser"
+    ],
+    "@aws-sdk/xml-builder@3.972.41": [
+      "node_modules\\@aws-sdk\\xml-builder"
+    ],
+    "@smithy/signature-v4@5.7.4": [
+      "node_modules\\@smithy\\signature-v4"
+    ],
+    "@aws/lambda-invoke-store@0.3.0": [
+      "node_modules\\@aws\\lambda-invoke-store"
+    ],
+    "@aws-crypto/util@5.2.0": [
+      "node_modules\\@aws-crypto\\util"
+    ],
+    "@aws-sdk/nested-clients@3.997.46": [
+      "node_modules\\@aws-sdk\\nested-clients"
+    ],
+    "@smithy/util-utf8@2.3.0": [
+      "node_modules\\@smithy\\util-utf8"
+    ],
+    "@aws-sdk/util-locate-window@3.965.10": [
+      "node_modules\\@aws-sdk\\util-locate-window"
+    ],
+    "@aws-crypto/supports-web-crypto@5.2.0": [
+      "node_modules\\@aws-crypto\\supports-web-crypto"
+    ],
+    "@aws-sdk/credential-provider-env@3.972.72": [
+      "node_modules\\@aws-sdk\\credential-provider-env"
+    ],
+    "@smithy/credential-provider-imds@4.5.2": [
+      "node_modules\\@smithy\\credential-provider-imds"
+    ],
+    "@aws-sdk/credential-provider-ini@3.973.17": [
+      "node_modules\\@aws-sdk\\credential-provider-ini"
+    ],
+    "@aws-sdk/credential-provider-http@3.972.74": [
+      "node_modules\\@aws-sdk\\credential-provider-http"
+    ],
+    "@aws-sdk/credential-provider-process@3.972.72": [
+      "node_modules\\@aws-sdk\\credential-provider-process"
+    ],
+    "@aws-sdk/credential-provider-web-identity@3.972.78": [
+      "node_modules\\@aws-sdk\\credential-provider-web-identity"
+    ],
+    "split2@4.2.0": [
+      "node_modules\\split2"
+    ],
+    "parseley@0.13.1": [
+      "node_modules\\parseley"
+    ],
+    "domutils@3.2.2": [
+      "node_modules\\domutils"
+    ],
+    "domhandler@5.0.3": [
+      "node_modules\\domhandler"
+    ],
+    "domelementtype@2.3.0": [
+      "node_modules\\domelementtype"
+    ],
+    "entities@4.5.0": [
+      "node_modules\\entities"
+    ],
+    "token-types@6.1.2": [
+      "node_modules\\token-types"
+    ],
+    "strtok3@10.5.0": [
+      "node_modules\\strtok3"
+    ],
+    "uint8array-extras@1.6.0": [
+      "node_modules\\uint8array-extras"
+    ],
+    "@tokenizer/inflate@0.4.1": [
+      "node_modules\\@tokenizer\\inflate"
+    ],
+    "xml-parse-from-string@1.0.1": [
+      "node_modules\\xml-parse-from-string"
+    ],
+    "pako@1.0.11": [
+      "node_modules\\pako"
+    ],
+    "@peculiar/asn1-x509-attr@2.10.0": [
+      "node_modules\\@peculiar\\asn1-x509-attr"
+    ],
+    "@peculiar/utils@2.0.3": [
+      "node_modules\\@peculiar\\utils"
+    ],
+    "xml2js@0.5.0": [
+      "node_modules\\xml2js"
+    ],
+    "@peculiar/asn1-pfx@2.10.0": [
+      "node_modules\\@peculiar\\asn1-pfx"
+    ],
+    "@leichtgewicht/ip-codec@2.0.5": [
+      "node_modules\\@leichtgewicht\\ip-codec"
+    ],
+    "@peculiar/asn1-pkcs8@2.10.0": [
+      "node_modules\\@peculiar\\asn1-pkcs8"
+    ],
+    "ieee754@1.2.1": [
+      "node_modules\\ieee754"
+    ],
+    "minimist@1.2.8": [
+      "node_modules\\minimist"
+    ],
+    "xhr@2.6.0": [
+      "node_modules\\xhr"
+    ],
+    "buffer-equal@0.0.1": [
+      "node_modules\\buffer-equal"
+    ],
+    "xtend@4.0.2": [
+      "node_modules\\xtend"
+    ],
+    "centra@2.7.0(debug@4.4.3)": [
+      "node_modules\\centra"
+    ],
+    "p-locate@4.1.0": [
+      "node_modules\\p-locate"
+    ],
+    "ansi-styles@4.3.0": [
+      "node_modules\\ansi-styles"
+    ],
+    "function-bind@1.1.2": [
+      "node_modules\\function-bind"
+    ],
+    "mime-db@1.52.0": [
+      "node_modules\\mime-db"
+    ],
+    "delayed-stream@1.0.0": [
+      "node_modules\\delayed-stream"
+    ],
+    "get-intrinsic@1.3.0": [
+      "node_modules\\get-intrinsic"
+    ],
+    "has-tostringtag@1.0.2": [
+      "node_modules\\has-tostringtag"
+    ],
+    "safe-buffer@5.2.1": [
+      "node_modules\\safe-buffer"
+    ],
+    "call-bound@1.0.4": [
+      "node_modules\\call-bound"
+    ],
+    "extend@3.0.2": [
+      "node_modules\\extend"
+    ],
+    "jwa@2.0.1": [
+      "node_modules\\jwa"
+    ],
+    "@aws-sdk/signature-v4-multi-region@3.996.47": [
+      "node_modules\\@aws-sdk\\signature-v4-multi-region"
+    ],
+    "json-bigint@1.0.0": [
+      "node_modules\\json-bigint"
+    ],
+    "node-fetch@3.3.2": [
+      "node_modules\\node-fetch"
+    ],
+    "@smithy/util-buffer-from@2.2.0": [
+      "node_modules\\@smithy\\util-buffer-from"
+    ],
+    "@aws-sdk/credential-provider-login@3.972.79": [
+      "node_modules\\@aws-sdk\\credential-provider-login"
+    ],
+    "@tokenizer/token@0.3.0": [
+      "node_modules\\@tokenizer\\token"
+    ],
+    "leac@0.7.0": [
+      "node_modules\\leac"
+    ],
+    "@borewit/text-codec@0.2.2": [
+      "node_modules\\@borewit\\text-codec"
+    ],
+    "peberminta@0.10.0": [
+      "node_modules\\peberminta"
+    ],
+    "sax@1.6.1": [
+      "node_modules\\sax"
+    ],
+    "global@4.4.0": [
+      "node_modules\\global"
+    ],
+    "is-function@1.0.2": [
+      "node_modules\\is-function"
+    ],
+    "parse-headers@2.0.6": [
+      "node_modules\\parse-headers"
+    ],
+    "color-convert@2.0.1": [
+      "node_modules\\color-convert"
+    ],
+    "xmlbuilder@11.0.1": [
+      "node_modules\\xmlbuilder"
+    ],
+    "gopd@1.2.0": [
+      "node_modules\\gopd"
+    ],
+    "p-limit@2.3.0": [
+      "node_modules\\p-limit"
+    ],
+    "get-proto@1.0.1": [
+      "node_modules\\get-proto"
+    ],
+    "has-symbols@1.1.0": [
+      "node_modules\\has-symbols"
+    ],
+    "es-object-atoms@1.1.2": [
+      "node_modules\\es-object-atoms"
+    ],
+    "call-bind-apply-helpers@1.0.2": [
+      "node_modules\\call-bind-apply-helpers"
+    ],
+    "math-intrinsics@1.1.0": [
+      "node_modules\\math-intrinsics"
+    ],
+    "formdata-polyfill@4.0.10": [
+      "node_modules\\formdata-polyfill"
+    ],
+    "buffer-equal-constant-time@1.0.1": [
+      "node_modules\\buffer-equal-constant-time"
+    ],
+    "fetch-blob@3.2.0": [
+      "node_modules\\fetch-blob"
+    ],
+    "bignumber.js@9.3.1": [
+      "node_modules\\bignumber.js"
+    ],
+    "@smithy/is-array-buffer@2.2.0": [
+      "node_modules\\@smithy\\is-array-buffer"
+    ],
+    "data-uri-to-buffer@4.0.1": [
+      "node_modules\\data-uri-to-buffer"
+    ],
+    "min-document@2.19.2": [
+      "node_modules\\min-document"
+    ],
+    "process@0.11.10": [
+      "node_modules\\process"
+    ],
+    "color-name@1.1.4": [
+      "node_modules\\color-name"
+    ],
+    "p-try@2.2.0": [
+      "node_modules\\p-try"
+    ],
+    "dunder-proto@1.0.1": [
+      "node_modules\\dunder-proto"
+    ],
+    "node-domexception@1.0.0": [
+      "node_modules\\node-domexception"
+    ],
+    "dom-walk@0.1.2": [
+      "node_modules\\dom-walk"
+    ],
+    "web-streams-polyfill@3.3.3": [
+      "node_modules\\web-streams-polyfill"
+    ],
+    "@linxin666/dsh-remote-web-ui@0.4.4": [
+      "node_modules\\@linxin666\\dsh-web-all\\node_modules\\@linxin666\\dsh-remote-web-ui"
+    ],
+    "@linxin666/dsh-pet@0.4.4": [
+      "node_modules\\@linxin666\\dsh-web-all\\node_modules\\@linxin666\\dsh-pet"
+    ],
+    "@linxin666/dsh-client-ui-skill-explorer@0.4.4": [
+      "node_modules\\@linxin666\\dsh-web-all\\node_modules\\@linxin666\\dsh-client-ui-skill-explorer"
+    ],
+    "zod@4.6.5": [
+      "node_modules\\@linxin666\\dsh-remote-web-ui\\node_modules\\zod",
+      "node_modules\\@linxin666\\dsh-web-all\\node_modules\\zod",
+      "node_modules\\@michengai\\dsh-agency-agents\\node_modules\\zod",
+      "node_modules\\dsh-vision-router\\node_modules\\zod",
+      "node_modules\\@mistralai\\mistralai\\node_modules\\zod",
+      "node_modules\\chromium-bidi\\node_modules\\zod"
+    ],
+    "@linxin666/dsh-remote-web-ui@0.4.5": [
+      "node_modules\\@linxin666\\dsh-remote-web-ui"
+    ],
+    "@linxin666/dsh-web-all@0.4.4": [
+      "node_modules\\@linxin666\\dsh-web-all"
+    ],
+    "@michengai/dsh-agency-agents@1.2.1(@deepseek-ai/schemastery@3.18.4)": [
+      "node_modules\\@michengai\\dsh-agency-agents"
+    ],
+    "zod@4.1.8": [
+      "node_modules\\@michengai\\dsh-automation\\node_modules\\zod",
+      "node_modules\\billion-context\\node_modules\\zod"
+    ],
+    "@michengai/dsh-automation@0.1.53(@deepseek-ai/schemastery@3.18.4)": [
+      "node_modules\\@michengai\\dsh-automation"
+    ],
+    "zod@4.4.3": [
+      "node_modules\\@michengai\\dsh-pua\\node_modules\\zod"
+    ],
+    "@michengai/dsh-pua@1.0.1(@deepseek-ai/schemastery@3.18.4)": [
+      "node_modules\\@michengai\\dsh-pua"
+    ],
+    "billion-context@0.1.199": [
+      "node_modules\\billion-context"
+    ],
+    "undici@7.29.1": [
+      "node_modules\\@xmanrui\\dsh-im\\node_modules\\undici"
+    ],
+    "@xmanrui/dsh-im@4.35.1": [
+      "node_modules\\@xmanrui\\dsh-im"
+    ],
+    "ws@8.22.0": [
+      "node_modules\\dsh-mobile\\node_modules\\ws",
+      "node_modules\\puppeteer-core\\node_modules\\ws",
+      "node_modules\\@mistralai\\mistralai\\node_modules\\ws",
+      "node_modules\\@google\\genai\\node_modules\\ws"
+    ],
+    "dsh-mobile@0.5.5": [
+      "node_modules\\dsh-mobile"
+    ],
+    "undici@7.30.0": [
+      "node_modules\\dsh-vision-router\\node_modules\\undici",
+      "node_modules\\dshmarket\\node_modules\\undici"
+    ],
+    "dsh-vision-router@3.0.4(debug@4.4.3)(sharp@0.35.4)": [
+      "node_modules\\dsh-vision-router"
+    ],
+    "dshmarket@1.66.8(@deepseek-ai/schemastery@3.18.4)": [
+      "node_modules\\dshmarket"
+    ],
+    "pngjs@5.0.0": [
+      "node_modules\\qrcode\\node_modules\\pngjs"
+    ],
+    "qrcode@1.5.4": [
+      "node_modules\\qrcode"
+    ],
+    "@jimp/plugin-blur@1.6.1": [
+      "node_modules\\jimp\\node_modules\\@jimp\\plugin-blur"
+    ],
+    "@jimp/plugin-blit@1.6.1": [
+      "node_modules\\jimp\\node_modules\\@jimp\\plugin-blit",
+      "node_modules\\@jimp\\plugin-contain\\node_modules\\@jimp\\plugin-blit",
+      "node_modules\\@jimp\\plugin-print\\node_modules\\@jimp\\plugin-blit"
+    ],
+    "@smithy/node-http-handler@4.7.3": [
+      "node_modules\\@earendil-works\\pi-ai\\node_modules\\@smithy\\node-http-handler"
+    ],
+    "@earendil-works/pi-ai@0.82.1(ws@8.22.0)(zod@4.6.5)": [
+      "node_modules\\@earendil-works\\pi-ai"
+    ],
+    "@jimp/utils@1.6.1": [
+      "node_modules\\jimp\\node_modules\\@jimp\\utils",
+      "node_modules\\@jimp\\core\\node_modules\\@jimp\\utils",
+      "node_modules\\@jimp\\diff\\node_modules\\@jimp\\utils",
+      "node_modules\\@jimp\\js-bmp\\node_modules\\@jimp\\utils",
+      "node_modules\\@jimp\\plugin-color\\node_modules\\@jimp\\utils",
+      "node_modules\\@jimp\\plugin-contain\\node_modules\\@jimp\\utils",
+      "node_modules\\@jimp\\plugin-displace\\node_modules\\@jimp\\utils",
+      "node_modules\\@jimp\\plugin-crop\\node_modules\\@jimp\\utils",
+      "node_modules\\@jimp\\plugin-fisheye\\node_modules\\@jimp\\utils",
+      "node_modules\\@jimp\\plugin-hash\\node_modules\\@jimp\\utils",
+      "node_modules\\@jimp\\plugin-print\\node_modules\\@jimp\\utils",
+      "node_modules\\@jimp\\plugin-threshold\\node_modules\\@jimp\\utils",
+      "node_modules\\@jimp\\plugin-rotate\\node_modules\\@jimp\\utils"
+    ],
+    "@jimp/plugin-resize@1.6.1": [
+      "node_modules\\jimp\\node_modules\\@jimp\\plugin-resize",
+      "node_modules\\@jimp\\diff\\node_modules\\@jimp\\plugin-resize",
+      "node_modules\\@jimp\\plugin-cover\\node_modules\\@jimp\\plugin-resize",
+      "node_modules\\@jimp\\plugin-contain\\node_modules\\@jimp\\plugin-resize",
+      "node_modules\\@jimp\\plugin-hash\\node_modules\\@jimp\\plugin-resize",
+      "node_modules\\@jimp\\plugin-rotate\\node_modules\\@jimp\\plugin-resize"
+    ],
+    "jimp@1.6.1": [
+      "node_modules\\jimp"
+    ],
+    "jimp@0.14.0(debug@4.4.3)": [
+      "node_modules\\potrace\\node_modules\\jimp"
+    ],
+    "@jimp/types@0.14.0(@jimp/custom@0.14.0(debug@4.4.3))": [
+      "node_modules\\potrace\\node_modules\\@jimp\\types"
+    ],
+    "potrace@2.1.8(debug@4.4.3)": [
+      "node_modules\\potrace"
+    ],
+    "puppeteer-core@25.13.0": [
+      "node_modules\\puppeteer-core"
+    ],
+    "https-proxy-agent@5.0.1": [
+      "node_modules\\axios\\node_modules\\https-proxy-agent"
+    ],
+    "@babel/runtime@8.0.5": [
+      "node_modules\\@rc-component\\segmented\\node_modules\\@babel\\runtime",
+      "node_modules\\@rc-component\\virtual-list\\node_modules\\@babel\\runtime"
+    ],
+    "@rc-component/segmented@1.4.0": [
+      "node_modules\\@rc-component\\segmented"
+    ],
+    "agent-base@6.0.2": [
+      "node_modules\\axios\\node_modules\\agent-base"
+    ],
+    "axios@1.20.0(debug@4.4.3)": [
+      "node_modules\\axios"
+    ],
+    "@google/genai@1.52.0": [
+      "node_modules\\@google\\genai"
+    ],
+    "zod-to-json-schema@3.25.2(zod@4.6.5)": [
+      "node_modules\\@mistralai\\mistralai\\node_modules\\zod-to-json-schema"
+    ],
+    "@mistralai/mistralai@2.2.6(@opentelemetry/api@1.9.0)": [
+      "node_modules\\@mistralai\\mistralai"
+    ],
+    "@jimp/core@1.6.1": [
+      "node_modules\\@jimp\\core"
+    ],
+    "@jimp/diff@1.6.1": [
+      "node_modules\\@jimp\\diff"
+    ],
+    "@jimp/js-bmp@1.6.1": [
+      "node_modules\\@jimp\\js-bmp"
+    ],
+    "pngjs@7.0.0": [
+      "node_modules\\@jimp\\js-png\\node_modules\\pngjs"
+    ],
+    "@jimp/js-png@1.6.1": [
+      "node_modules\\@jimp\\js-png"
+    ],
+    "@jimp/plugin-color@1.6.1": [
+      "node_modules\\@jimp\\plugin-color"
+    ],
+    "@jimp/plugin-cover@1.6.1": [
+      "node_modules\\@jimp\\plugin-cover"
+    ],
+    "@jimp/plugin-contain@1.6.1": [
+      "node_modules\\@jimp\\plugin-contain"
+    ],
+    "@jimp/plugin-displace@1.6.1": [
+      "node_modules\\@jimp\\plugin-displace"
+    ],
+    "@jimp/plugin-crop@1.6.1": [
+      "node_modules\\@jimp\\plugin-crop"
+    ],
+    "@jimp/plugin-fisheye@1.6.1": [
+      "node_modules\\@jimp\\plugin-fisheye"
+    ],
+    "@jimp/plugin-hash@1.6.1": [
+      "node_modules\\@jimp\\plugin-hash"
+    ],
+    "@jimp/plugin-print@1.6.1": [
+      "node_modules\\@jimp\\plugin-print"
+    ],
+    "@jimp/plugin-threshold@1.6.1": [
+      "node_modules\\@jimp\\plugin-threshold"
+    ],
+    "@jimp/core@0.14.0(debug@4.4.3)": [
+      "node_modules\\@jimp\\custom\\node_modules\\@jimp\\core"
+    ],
+    "file-type@9.0.0": [
+      "node_modules\\@jimp\\custom\\node_modules\\file-type"
+    ],
+    "pixelmatch@4.0.2": [
+      "node_modules\\@jimp\\custom\\node_modules\\pixelmatch"
+    ],
+    "@jimp/custom@0.14.0(debug@4.4.3)": [
+      "node_modules\\@jimp\\custom"
+    ],
+    "@jimp/plugin-color@0.14.0(@jimp/custom@0.14.0(debug@4.4.3))": [
+      "node_modules\\@jimp\\plugins\\node_modules\\@jimp\\plugin-color"
+    ],
+    "@jimp/plugin-circle@0.14.0(@jimp/custom@0.14.0(debug@4.4.3))": [
+      "node_modules\\@jimp\\plugins\\node_modules\\@jimp\\plugin-circle"
+    ],
+    "@jimp/plugin-contain@0.14.0(@jimp/custom@0.14.0(debug@4.4.3))(@jimp/plugin-blit@0.14.0(@jimp/custom@0.14.0(debug@4.4.3)))(@jimp/plugin-resize@0.14.0(@jimp/custom@0.14.0(debug@4.4.3)))(@jimp/plugin-scale@0.14.0(@jimp/custom@0.14.0(debug@4.4.3))(@jimp/plugin-resize@0.14.0(@jimp/custom@0.14.0(debug@4.4.3))))": [
+      "node_modules\\@jimp\\plugins\\node_modules\\@jimp\\plugin-contain"
+    ],
+    "@jimp/plugin-crop@0.14.0(@jimp/custom@0.14.0(debug@4.4.3))": [
+      "node_modules\\@jimp\\plugins\\node_modules\\@jimp\\plugin-crop"
+    ],
+    "@jimp/plugin-displace@0.14.0(@jimp/custom@0.14.0(debug@4.4.3))": [
+      "node_modules\\@jimp\\plugins\\node_modules\\@jimp\\plugin-displace"
+    ],
+    "@jimp/plugin-cover@0.14.0(@jimp/custom@0.14.0(debug@4.4.3))(@jimp/plugin-crop@0.14.0(@jimp/custom@0.14.0(debug@4.4.3)))(@jimp/plugin-resize@0.14.0(@jimp/custom@0.14.0(debug@4.4.3)))(@jimp/plugin-scale@0.14.0(@jimp/custom@0.14.0(debug@4.4.3))(@jimp/plugin-resize@0.14.0(@jimp/custom@0.14.0(debug@4.4.3))))": [
+      "node_modules\\@jimp\\plugins\\node_modules\\@jimp\\plugin-cover"
+    ],
+    "@jimp/plugin-fisheye@0.14.0(@jimp/custom@0.14.0(debug@4.4.3))": [
+      "node_modules\\@jimp\\plugins\\node_modules\\@jimp\\plugin-fisheye"
+    ],
+    "@jimp/plugin-dither@0.14.0(@jimp/custom@0.14.0(debug@4.4.3))": [
+      "node_modules\\@jimp\\plugins\\node_modules\\@jimp\\plugin-dither"
+    ],
+    "@jimp/plugin-flip@0.14.0(@jimp/custom@0.14.0(debug@4.4.3))(@jimp/plugin-rotate@0.14.0(@jimp/custom@0.14.0(debug@4.4.3))(@jimp/plugin-blit@0.14.0(@jimp/custom@0.14.0(debug@4.4.3)))(@jimp/plugin-crop@0.14.0(@jimp/custom@0.14.0(debug@4.4.3)))(@jimp/plugin-resize@0.14.0(@jimp/custom@0.14.0(debug@4.4.3))))": [
+      "node_modules\\@jimp\\plugins\\node_modules\\@jimp\\plugin-flip"
+    ],
+    "@jimp/plugin-mask@0.14.0(@jimp/custom@0.14.0(debug@4.4.3))": [
+      "node_modules\\@jimp\\plugins\\node_modules\\@jimp\\plugin-mask"
+    ],
+    "@jimp/plugin-print@0.14.0(@jimp/custom@0.14.0(debug@4.4.3))(@jimp/plugin-blit@0.14.0(@jimp/custom@0.14.0(debug@4.4.3)))": [
+      "node_modules\\@jimp\\plugins\\node_modules\\@jimp\\plugin-print"
+    ],
+    "@jimp/plugin-rotate@0.14.0(@jimp/custom@0.14.0(debug@4.4.3))(@jimp/plugin-blit@0.14.0(@jimp/custom@0.14.0(debug@4.4.3)))(@jimp/plugin-crop@0.14.0(@jimp/custom@0.14.0(debug@4.4.3)))(@jimp/plugin-resize@0.14.0(@jimp/custom@0.14.0(debug@4.4.3)))": [
+      "node_modules\\@jimp\\plugins\\node_modules\\@jimp\\plugin-rotate"
+    ],
+    "@jimp/plugin-threshold@0.14.0(@jimp/custom@0.14.0(debug@4.4.3))(@jimp/plugin-color@0.14.0(@jimp/custom@0.14.0(debug@4.4.3)))(@jimp/plugin-resize@0.14.0(@jimp/custom@0.14.0(debug@4.4.3)))": [
+      "node_modules\\@jimp\\plugins\\node_modules\\@jimp\\plugin-threshold"
+    ],
+    "@jimp/plugins@0.14.0(@jimp/custom@0.14.0(debug@4.4.3))": [
+      "node_modules\\@jimp\\plugins"
+    ],
+    "gifwrap@0.9.4": [
+      "node_modules\\@jimp\\gif\\node_modules\\gifwrap"
+    ],
+    "@jimp/gif@0.14.0(@jimp/custom@0.14.0(debug@4.4.3))": [
+      "node_modules\\@jimp\\gif"
+    ],
+    "chromium-bidi@157.0.8090-0(devtools-protocol@0.0.1696802)": [
+      "node_modules\\chromium-bidi"
+    ],
+    "y18n@5.0.8": [
+      "node_modules\\@puppeteer\\browsers\\node_modules\\y18n"
+    ],
+    "cliui@9.0.1": [
+      "node_modules\\@puppeteer\\browsers\\node_modules\\cliui"
+    ],
+    "yargs-parser@22.0.0": [
+      "node_modules\\@puppeteer\\browsers\\node_modules\\yargs-parser"
+    ],
+    "string-width@7.2.0": [
+      "node_modules\\@puppeteer\\browsers\\node_modules\\string-width"
+    ],
+    "wrap-ansi@9.0.2": [
+      "node_modules\\@puppeteer\\browsers\\node_modules\\wrap-ansi"
+    ],
+    "emoji-regex@10.6.0": [
+      "node_modules\\@puppeteer\\browsers\\node_modules\\emoji-regex"
+    ],
+    "ansi-styles@6.2.3": [
+      "node_modules\\@puppeteer\\browsers\\node_modules\\ansi-styles"
+    ],
+    "@rc-component/virtual-list@1.5.2": [
+      "node_modules\\@rc-component\\virtual-list"
+    ],
+    "strip-ansi@6.0.1": [
+      "node_modules\\cliui\\node_modules\\strip-ansi",
+      "node_modules\\string-width\\node_modules\\strip-ansi",
+      "node_modules\\wrap-ansi\\node_modules\\strip-ansi"
+    ],
+    "cliui@6.0.0": [
+      "node_modules\\cliui"
+    ],
+    "string-width@4.2.3": [
+      "node_modules\\string-width"
+    ],
+    "real-require@1.0.0": [
+      "node_modules\\thread-stream\\node_modules\\real-require"
+    ],
+    "thread-stream@4.2.0": [
+      "node_modules\\thread-stream"
+    ],
+    "entities@7.0.1": [
+      "node_modules\\htmlparser2\\node_modules\\entities"
+    ],
+    "htmlparser2@10.1.0": [
+      "node_modules\\htmlparser2"
+    ],
+    "pngjs@6.0.0": [
+      "node_modules\\pixelmatch\\node_modules\\pngjs"
+    ],
+    "pixelmatch@5.3.0": [
+      "node_modules\\pixelmatch"
+    ],
+    "@types/node@16.9.1": [
+      "node_modules\\image-q\\node_modules\\@types\\node"
+    ],
+    "image-q@4.0.0": [
+      "node_modules\\image-q"
+    ],
+    "tslib@1.14.1": [
+      "node_modules\\tsyringe\\node_modules\\tslib"
+    ],
+    "tsyringe@4.10.0": [
+      "node_modules\\tsyringe"
+    ],
+    "mime@1.6.0": [
+      "node_modules\\load-bmfont\\node_modules\\mime"
+    ],
+    "ansi-regex@6.4.0": [
+      "node_modules\\strip-ansi\\node_modules\\ansi-regex"
+    ],
+    "strip-ansi@7.2.0": [
+      "node_modules\\strip-ansi"
+    ],
+    "wrap-ansi@6.2.0": [
+      "node_modules\\wrap-ansi"
+    ],
+    "@jimp/plugin-rotate@1.6.1": [
+      "node_modules\\@jimp\\plugin-rotate"
+    ],
+    "phin@3.7.1(debug@4.4.3)": [
+      "node_modules\\load-bmfont\\node_modules\\phin"
+    ],
+    "load-bmfont@1.4.2(debug@4.4.3)": [
+      "node_modules\\load-bmfont"
+    ],
+    "@aws-sdk/token-providers@3.1138.0": [
+      "node_modules\\@aws-sdk\\credential-provider-sso\\node_modules\\@aws-sdk\\token-providers"
+    ],
+    "@aws-sdk/credential-provider-sso@3.973.16": [
+      "node_modules\\@aws-sdk\\credential-provider-sso"
+    ],
+    "string-width@8.3.0": [
+      "node_modules\\@puppeteer\\browsers\\node_modules\\yargs\\node_modules\\string-width"
+    ],
+    "yargs@18.2.0": [
+      "node_modules\\@puppeteer\\browsers\\node_modules\\yargs"
+    ],
+    "@puppeteer/browsers@3.2.4": [
+      "node_modules\\@puppeteer\\browsers"
+    ]
+  },
+  "nodeLinker": "hoisted",
+  "packageManager": "pnpm@11.7.0",
+  "pendingBuilds": [],
+  "publicHoistPattern": [],
+  "prunedAt": "Sun, 11 Oct 2026 06:55:59 GMT",
+  "registries": {
+    "default": "https://registry.npmjs.org/",
+    "@jsr": "https://npm.jsr.io/"
+  },
+  "skipped": [
+    "@emnapi/runtime@1.11.3",
+    "@img/sharp-darwin-arm64@0.35.4",
+    "@img/sharp-darwin-x64@0.35.4",
+    "@img/sharp-freebsd-wasm32@0.35.4",
+    "@img/sharp-libvips-darwin-arm64@1.3.3",
+    "@img/sharp-libvips-darwin-x64@1.3.3",
+    "@img/sharp-libvips-linux-arm64@1.3.3",
+    "@img/sharp-libvips-linux-arm@1.3.3",
+    "@img/sharp-libvips-linux-ppc64@1.3.3",
+    "@img/sharp-libvips-linux-riscv64@1.3.3",
+    "@img/sharp-libvips-linux-s390x@1.3.3",
+    "@img/sharp-libvips-linux-x64@1.3.3",
+    "@img/sharp-libvips-linuxmusl-arm64@1.3.3",
+    "@img/sharp-libvips-linuxmusl-x64@1.3.3",
+    "@img/sharp-linux-arm64@0.35.4",
+    "@img/sharp-linux-arm@0.35.4",
+    "@img/sharp-linux-ppc64@0.35.4",
+    "@img/sharp-linux-riscv64@0.35.4",
+    "@img/sharp-linux-s390x@0.35.4",
+    "@img/sharp-linux-x64@0.35.4",
+    "@img/sharp-linuxmusl-arm64@0.35.4",
+    "@img/sharp-linuxmusl-x64@0.35.4",
+    "@img/sharp-wasm32@0.35.4",
+    "@img/sharp-webcontainers-wasm32@0.35.4",
+    "@img/sharp-win32-arm64@0.35.4",
+    "@img/sharp-win32-ia32@0.35.4",
+    "@tencent-qqmail/agently-cli-darwin-arm64@1.0.18",
+    "@tencent-qqmail/agently-cli-darwin-x64@1.0.18",
+    "@tencent-qqmail/agently-cli-linux-arm64@1.0.18",
+    "@tencent-qqmail/agently-cli-linux-x64@1.0.18",
+    "@tencent-qqmail/agently-cli-win32-arm64@1.0.18",
+    "fsevents@2.3.2",
+    "lightningcss-android-arm64@1.33.0",
+    "lightningcss-darwin-arm64@1.33.0",
+    "lightningcss-darwin-x64@1.33.0",
+    "lightningcss-freebsd-x64@1.33.0",
+    "lightningcss-linux-arm-gnueabihf@1.33.0",
+    "lightningcss-linux-arm64-gnu@1.33.0",
+    "lightningcss-linux-arm64-musl@1.33.0",
+    "lightningcss-linux-x64-gnu@1.33.0",
+    "lightningcss-linux-x64-musl@1.33.0",
+    "lightningcss-win32-arm64-msvc@1.33.0"
+  ],
+  "storeDir": "C:\\Users\\chenk\\AppData\\Local\\pnpm\\store\\v11",
+  "virtualStoreDir": "C:\\Users\\chenk\\.dsh\\profiles\\desktop\\node_modules\\.pnpm",
+  "virtualStoreDirMaxLength": 60,
+  "allowBuilds": {
+    "protobufjs": false,
+    "koffi": false,
+    "cloudflared": true,
+    "cpu-features": true,
+    "ssh2": true,
+    "@google/genai": true
+  }
+}

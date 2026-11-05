@@ -73,6 +73,8 @@ public sealed class ThumbnailPreview : IDisposable
     private IntPtr _thumb;                // 当前缩略图句柄（Zero = 未注册）
     private IntPtr _source;               // 当前源窗口句柄（Zero = 无）
     private DispatcherTimer? _watchd;     // 仅可见期间运行
+    // 画面保底层：24H2 玻璃宿主「注册成功却不合成像素」时盖上一层自绘预览卡（见 StillPreviewWindow）。
+    private StillPreviewWindow? _overlay;
     // 宿主玻璃层是否真的开起来了（见类型注释的不变量）。false ⇒ 一次都不弹卡片，绝不显示空黑框。
     private bool _hostGlassReady;
     // 不可用成因（玻璃开不成 / 注册失败）只把详情写进日志一次（悬停会反复重试，逐次 Warn 只会刷满日志）。
@@ -144,6 +146,7 @@ public sealed class ThumbnailPreview : IDisposable
             return;         // LayoutAndApply 内部失败已 HideInternal（注销 + 隐藏）
 
         ShowWindow(_hwnd, SwShowNoActivate);
+        _overlay?.Raise();   // 宿主这一步晚于覆盖层显示，必须把自绘画面层重新抬到最上面
         StartWatchdog();
     }
 
@@ -168,6 +171,11 @@ public sealed class ThumbnailPreview : IDisposable
     {
         _dispatcher.VerifyAccess();
         HideInternal();               // 释放矩阵 ④：先注销缩略图
+        if (_overlay is not null)
+        {
+            _overlay.Close();
+            _overlay = null;
+        }
         if (_hwnd != IntPtr.Zero)
         {
             Instances.Remove(_hwnd);
@@ -268,6 +276,12 @@ public sealed class ThumbnailPreview : IDisposable
             HideInternal();
             return false;
         }
+        // 24H2 真机交互取证：玻璃宿主三步 HRESULT 全 0，屏幕上却是一张纯白空卡，
+        // DWM 缩略图像素根本没合成。盖一层自绘预览卡（首帧同步抓 + 1.2s 低频刷新），
+        // 实时链路原样保留——系统正常合成时也只是被同源画面覆盖，不改变任何释放矩阵。
+        _overlay ??= new StillPreviewWindow();
+        _overlay.Attach(_source, _title, x / dpi, y / dpi, clientW / dpi, clientH / dpi);
+
         InvalidateRect(_hwnd, IntPtr.Zero, false);   // 触发 WM_PAINT 重画卡片底色/标题（新尺寸下）
         return true;
     }
@@ -331,6 +345,7 @@ public sealed class ThumbnailPreview : IDisposable
     private void HideInternal()
     {
         StopWatchdog();
+        _overlay?.Detach();           // 画面保底层与 DWM 宿主必须同收，绝不留下悬空卡片
         if (_thumb != IntPtr.Zero)
         {
             var old = _thumb;

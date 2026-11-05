@@ -775,10 +775,14 @@ public sealed class DockSurface : Canvas
             Width = trackWidth,
             Height = DockProgressBar.HeightDip,
             CornerRadius = new CornerRadius(1.5),
-            Background = new SolidColorBrush(Color.FromArgb(0x55, 0xFF, 0xFF, 0xFF)),
+            // 轨道必须是深色：macOS Tahoe 图标大多是白底（访达 / 启动台 / 便签），
+            // 原来的半透明白轨道 + 白填充压在白图标上等于「设置了却看不见」。
+            Background = new SolidColorBrush(Color.FromArgb(0xD0, 0x14, 0x14, 0x14)),
+            BorderBrush = new SolidColorBrush(Color.FromArgb(0x66, 0x00, 0x00, 0x00)),
+            BorderThickness = new Thickness(0.5),
             HorizontalAlignment = System.Windows.HorizontalAlignment.Center,
             VerticalAlignment = VerticalAlignment.Bottom,
-            Margin = new Thickness(0, 0, 0, 3),
+            Margin = new Thickness(0, 0, 0, 2),
             IsHitTestVisible = false,
             Child = fill,
             // 与角标一致的轻投影：白条压在彩色图标上时要有边界，否则看着像图标本身的一部分

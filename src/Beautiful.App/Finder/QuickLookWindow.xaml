@@ -90,13 +90,22 @@
 
         <!-- ============ 内容区：四选一 ============ -->
         <Grid Grid.Row="1" Background="Transparent">
-            <!-- 文本：只读、等宽、双向滚动、不折行（代码/日志保持原样）。 -->
-            <TextBox x:Name="TextView" Visibility="Collapsed"
-                     IsReadOnly="True" AcceptsReturn="True" TextWrapping="NoWrap"
-                     FontFamily="{DynamicResource MacFontMono}" FontSize="12"
-                     Background="Transparent" BorderThickness="0" Padding="14,10"
-                     VerticalContentAlignment="Top" HorizontalContentAlignment="Left"
-                     VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Auto"/>
+            <!-- 文本文档预览：浅色/深色圆角卡片 + 排版正文（标题栏已显示文件名）。
+                 Markdown 由代码后置按行渲染成标题 / 列表 / 代码块 / 段落；其余文本按行铺成等宽正文。
+                 卡片底色由代码后置按 MacColorScheme 选浅色或深色，DynamicResource 只取真实存在的 Mac* 键。 -->
+            <Border x:Name="DocumentCard" Visibility="Collapsed" Margin="22,18,22,18"
+                    CornerRadius="12" BorderThickness="1"
+                    BorderBrush="{DynamicResource MacSeparator}"
+                    Background="{DynamicResource MacPopupSolid}">
+                <Border.Effect>
+                    <DropShadowEffect BlurRadius="22" ShadowDepth="4" Direction="270"
+                                      Color="#000000" Opacity="0.28"/>
+                </Border.Effect>
+                <ScrollViewer x:Name="DocumentScroll" VerticalScrollBarVisibility="Auto"
+                              HorizontalScrollBarVisibility="Disabled" Padding="0">
+                    <StackPanel x:Name="DocumentBody" Margin="34,26,34,30"/>
+                </ScrollViewer>
+            </Border>
 
             <!-- 图片：等比缩放，窄图不放大到模糊，宽图不裁切。 -->
             <Grid x:Name="ImageHost" Visibility="Collapsed" Background="#08000000">

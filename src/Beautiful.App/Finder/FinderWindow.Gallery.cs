@@ -558,25 +558,34 @@ public partial class FinderWindow
     {
         var panel = new StackPanel { HorizontalAlignment = HorizontalAlignment.Center };
         var box = new Grid { Width = 112, Height = 112, HorizontalAlignment = HorizontalAlignment.Center };
-        if (row.Icon is { } icon)
+        if (row.IsDirectory)
         {
-            box.Children.Add(new Image
+            // 目录：画真正的文件夹图标。原来目录与文件共用 shell 位图 + ▤/▣ 占位字形，
+            // 选中文件夹时 112px 大预览被画成一张通用「文档」，认不出是目录。
+            box.Children.Add(BuildGalleryFolderIcon());
+        }
+        else
+        {
+            if (row.Icon is { } icon)
             {
-                Source = icon,
-                Width = 112,
-                Height = 112,
-                Stretch = Stretch.Uniform
+                box.Children.Add(new Image
+                {
+                    Source = icon,
+                    Width = 112,
+                    Height = 112,
+                    Stretch = Stretch.Uniform
+                });
+            }
+
+            box.Children.Add(new TextBlock
+            {
+                Text = row.Glyph,
+                FontSize = 44,
+                HorizontalAlignment = HorizontalAlignment.Center,
+                VerticalAlignment = VerticalAlignment.Center,
+                Foreground = (Brush)FindResource("MacTextSecondary")
             });
         }
-
-        box.Children.Add(new TextBlock
-        {
-            Text = row.Glyph,
-            FontSize = 44,
-            HorizontalAlignment = HorizontalAlignment.Center,
-            VerticalAlignment = VerticalAlignment.Center,
-            Foreground = (Brush)FindResource("MacTextSecondary")
-        });
         panel.Children.Add(box);
 
         panel.Children.Add(new TextBlock
@@ -607,6 +616,68 @@ public partial class FinderWindow
         });
 
         return panel;
+    }
+
+    /// <summary>
+    /// 画廊大预览里的文件夹图标：纯 WPF 画一个 macOS 风格蓝色文件夹（折页 + 主体 + 顶部高光），
+    /// 不依赖 shell 图标提取、也不加载资源图。目录不再被画成通用「文档」占位字形。
+    /// </summary>
+    private static FrameworkElement BuildGalleryFolderIcon()
+    {
+        var tabFill = new SolidColorBrush(Color.FromRgb(0x3E, 0x8F, 0xE0));
+        tabFill.Freeze();
+
+        var bodyFill = new LinearGradientBrush
+        {
+            StartPoint = new System.Windows.Point(0, 0),
+            EndPoint = new System.Windows.Point(0, 1)
+        };
+        bodyFill.GradientStops.Add(new GradientStop(Color.FromRgb(0x73, 0xBB, 0xFF), 0));
+        bodyFill.GradientStops.Add(new GradientStop(Color.FromRgb(0x2E, 0x7C, 0xD6), 1));
+        bodyFill.Freeze();
+
+        var shine = new SolidColorBrush(Color.FromArgb(0x4D, 0xFF, 0xFF, 0xFF));
+        shine.Freeze();
+
+        var root = new Grid { Width = 112, Height = 112 };
+
+        // 背面的折页（tab），先画：主体会盖住它的下沿
+        root.Children.Add(new Border
+        {
+            Width = 44,
+            Height = 20,
+            CornerRadius = new CornerRadius(7, 7, 0, 0),
+            Background = tabFill,
+            HorizontalAlignment = HorizontalAlignment.Left,
+            VerticalAlignment = VerticalAlignment.Top,
+            Margin = new Thickness(10, 26, 0, 0)
+        });
+
+        // 主体：圆角矩形 + 蓝色渐变
+        root.Children.Add(new Border
+        {
+            Width = 100,
+            Height = 62,
+            CornerRadius = new CornerRadius(9),
+            Background = bodyFill,
+            HorizontalAlignment = HorizontalAlignment.Left,
+            VerticalAlignment = VerticalAlignment.Top,
+            Margin = new Thickness(6, 40, 0, 0)
+        });
+
+        // 顶部一道横向高光，做出 macOS 文件夹的立体反光
+        root.Children.Add(new Border
+        {
+            Width = 88,
+            Height = 8,
+            CornerRadius = new CornerRadius(4),
+            Background = shine,
+            HorizontalAlignment = HorizontalAlignment.Left,
+            VerticalAlignment = VerticalAlignment.Top,
+            Margin = new Thickness(12, 44, 0, 0)
+        });
+
+        return root;
     }
 
     /// <summary>窗口尺寸变化时按新可用区域重新贴合已解码的大图（不重新解码、不重读文件）。</summary>

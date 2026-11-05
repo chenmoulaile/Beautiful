@@ -130,11 +130,19 @@ internal static class WlanApi
     public static extern uint WlanSetInterface(
         IntPtr clientHandle, ref Guid interfaceGuid, int opcode, uint dataSize, IntPtr data, IntPtr reserved);
 
-    /// <summary>读一个接口属性（只用 opcode=0 的接口状态）。dataSize 出参给出返回结构体大小。</summary>
+    /// <summary>
+    /// 读一个接口属性。<b>原生是 7 个参数</b>：
+    /// <c>(hClient, pInterfaceGuid, OpCode, pReserved, out pdwDataSize, out ppData, out pOpcodeValueType)</c>。
+    /// <para>
+    /// 曾经的 6 参声明把 <c>ppData</c> 与 <c>pdwDataSize</c> 写反、又漏了末尾的 <c>pOpcodeValueType</c>：
+    /// 被调方按 7 参往栈上写，多出的 4 字节落到不属于我们的位置，成功时拿到手的"指针"其实是数据大小，
+    /// 再拿它去 <c>Marshal.ReadInt32</c> 就是读地址 0x4。参数个数与顺序必须逐字对齐 wlanapi.h。
+    /// </para>
+    /// </summary>
     [DllImport("wlanapi.dll")]
     public static extern uint WlanQueryInterface(
         IntPtr clientHandle, ref Guid interfaceGuid, int opcode, IntPtr reserved,
-        out IntPtr data, out int dataSize);
+        out int dataSize, out IntPtr data, out int opcodeValueType);
 
     [DllImport("wlanapi.dll", CharSet = CharSet.Unicode)]
     public static extern uint WlanGetAvailableNetworkList(

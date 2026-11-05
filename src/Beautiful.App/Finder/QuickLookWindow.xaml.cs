@@ -11,12 +11,21 @@ using Beautiful.App.Services;
 using Beautiful.Core.Finder;
 using KeyEventArgs = System.Windows.Input.KeyEventArgs;
 using MouseButtonEventArgs = System.Windows.Input.MouseButtonEventArgs;
+using Run = System.Windows.Documents.Run;
+// UseWindowsForms=true 把 System.Drawing 带进全局 using，这些名字与 WPF 同名，必须显式取 WPF 版。
+using Brush = System.Windows.Media.Brush;
+using FontFamily = System.Windows.Media.FontFamily;
+using Color = System.Windows.Media.Color;
+using TextBlock = System.Windows.Controls.TextBlock;
 using TextBox = System.Windows.Controls.TextBox;
+using Border = System.Windows.Controls.Border;
+using Brushes = System.Windows.Media.Brushes;
 
 namespace Beautiful.App.Finder;
 
 /// <summary>
-/// Quick Look 预览卡（Phase 6-b 起步）：文本 / 图片 / 媒体是真实预览，PDF 与未知类型走信息卡。
+/// Quick Look 预览卡（Phase 6-b 起步）：文本走排版文档预览（浅色/深色卡片 + Markdown 基本渲染）、
+/// 图片 / 媒体是真实预览，PDF 与未知类型走信息卡。
 /// <para>
 /// 窗口纪律与访达/设置一致：非分层窗口（AllowsTransparency 保持 false）+ WindowChrome + DWM 圆角，
 /// 保留 ClearType 与 DWM 阴影；CaptionHeight=0，标题条自绘拖动。空格 / Esc 关闭，
@@ -40,6 +49,29 @@ public partial class QuickLookWindow : Window
 
     private const string PdfNote = "PDF 渲染不可用";
     private const string NoPreviewNote = "暂无内建预览";
+
+    // 文档预览的两套卡片色：浅色外观走白纸黑字，深色外观走深卡片浅字。
+    // 八张画刷全部冻结，换文件/翻页反复渲染时渲染线程可共享。
+    private static readonly SolidColorBrush DocPaperLight = FrozenBrush(0xFF, 0xFD, 0xFD, 0xFE);
+    private static readonly SolidColorBrush DocPaperDark = FrozenBrush(0xFF, 0x26, 0x26, 0x2A);
+    private static readonly SolidColorBrush DocInkLight = FrozenBrush(0xFF, 0x1D, 0x1D, 0x1F);
+    private static readonly SolidColorBrush DocInkDark = FrozenBrush(0xFF, 0xF2, 0xF2, 0xF5);
+    private static readonly SolidColorBrush DocMutedLight = FrozenBrush(0xFF, 0x6E, 0x6E, 0x73);
+    private static readonly SolidColorBrush DocMutedDark = FrozenBrush(0xFF, 0x9A, 0x9A, 0xA0);
+    private static readonly SolidColorBrush DocCodeLight = FrozenBrush(0xFF, 0xEE, 0xEE, 0xF2);
+    private static readonly SolidColorBrush DocCodeDark = FrozenBrush(0xFF, 0x14, 0x14, 0x18);
+
+    private static SolidColorBrush FrozenBrush(byte a, byte r, byte g, byte b)
+    {
+        var brush = new SolidColorBrush(Color.FromArgb(a, r, g, b));
+        brush.Freeze();
+        return brush;
+    }
+
+    /// <summary>一次文档渲染用到的纸张 / 墨色 / 字体，随当前外观取一套。</summary>
+    private sealed record DocPalette(
+        Brush Paper, Brush Ink, Brush Muted, Brush CodeBackground, Brush Accent,
+        FontFamily TextFont, FontFamily MonoFont);
 
     private static QuickLookWindow? _current;
 
@@ -200,8 +232,8 @@ public partial class QuickLookWindow : Window
     /// <summary>清空四种内容与页脚，回到“什么都不显示”的中间态（切路径/回退信息卡前调用）。</summary>
     private void ResetContent()
     {
-        TextView.Text = string.Empty;
-        TextView.Visibility = Visibility.Collapsed;
+        DocumentBody.Children.Clear();
+        DocumentCard.Visibility = Visibility.Collapsed;
 
         ImageView.Source = null;
         ImageHost.Visibility = Visibility.Collapsed;
@@ -224,8 +256,7 @@ public partial class QuickLookWindow : Window
         try
         {
             var preview = ReadTextPreview(path, MaxTextBytes);
-            TextView.Text = preview.Text;
-            TextView.Visibility = Visibility.Visible;
+            RenderDocument(path, preview.Text);
             if (preview.Truncated)
             {
                 ShowFooter($"已截断：仅显示前 64 KB（{preview.EncodingName}）。");
@@ -237,6 +268,276 @@ public partial class QuickLookWindow : Window
             ResetContent();
             ShowInfoCardCore(path, NoPreviewNote, $"无法读取文本：{Reason(ex)}");
         }
+    }
+
+    /// <summary>只有 Markdown 走结构化渲染；其余文本（日志/源码/json…）仍按行铺成等宽正文。</summary>
+    private static bool IsMarkdown(string path)
+    {
+        var ext = Path.GetExtension(path);
+        return ext.Equals(".md", StringComparison.OrdinalIgnoreCase)
+            || ext.Equals(".markdown", StringComparison.OrdinalIgnoreCase);
+    }
+
+    /// <summary>
+    /// 把纯文本铺成可读文档：外层圆角卡片按外观取浅色/深底色，正文逐行生成 TextBlock。
+    /// 不引入任何 Markdown/渲染库，只用 WPF 原生控件。
+    /// </summary>
+    private void RenderDocument(string path, string text)
+    {
+        var palette = CurrentPalette();
+        DocumentCard.Background = palette.Paper;
+        DocumentBody.Children.Clear();
+
+        var lines = text.Replace("\r\n", "\n").Replace('\r', '\n').Split('\n');
+        if (IsMarkdown(path))
+        {
+            RenderMarkdown(lines, palette);
+        }
+        else
+        {
+            RenderPlainText(lines, palette);
+        }
+
+        if (DocumentBody.Children.Count == 0)
+        {
+            DocumentBody.Children.Add(new TextBlock
+            {
+                Text = "（此文件为空）",
+                FontFamily = palette.TextFont,
+                FontSize = 14,
+                Foreground = palette.Muted
+            });
+        }
+
+        DocumentCard.Visibility = Visibility.Visible;
+    }
+
+    /// <summary>
+    /// Markdown 基本渲染：# 标题、-/*/+ 列表、``` 代码块、空行留白，其余为段落；
+    /// 行内 **粗体** 与 `等宽代码` 也做轻量处理。刻意只覆盖最常见的语法，不做完整解析器。
+    /// </summary>
+    private void RenderMarkdown(IReadOnlyList<string> lines, DocPalette p)
+    {
+        var code = new List<string>();
+        var inCode = false;
+        foreach (var line in lines)
+        {
+            if (line.TrimStart().StartsWith("```", StringComparison.Ordinal))
+            {
+                if (inCode)
+                {
+                    AddCodeBlock(code, p);
+                    code.Clear();
+                    inCode = false;
+                }
+                else
+                {
+                    inCode = true;
+                }
+                continue;
+            }
+
+            if (inCode)
+            {
+                code.Add(line);
+                continue;
+            }
+
+            if (line.Trim().Length == 0)
+            {
+                AddSpacer(12);
+                continue;
+            }
+
+            var hashes = 0;
+            while (hashes < line.Length && hashes < 6 && line[hashes] == '#') hashes++;
+            if (hashes > 0 && hashes < line.Length && line[hashes] == ' ')
+            {
+                AddHeading(line[(hashes + 1)..], hashes, p);
+                continue;
+            }
+
+            var trimmed = line.TrimStart();
+            if (trimmed.Length >= 2 && trimmed[1] == ' '
+                && (trimmed[0] == '-' || trimmed[0] == '*' || trimmed[0] == '+'))
+            {
+                AddListItem(trimmed[2..], p);
+                continue;
+            }
+
+            AddParagraph(line, p);
+        }
+
+        if (inCode && code.Count > 0)
+        {
+            AddCodeBlock(code, p);   // 文件在代码块中结束：不丢内容
+        }
+    }
+
+    /// <summary>非 Markdown 文本：等宽字体 + 放大字号 + 行距 + 折行，空行留白，不再黑底小字整块倒。</summary>
+    private void RenderPlainText(IReadOnlyList<string> lines, DocPalette p)
+    {
+        foreach (var line in lines)
+        {
+            if (line.Trim().Length == 0)
+            {
+                AddSpacer(10);
+                continue;
+            }
+
+            DocumentBody.Children.Add(new TextBlock
+            {
+                Text = line,
+                FontFamily = p.MonoFont,
+                FontSize = 13,
+                Foreground = p.Ink,
+                TextWrapping = TextWrapping.Wrap,
+                LineHeight = 20,
+                Margin = new Thickness(0, 0, 0, 2)
+            });
+        }
+    }
+
+    /// <summary>按 MacColorScheme 取浅色/深色卡片配色；字体与强调色也来自主题字典。</summary>
+    private DocPalette CurrentPalette()
+    {
+        var dark = string.Equals(TryFindResource("MacColorScheme") as string, "dark",
+            StringComparison.OrdinalIgnoreCase);
+        var accent = TryFindResource("MacAccent") as Brush
+                     ?? new SolidColorBrush(Color.FromRgb(0x0A, 0x84, 0xFF));
+        return new DocPalette(
+            dark ? DocPaperDark : DocPaperLight,
+            dark ? DocInkDark : DocInkLight,
+            dark ? DocMutedDark : DocMutedLight,
+            dark ? DocCodeDark : DocCodeLight,
+            accent,
+            TryFindResource("MacFont") as FontFamily ?? new FontFamily("Segoe UI"),
+            TryFindResource("MacFontMono") as FontFamily ?? new FontFamily("Consolas"));
+    }
+
+    private void AddHeading(string text, int level, DocPalette p)
+    {
+        double[] sizes = { 0.0, 27, 22, 18.5, 16, 14.5, 13.5 };
+        var size = sizes[level];
+        var block = new TextBlock
+        {
+            FontFamily = p.TextFont,
+            FontSize = size,
+            FontWeight = FontWeights.SemiBold,
+            Foreground = p.Ink,
+            TextWrapping = TextWrapping.Wrap,
+            LineHeight = size * 1.3,
+            Margin = new Thickness(0, DocumentBody.Children.Count == 0 ? 0 : (level <= 2 ? 18 : 12), 0, 6)
+        };
+        AddInlineRuns(block, text, p);
+        DocumentBody.Children.Add(block);
+    }
+
+    private void AddParagraph(string text, DocPalette p)
+    {
+        var block = new TextBlock
+        {
+            FontFamily = p.TextFont,
+            FontSize = 14,
+            Foreground = p.Ink,
+            TextWrapping = TextWrapping.Wrap,
+            LineHeight = 22,
+            Margin = new Thickness(0, 0, 0, 8)
+        };
+        AddInlineRuns(block, text, p);
+        DocumentBody.Children.Add(block);
+    }
+
+    private void AddListItem(string text, DocPalette p)
+    {
+        var block = new TextBlock
+        {
+            FontFamily = p.TextFont,
+            FontSize = 14,
+            Foreground = p.Ink,
+            TextWrapping = TextWrapping.Wrap,
+            LineHeight = 22,
+            Margin = new Thickness(18, 0, 0, 6)
+        };
+        block.Inlines.Add(new Run("•  ") { Foreground = p.Accent, FontWeight = FontWeights.Bold });
+        AddInlineRuns(block, text, p);
+        DocumentBody.Children.Add(block);
+    }
+
+    private void AddCodeBlock(IReadOnlyList<string> code, DocPalette p)
+    {
+        DocumentBody.Children.Add(new Border
+        {
+            Background = p.CodeBackground,
+            CornerRadius = new CornerRadius(8),
+            Padding = new Thickness(14, 10, 14, 10),
+            Margin = new Thickness(0, 4, 0, 12),
+            Child = new TextBlock
+            {
+                FontFamily = p.MonoFont,
+                FontSize = 12.5,
+                Foreground = p.Ink,
+                TextWrapping = TextWrapping.Wrap,
+                LineHeight = 19,
+                Text = string.Join("\n", code)
+            }
+        });
+    }
+
+    private void AddSpacer(double height)
+        => DocumentBody.Children.Add(new Border { Height = height, Background = Brushes.Transparent });
+
+    /// <summary>行内 **粗体** 与 `等宽代码`：逐字符扫描，其余原样进同一个 Run，避免逐字建控件。</summary>
+    private static void AddInlineRuns(TextBlock block, string text, DocPalette p)
+    {
+        var buffer = new StringBuilder();
+        void Flush()
+        {
+            if (buffer.Length == 0) return;
+            block.Inlines.Add(new Run(buffer.ToString()) { Foreground = p.Ink });
+            buffer.Clear();
+        }
+
+        var i = 0;
+        while (i < text.Length)
+        {
+            if (i + 1 < text.Length && text[i] == '*' && text[i + 1] == '*')
+            {
+                var end = text.IndexOf("**", i + 2, StringComparison.Ordinal);
+                if (end > i + 2)
+                {
+                    Flush();
+                    block.Inlines.Add(new Run(text[(i + 2)..end])
+                    {
+                        FontWeight = FontWeights.SemiBold,
+                        Foreground = p.Ink
+                    });
+                    i = end + 2;
+                    continue;
+                }
+            }
+
+            if (text[i] == '`')
+            {
+                var end = text.IndexOf('`', i + 1);
+                if (end > i + 1)
+                {
+                    Flush();
+                    block.Inlines.Add(new Run(text[(i + 1)..end])
+                    {
+                        FontFamily = p.MonoFont,
+                        Foreground = p.Accent
+                    });
+                    i = end + 1;
+                    continue;
+                }
+            }
+
+            buffer.Append(text[i]);
+            i++;
+        }
+
+        Flush();
     }
 
     /// <summary>

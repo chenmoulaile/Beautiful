@@ -90,15 +90,38 @@ public sealed class WifiService : IDisposable
     /// <summary>
     /// 网卡当前是否启用。<b>读不到返回 null</b>（不是 false）——界面要区分"关着"和"问不出来"，
     /// 把后者画成"关"就等于给了一个看起来正常、实际点不动的开关。
+    /// <para>
+    /// 【判据】重新枚举一次 <c>WlanEnumInterfaces</c>，把逐卡 <c>state</c> 交给
+    /// <c>WifiAdapterState.Judge</c> 折成在场性裁定：已连接/在场未连 → 开着，全部 not_ready → 关着，
+    /// 一块卡都没有 → null。不再用 <c>WlanQueryInterface(opcode 0)</c> 问开关：本机 Intel AX201 对它
+    /// 返回 <c>ERROR_NOT_SUPPORTED</c>，再叠上 P/Invoke 少一个出参的错位，那条路在这台机器上永远问不出来。
+    /// 枚举很便宜（本机 1 块、约 0.1ms），每次回读都拿当次真值，不缓存过期档位。
+    /// </para>
     /// </summary>
     public bool? IsAdapterEnabled()
     {
         if (!_ready) return null;
-        var code = WlanApi.WlanQueryInterface(_handle, ref _interfaceGuid,
-            WlanApi.OpcodeInterfaceState, IntPtr.Zero, out var data, out _);
-        if (code != WlanApi.Success || data == IntPtr.Zero) return null;
-        try { return Marshal.ReadInt32(data) != 0; }
-        finally { WlanApi.WlanFreeMemory(data); }
+        var code = WlanApi.WlanEnumInterfaces(_handle, IntPtr.Zero, out var list);
+        if (code != WlanApi.Success || list == IntPtr.Zero) return null;
+        try
+        {
+            var count = WlanApi.ListCount(list);
+            var states = new List<int>(Math.Max(count, 0));
+            for (var i = 0; i < count; i++)
+            {
+                var info = Marshal.PtrToStructure<WlanApi.WlanInterfaceInfo>(
+                    WlanApi.ListEntry<WlanApi.WlanInterfaceInfo>(list, i));
+                states.Add(info.State);
+            }
+            var verdict = WifiAdapterState.Judge(count, states).Verdict;
+            return verdict switch
+            {
+                WifiAdapterVerdict.Connected or WifiAdapterVerdict.Ready => true,
+                WifiAdapterVerdict.RadioOff => false,
+                _ => null,   // Absent：连网卡都没枚举到，诚实地说"问不出来"
+            };
+        }
+        finally { WlanApi.WlanFreeMemory(list); }
     }
 
     /// <summary>开 / 关网卡（控制中心的 Wi-Fi 砖块）。失败时 error 给出系统原因，不静默。</summary>

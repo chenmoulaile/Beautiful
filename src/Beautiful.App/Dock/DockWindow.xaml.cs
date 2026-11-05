@@ -1061,11 +1061,26 @@ public partial class DockWindow : AcrylicWindow
         _progress?.Dispose();
         _progress = null;
 
-        var item = _vm.Items.FirstOrDefault(i => i.Kind != DockItemKind.Separator);
-        if (item is not null)
+        static void Apply(DockWindow self, double value)
         {
-            Surface.SetProgress(item.Id, fraction, DockProgressState.Normal);
+            var item = self._vm.Items.FirstOrDefault(i => i.Kind != DockItemKind.Separator);
+            if (item is not null)
+            {
+                self.Surface.SetProgress(item.Id, value, DockProgressState.Normal);
+            }
         }
+
+        Apply(this, fraction);
+        // 启动期条目会被 WindowTracker 与按应用合并规则替换实例：最早那次 SetProgress 记下的 Id
+        // 可能已经不在树里，进度条于是「设置了却看不见」（真机取证发现的）。布局稳定后按**当前**
+        // 第一个条目再补一次，真实进度服务每次采样都走当前条目、不受这个时序影响。
+        var settle = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(1200) };
+        settle.Tick += (_, _) =>
+        {
+            settle.Stop();
+            Apply(this, fraction);
+        };
+        settle.Start();
     }
 
     /// <summary>诊断截图用的窗口句柄（未创建时 Zero）。</summary>

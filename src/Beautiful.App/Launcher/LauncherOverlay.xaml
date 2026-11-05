@@ -9,22 +9,23 @@
              Foreground="{DynamicResource ThemeTextPrimary}">
 
     <!-- Spotlight 式启动器覆盖层（v3 T7）。
-         【材质与托盘菜单/控制中心同源，数值也刻意同值】宿主是 FluentPopupHost（分层窗口 + 显示前抓屏模糊），
+         【材质与托盘菜单/控制中心同源】宿主是 FluentPopupHost（分层窗口 + 显示前抓屏模糊），
          叠放顺序 = Card.Background（抓屏模糊或实心卡底）→ Scrim（有模糊时压深色遮罩保对比）→
          TintLayer（ThemeBackdropTint）→ InnerGlow（顶部内高光）。Shell.Margin 给自绘投影留位：
          分层窗口上"没画到"就是能看穿到桌面的洞，两条分支都必须铺满整张卡。
-         这两份卡底画刷没有抽公共字典：抽出来要改已在用的 FluentMenu.xaml / ControlCenterPanel.xaml，
-         而 brief 明确不许动既有面板，于是按同一数值新增第三处，并在各自注释里互相指认。
+         【Spotlight 调校】卡底透明度比托盘菜单/控制中心更低、圆角更大、搜索框与结果行更高，
+         贴近 macOS Spotlight 的半透明深色玻璃；两份卡底画刷仍按同一结构就地定义（不抽公共字典，
+         抽出来要改已在用的 FluentMenu.xaml / ControlCenterPanel.xaml，而 brief 明确不许动既有面板）。
          【Card 定宽 + 内部星号行】宿主按 Measure(inf,inf) 同步量尺寸来决定落位与是否翻转，
          定宽让结果行的换行在第一趟布局就定形（与 CalendarFlyout 同一教训）。 -->
     <UserControl.Resources>
         <LinearGradientBrush x:Key="CardFillSolid" StartPoint="0,0" EndPoint="0,1">
-            <GradientStop Color="#F82C2C2F" Offset="0"/>
-            <GradientStop Color="#FB1F1F23" Offset="1"/>
+            <GradientStop Color="#E1343439" Offset="0"/>
+            <GradientStop Color="#D81C1C21" Offset="1"/>
         </LinearGradientBrush>
         <LinearGradientBrush x:Key="CardFillBlur" StartPoint="0,0" EndPoint="0,1">
-            <GradientStop Color="#8A232327" Offset="0"/>
-            <GradientStop Color="#9919191C" Offset="1"/>
+            <GradientStop Color="#781F1F24" Offset="0"/>
+            <GradientStop Color="#88131317" Offset="1"/>
         </LinearGradientBrush>
         <DropShadowEffect x:Key="CardShadow" BlurRadius="36" ShadowDepth="10" Direction="270"
                           Color="#000000" Opacity="0.62"/>
@@ -35,10 +36,10 @@
              【不用 Effect/不加动画】本面板是瞬态表面，但行模板会被虚拟化重排：Effect 会把它推进
              离屏滤镜管线（本项目对 Dock 的逐帧路径已裁定禁止），这里也无需引入第二套材质。 -->
         <Style x:Key="RowStyle" TargetType="Border">
-            <Setter Property="Height" Value="46"/>
-            <Setter Property="CornerRadius" Value="8"/>
+            <Setter Property="Height" Value="56"/>
+            <Setter Property="CornerRadius" Value="10"/>
             <Setter Property="Background" Value="Transparent"/>
-            <Setter Property="Padding" Value="9,0"/>
+            <Setter Property="Padding" Value="14,0"/>
             <Style.Triggers>
                 <DataTrigger Binding="{Binding IsSelected}" Value="True">
                     <Setter Property="Background" Value="{DynamicResource ThemeAccent}"/>
@@ -53,7 +54,7 @@
             <Setter Property="CaretBrush" Value="{DynamicResource ThemeTextPrimary}"/>
             <Setter Property="Background" Value="Transparent"/>
             <Setter Property="BorderThickness" Value="0"/>
-            <Setter Property="FontSize" Value="20"/>
+            <Setter Property="FontSize" Value="26"/>
             <Setter Property="VerticalContentAlignment" Value="Center"/>
             <Setter Property="Template">
                 <Setter.Value>
@@ -66,13 +67,13 @@
     </UserControl.Resources>
 
     <Grid x:Name="Shell" Margin="22,20,22,26">
-        <Border x:Name="Card" Width="680" CornerRadius="12" BorderThickness="1" BorderBrush="#2AFFFFFF"
+        <Border x:Name="Card" Width="700" CornerRadius="20" BorderThickness="1" BorderBrush="#40FFFFFF"
                 Background="{StaticResource CardFillSolid}" Effect="{StaticResource CardShadow}">
             <Grid>
-                <Border x:Name="Scrim" CornerRadius="11" IsHitTestVisible="False" Background="Transparent"/>
-                <Border x:Name="TintLayer" CornerRadius="11" IsHitTestVisible="False"
+                <Border x:Name="Scrim" CornerRadius="19" IsHitTestVisible="False" Background="Transparent"/>
+                <Border x:Name="TintLayer" CornerRadius="19" IsHitTestVisible="False"
                         Background="{DynamicResource ThemeBackdropTint}"/>
-                <Border x:Name="InnerGlow" CornerRadius="11" IsHitTestVisible="False">
+                <Border x:Name="InnerGlow" CornerRadius="19" IsHitTestVisible="False">
                     <Border.Background>
                         <LinearGradientBrush StartPoint="0,0" EndPoint="0,1">
                             <GradientStop Color="#14FFFFFF" Offset="0"/>
@@ -84,14 +85,14 @@
 
                 <StackPanel>
                     <!-- 搜索行：图标 + 输入框。键位提示放在结果区下方，避免与用户正在打的字抢位置。 -->
-                    <Grid Margin="18,15,18,10">
+                    <Grid Margin="24,20,24,14">
                         <Grid.ColumnDefinitions>
                             <ColumnDefinition Width="Auto"/>
                             <ColumnDefinition Width="*"/>
                         </Grid.ColumnDefinitions>
-                        <TextBlock x:Name="SearchGlyph" Grid.Column="0" Text="&#xE721;" FontSize="20"
+                        <TextBlock x:Name="SearchGlyph" Grid.Column="0" Text="&#xE721;" FontSize="26"
                                    FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets"
-                                   VerticalAlignment="Center" Margin="2,0,12,0" Opacity="0.72"/>
+                                   VerticalAlignment="Center" Margin="4,0,14,0" Opacity="0.85"/>
                         <TextBox x:Name="SearchBox" Grid.Column="1" Style="{StaticResource SearchStyle}"
                                  AutomationProperties.Name="启动器搜索框"
                                  TextChanged="Search_TextChanged"/>
@@ -99,7 +100,7 @@
 
                     <!-- 结果列表：行内是图标 + 名称 + 启动目标（真实路径，不是编的副标题）。
                          没有结果时整块隐藏，由下面的 StatusText 说明原因（建索引中 / 没有匹配 / 共 N 条）。 -->
-                    <ItemsControl x:Name="Results" Margin="7,0,7,2"
+                    <ItemsControl x:Name="Results" Margin="10,0,10,4"
                                   AutomationProperties.Name="启动器结果列表">
                         <ItemsControl.ItemTemplate>
                             <DataTemplate>
@@ -111,20 +112,20 @@
                                             <ColumnDefinition Width="Auto"/>
                                             <ColumnDefinition Width="*"/>
                                         </Grid.ColumnDefinitions>
-                                        <Image Grid.Column="0" Width="32" Height="32" Margin="0,0,12,0"
+                                        <Image Grid.Column="0" Width="36" Height="36" Margin="0,0,14,0"
                                                Source="{Binding Icon}"
                                                RenderOptions.BitmapScalingMode="HighQuality"/>
                                         <!-- 取不到图标的条目画一个空框而不是 ▣ 之类的假图标：
                                              名字与路径已经足够指认，字形占位会被误读成"这就是它的图标"。 -->
-                                        <Border Grid.Column="0" Width="32" Height="32" Margin="0,0,12,0"
-                                                BorderBrush="#33FFFFFF" BorderThickness="1" CornerRadius="6"
+                                        <Border Grid.Column="0" Width="36" Height="36" Margin="0,0,14,0"
+                                                BorderBrush="#33FFFFFF" BorderThickness="1" CornerRadius="7"
                                                 Visibility="{Binding IconMissing}"/>
                                         <!-- Big Sur 结果行：主标题 + 副标题（启动目标/类别），两行都省略而不是并排挤 -->
                                         <StackPanel Grid.Column="1" VerticalAlignment="Center">
-                                            <TextBlock Text="{Binding Name}" FontSize="13"
+                                            <TextBlock Text="{Binding Name}" FontSize="14.5"
                                                        TextTrimming="CharacterEllipsis"/>
-                                            <TextBlock Text="{Binding Target}" FontSize="10.5" Opacity="0.55"
-                                                       Margin="0,1,0,0" TextTrimming="CharacterEllipsis"/>
+                                            <TextBlock Text="{Binding Target}" FontSize="11.5" Opacity="0.55"
+                                                       Margin="0,2,0,0" TextTrimming="CharacterEllipsis"/>
                                         </StackPanel>
                                     </Grid>
                                 </Border>
@@ -132,10 +133,10 @@
                         </ItemsControl.ItemTemplate>
                     </ItemsControl>
 
-                    <TextBlock x:Name="StatusText" Margin="17,2,17,4" FontSize="11.5" Opacity="0.72"
+                    <TextBlock x:Name="StatusText" Margin="24,4,24,6" FontSize="12" Opacity="0.72"
                                TextTrimming="CharacterEllipsis"/>
-                    <Border Height="1" Margin="15,2,15,6" Background="#1AFFFFFF"/>
-                    <TextBlock x:Name="HintText" Margin="17,0,17,11" FontSize="11" Opacity="0.55"
+                    <Border Height="1" Margin="22,4,22,8" Background="#1AFFFFFF"/>
+                    <TextBlock x:Name="HintText" Margin="24,0,24,14" FontSize="11.5" Opacity="0.55"
                                Text="Enter 启动 · ↑ ↓ 选择 · Esc 关闭"/>
                 </StackPanel>
             </Grid>

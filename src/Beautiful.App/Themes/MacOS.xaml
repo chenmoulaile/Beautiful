@@ -35,6 +35,11 @@
             <DataTrigger Binding="{Binding Kind}" Value="Window">
                 <Setter Property="Visibility" Value="Visible"/>
             </DataTrigger>
+            <!-- 「一格 = 一个应用」合并后，固定项背后有在跑的窗口：它仍要亮运行点，
+                 但不能把 Kind 改成 Window（那会换掉右键菜单并随窗口关闭而消失）。 -->
+            <DataTrigger Binding="{Binding IsRunning}" Value="True">
+                <Setter Property="Visibility" Value="Visible"/>
+            </DataTrigger>
         </Style.Triggers>
     </Style>
     <Style x:Key="ThemeIndicatorBar" TargetType="Rectangle">

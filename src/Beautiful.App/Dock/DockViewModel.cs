@@ -297,20 +297,26 @@ public sealed class DockViewModel
     /// <summary>回收站图标的 shell 命名空间 id（启动路径是 shell: 形式，取图要用 ::{clsid} 形式）。</summary>
     private const string RecycleBinIconSource = "::{645FF040-5081-101B-9F08-00AA002F954E}";
 
-    /// <summary>访达常驻格：图标 = 内置矢量重绘（macOS 双色脸），点击由 DockWindow 打开自家访达。</summary>
+    /// <summary>
+    /// 访达常驻格：图标走 <c>MacIconCatalog</c> 的 finder.png（从真实 macOS 26 系统导出的官方
+    /// Finder.app 图标）。用户裁定项目自绘的 DockBuiltinIcons 是仿制品，一律不再使用。
+    /// </summary>
     private static DockItem CreateFinderItem()
         => new(Id: "builtin:finder",
                Label: "访达",
-               Icon: DockBuiltinIcons.Finder(),
+               Icon: null,
                Kind: DockItemKind.Finder,
                LaunchPath: Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
                IconSource: "builtin:finder");
 
-    /// <summary>启动台常驻格：图标 = 内置矢量重绘（银底斜向火箭），点击由 DockWindow 拉 App 的启动台。</summary>
+    /// <summary>
+    /// 启动台常驻格：图标走 pad.png（真实 macOS 26 的 Apps / Launchpad 图标，彩色应用网格 + 搜索条），
+    /// 也就是用户认可的「上一轮那个真启动台图标」的 1024px 官网原版。手绘火箭不再使用。
+    /// </summary>
     private static DockItem CreateLaunchpadItem()
         => new(Id: "builtin:launchpad",
                Label: "启动台",
-               Icon: DockBuiltinIcons.Launchpad(),
+               Icon: null,
                Kind: DockItemKind.Launchpad,
                LaunchPath: string.Empty,
                IconSource: "builtin:launchpad");
@@ -532,14 +538,51 @@ public sealed class DockViewModel
         // macOS Dock 首两格：访达 + 启动台（常驻功能格，与固定块之间不留分隔符——macOS 同款）
         semantic.Add(_finder); kinds.Add(_finder.Kind);
         semantic.Add(_launchpad); kinds.Add(_launchpad.Kind);
-        AddBlock(semantic, kinds, _pinned);
-        // alpha.24：窗口按状态分两块——运行中留在应用区（与固定应用混排，macOS 不在此分界），
-        // 已最小化的移到分隔符右侧的最小化区（在回收站之前）。
-        for (var i = 0; i < _windows.Count; i++)
+        // 一格 = 一个应用（真 macOS Dock 语义）：固定项与运行窗口按 exe 基名合并。
+        // 病根是跟踪器每窗一格：一个应用开三窗占三格，固定 + 运行又各占一格（两颗访达 / 两个 Chrome）。
+        // 规则本身在 Core 的 DockAppGrouper / DockAppKey（有单测），这里只把结果映射回 DockItem，
+        // 不动 _windows（它与 WindowTracker 的 CollectionChanged 下标对齐，删条目会打乱增量同步）。
+        // 固定清单里同一应用的重复条目（本机同时有 explorer.exe 与 File Explorer.lnk）只留第一格；
+        // 访达已经常驻 Dock 首格，固定区里再出现 explorer 也是重复。这不是静默删用户条目——
+        // 条目仍保存在 dock.json 里，只是不再为同一个应用重复画一颗图标（用户反馈「Dock 太冗长」）。
+        var seenPinnedKeys = new HashSet<string>(StringComparer.OrdinalIgnoreCase) { "explorer" };
+        var uniquePinned = new List<DockItem>(_pinned.Count);
+        foreach (var p in _pinned)
         {
-            if (_windows[i].Kind != DockItemKind.Window) continue;
-            semantic.Add(_windows[i]); kinds.Add(DockItemKind.Window);
+            var key = AppKeyOf(p);
+            if (key.Length > 0 && !seenPinnedKeys.Add(key)) continue;
+            uniquePinned.Add(p);
         }
+        var pinnedEntries = uniquePinned
+            .Select(p => new DockPinnedEntry(AppKeyOf(p), p.LaunchPath))
+            .ToList();
+        var windowEntries = _windows
+            .Where(w => w.Kind == DockItemKind.Window)
+            .Select(w => new DockWindowEntry(AppKeyOf(w),
+                new DockAppWindow(w.WindowHandle ?? IntPtr.Zero, w.Label, false)))
+            .ToList();
+        var cells = DockAppGrouper.Group(pinnedEntries, windowEntries);
+        for (var i = 0; i < cells.Count; i++)
+        {
+            var cell = cells[i];
+            if (i < uniquePinned.Count)
+            {
+                // Group 保证固定块在前且顺序与入参一致；窗归并进来的格子亮运行点。
+                var pinned = uniquePinned[i];
+                semantic.Add(cell.IsRunning ? pinned with { IsRunning = true } : pinned);
+                kinds.Add(pinned.Kind);
+                continue;
+            }
+            var head = cell.Head;
+            if (head is null) continue;
+            var window = _windows.FirstOrDefault(w => w.WindowHandle == head.Value.Handle);
+            if (window is null) continue;
+            semantic.Add(window);
+            kinds.Add(window.Kind);
+        }
+
+        // alpha.24：已最小化的窗口单独放在分隔符右侧的「最小化区」（回收站之前），
+        // 这是本版刻意的分区，不参与上面的按应用合并。
         for (var i = 0; i < _windows.Count; i++)
         {
             if (_windows[i].Kind != DockItemKind.MinimizedWindow) continue;
@@ -575,6 +618,17 @@ public sealed class DockViewModel
 
         for (var i = Items.Count - common - suffix; i > 0; i--) Items.RemoveAt(common);
         for (var i = common; i < target.Count - suffix; i++) Items.Insert(i, target[i]);
+    }
+
+    /// <summary>
+    /// 条目 → 应用分组键。目录固定项（macOS 堆栈）一律不参与合并：两个同名不同路径的目录
+    /// 并成一格，点一下就打开错文件夹；内置功能格由 <see cref="DockAppKey"/> 判为空键。
+    /// </summary>
+    private static string AppKeyOf(DockItem item)
+    {
+        if (item.Kind == DockItemKind.Pinned && Directory.Exists(item.LaunchPath))
+            return string.Empty;
+        return DockAppKey.Of(item.IconSource ?? item.LaunchPath);
     }
 
     private static void AddBlock(List<DockItem> target, List<DockItemKind> kinds, List<DockItem> block)

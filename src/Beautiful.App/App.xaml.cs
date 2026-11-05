@@ -528,14 +528,36 @@ public partial class App : Application
         if (_dock is null || _taskbar is null) return;
         if (_settingsWindow is { IsLoaded: true })
         {
-            _settingsWindow.Activate();
+            BringToFront(_settingsWindow);
             return;
         }
         var win = new Settings.SettingsWindow(_taskbar, _dock.Vm, _dock.MediaVm);
         win.Closed += (_, _) => _settingsWindow = null;
         _settingsWindow = win;
         win.Show();
+        // Windows 前台锁：只 Show() 时窗口可能被当前最大化的前台窗口压在下面——日志写着"已打开"，
+        // 屏幕上却一个窗口都没有，用户看到的就是"点了设置没反应"。临时置顶一次把 z-order 提到
+        // 前台，立刻恢复原值（不覆盖用户自己开的"保持置顶"），之后窗口不再常驻顶层。
+        BringToFront(win);
         Logger.Info("设置窗口已打开");
+    }
+
+    /// <summary>
+    /// 把窗口从"最大化窗口盖住"的处境里提到前台，且不改变它长期的置顶状态。
+    /// <para>Topmost 脉冲是绕开前台激活锁（<c>SetForegroundWindow</c> 对后台进程常直接失败）的
+    /// 最小手段：置 true 的那一刻 WPF 会立刻 <c>SetWindowPos(HWND_TOPMOST)</c>，随后恢复原值只会
+    /// 把它落回普通层，不会掉到那个最大化的窗口后面。</para>
+    /// </summary>
+    private static void BringToFront(System.Windows.Window window)
+    {
+        var wasTopmost = window.Topmost;
+        window.Topmost = true;
+        window.Activate();
+        if (window.WindowState == System.Windows.WindowState.Minimized)
+        {
+            window.WindowState = System.Windows.WindowState.Normal;
+        }
+        window.Topmost = wasTopmost;
     }
 
     /// <summary>

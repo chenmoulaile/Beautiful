@@ -22,7 +22,12 @@ namespace Beautiful.App.Dock;
 public sealed class IconBakedSourceConverter : IValueConverter
 {
     public object? Convert(object? value, Type targetType, object? parameter, CultureInfo culture)
-        => value is DockItem item ? IconBakeContext.Apply(item.IconSource, item.Icon) : null;
+    {
+        if (value is not DockItem item) return null;
+        // macOS Tahoe 图标优先：图标形状是"像不像 mac"里权重最高的一项，Windows 系统图标再清晰
+        // 也是 Windows 的形状。查不到对应 PNG 时一字不改地走原来的提取 + 主题烘焙链。
+        return MacIconCatalog.TryGet(item) ?? IconBakeContext.Apply(item.IconSource, item.Icon);
+    }
 
     /// <summary>单向绑定：写回不可能发生（Image.Source 在本模板里不是双向的）。</summary>
     public object? ConvertBack(object? value, Type targetType, object? parameter, CultureInfo culture)

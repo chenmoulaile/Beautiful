@@ -55,6 +55,8 @@ public partial class NotificationCenterWindow : Window
     private readonly NotificationService? _service;
     private readonly DispatcherTimer _clockTimer;
     private bool _positioned;
+    /// <summary>关闭流程是否已开始（见 Deactivated 处的二次 Close 防护）。</summary>
+    private bool _closing;
 
     public NotificationCenterWindow(NotificationService? service)
     {
@@ -99,13 +101,21 @@ public partial class NotificationCenterWindow : Window
                 _current = null;
             }
         };
-        Deactivated += (_, _) => Close();
+        Closing += (_, _) => _closing = true;
+        Deactivated += (_, _) =>
+        {
+            // 窗口进入关闭流程时还会收到一次 WM_ACTIVATE → Deactivated。此时再调 Close()
+            // 会撞 WPF 的 Window.VerifyNotClosing()，抛出 InvalidOperationException 并弹出
+            // 「发生界面异常」模态框（真机交互取证复现，堆栈指向本行）。收起路径必须幂等。
+            if (_closing) return;
+            Close();
+        };
         PreviewKeyDown += (_, e) =>
         {
             if (e.Key == Key.Escape)
             {
                 e.Handled = true;
-                Close();
+                if (!_closing) Close();
             }
         };
     }

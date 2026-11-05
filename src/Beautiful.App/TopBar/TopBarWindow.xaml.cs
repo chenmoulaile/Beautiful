@@ -510,23 +510,18 @@ public partial class TopBarWindow : AcrylicWindow
 
     private Button MakeLogoButton()
     {
-        // 原创圆形强调色标记（非 Apple 商标）：强调色圆底 + 白色 "B"，随主题变色（SetResourceReference）。
-        var mark = new Border
+        // 单色字标（原创，非 Apple 商标）：真 macOS 菜单栏左端是跟着条带文字色走的单色标记，
+        // 一整排图标里出现一块彩色圆底会把视线钉在那个亮点上，一眼就是 Windows 应用自己画的图标。
+        // 所以去掉圆底，只留一个跟随 ThemeTextPrimary 的字标，与右区那一套单色细线图标同一语言。
+        var mark = new TextBlock
         {
-            Width = 17,
-            Height = 17,
-            CornerRadius = new CornerRadius(8.5),
-            Child = new TextBlock
-            {
-                Text = "B",
-                FontSize = 11,
-                FontWeight = FontWeights.Bold,
-                Foreground = Brushes.White,
-                HorizontalAlignment = HorizontalAlignment.Center,
-                VerticalAlignment = VerticalAlignment.Center,
-            }
+            Text = "B",
+            FontSize = 14,
+            FontWeight = FontWeights.SemiBold,
+            HorizontalAlignment = HorizontalAlignment.Center,
+            VerticalAlignment = VerticalAlignment.Center,
         };
-        mark.SetResourceReference(Border.BackgroundProperty, "ThemeAccent");
+        mark.SetResourceReference(TextBlock.ForegroundProperty, "ThemeTextPrimary");
         var b = NewBarButton(mark);
         b.Margin = new Thickness(0, 0, 6, 0);
         b.Click += (_, _) => ShowMenuUnder(b, TopBarMenus.BeautifulMenu(_context));
@@ -766,7 +761,13 @@ public partial class TopBarWindow : AcrylicWindow
         {
             var result = await System.Threading.Tasks.Task.Run(() => _trayStripSource.Read());
             if (!IsLoaded) return;
-            _trayStripItems = result.Items;
+            // 24H2 的 XAML 岛不参与截屏、UIA 也拿不到位图，result.Items 常常全是「没有 Image」，
+            // 顶栏于是退化成一排应用名首字（"华 华"）。用 Windows 自己存的 IconSnapshot PNG
+            // 给「当前确实还活着」的每一格回填真像素；匹配不上/歧义/PNG 坏掉一律保持中性占位。
+            var backfill = await System.Threading.Tasks.Task.Run(
+                () => TrayIconSnapshot.BackfillAll(result.Items));
+            if (!IsLoaded) return;
+            _trayStripItems = backfill.Items;
             RenderTrayStrip();
             // 空读必须留痕：这台机器（24H2 + 任务栏被移出屏幕）上两路各自读到了什么，
             // 是"托盘条为什么是空的"的第一手判据——用户能提供的只有截图，截图里没有日志。
@@ -808,13 +809,22 @@ public partial class TopBarWindow : AcrylicWindow
         }
         else
         {
-            content = new TextBlock
+            // 取不到位图时**不再画应用名首字**："华"这类单字挂在 macOS 菜单栏里读起来就是缺字/乱码，
+            // 是「看起来像坏了」而不是「诚实的空态」。改成统一的中性单色轮廓（圆角窗口 + 标题线），
+            // 与右区那套单色细线状态图标同一笔画语言；应用名与取不到像素的原因仍完整写在 ToolTip。
+            var glyph = new System.Windows.Shapes.Path
             {
-                Text = string.IsNullOrWhiteSpace(item.Label) ? "·" : item.Label.Trim().Substring(0, 1),
-                FontSize = 12,
-                Opacity = 0.85,
+                Data = Geometry.Parse(
+                    "M 2,2 L 14,2 A 2,2 0 0 1 16,4 L 16,14 A 2,2 0 0 1 14,16 L 2,16 A 2,2 0 0 1 0,14 L 0,4 A 2,2 0 0 1 2,2 Z M 0,6 L 16,6"),
+                StrokeThickness = 1.2,
+                StrokeLineJoin = PenLineJoin.Round,
+                Stretch = Stretch.Uniform,
+                Width = 15,
+                Height = 15,
                 VerticalAlignment = VerticalAlignment.Center,
             };
+            glyph.SetResourceReference(System.Windows.Shapes.Path.StrokeProperty, "ThemeTextPrimary");
+            content = glyph;
         }
 
         var tile = NewBarButton(content);

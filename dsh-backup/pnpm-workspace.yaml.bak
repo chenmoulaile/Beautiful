@@ -1,0 +1,30 @@
+packages:
+  - .
+
+nodeLinker: hoisted
+autoInstallPeers: false
+allowBuilds:
+  protobufjs: false
+  koffi: false
+  cloudflared: true
+  cpu-features: true
+  ssh2: true
+  '@google/genai': true
+minimumReleaseAgeExclude:
+  - '@liustack/modlens@3.26.6'
+  - '@liustack/modsearch@5.10.6'
+  - '@michengai/dsh-codex-ui@1.1.26'
+  - '@michengai/dsh-im-connect@0.1.63'
+  - '@linxin666/dsh-remote-web-ui@0.4.5'
+  - '@xmanrui/dsh-im@4.35.1'
+  - billion-context@0.1.185 || 0.1.191 || 0.1.198 || 0.1.199
+  - '@linxin666/dsh-pet@0.4.5'
+  - '@michengai/dsh-agency-agents@1.0.8 || 1.0.13 || 1.0.20 || 1.2.1'
+  - '@opencode2dsh/dsh-plugin@0.3.10'
+  - '@michengai/dsh-pua@0.3.25 || 1.0.1'
+  - dsh-remote-web@0.7.0
+  - '@michengai/dsh-archive-manager@1.0.20 || 1.1.1'
+  - '@michengai/dsh-skills-manager@1.1.23 || 1.2.3 || 1.2.6'
+  - dsh-connect-workbuddy@4.6.4 || 4.7.0 || 4.8.1
+  - '@eghrhegpe/dsh-connect-qoder@0.6.0 || 0.7.0'
+  - dsh-vision-router@3.0.4
