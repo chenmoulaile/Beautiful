@@ -14,12 +14,16 @@ public sealed class MenuItemView
     /// <summary>稳定标识（调试/埋点用，可空串）。</summary>
     public string Id { get; init; } = string.Empty;
 
-    /// <summary>左侧图标列字形（Segoe Fluent Icons / Segoe MDL2 码点字符）；null = 留空保持对齐。</summary>
-    public string? Glyph { get; init; }
+    /// <summary>
+    /// 左侧图标列矢量几何（Symbols.xaml 的 SF-Symbols 风格单色描边几何，macOS 化 r4 起
+    /// 全面替代 Segoe Fluent Icons / MDL2 码点字形）；null = 留空保持对齐。
+    /// 调用方用 <c>(Geometry)Application.Current.FindResource("SymbolXxx")</c> 取值。
+    /// </summary>
+    public Geometry? GlyphGeometry { get; init; }
 
     /// <summary>
-    /// 左侧图标列位图（优先于 <see cref="Glyph"/>，用于"窗口"菜单展示真实窗口图标）。
-    /// null = 该列改渲染字形（或留空）。冻结的 BitmapSource 可跨弹层安全复用。
+    /// 左侧图标列位图（优先于 <see cref="GlyphGeometry"/>，用于"窗口"菜单展示真实窗口图标）。
+    /// null = 该列改渲染矢量几何（或留空）。冻结的 BitmapSource 可跨弹层安全复用。
     /// </summary>
     public ImageSource? Icon { get; init; }
 

@@ -16,7 +16,10 @@ using Run = System.Windows.Documents.Run;
 using Brush = System.Windows.Media.Brush;
 using FontFamily = System.Windows.Media.FontFamily;
 using Color = System.Windows.Media.Color;
+using FlowDirection = System.Windows.FlowDirection;   // UseWindowsForms 全局 using 与 Forms.FlowDirection 同名
 using TextBlock = System.Windows.Controls.TextBlock;
+using Grid = System.Windows.Controls.Grid;
+using ColumnDefinition = System.Windows.Controls.ColumnDefinition;
 using TextBox = System.Windows.Controls.TextBox;
 using Border = System.Windows.Controls.Border;
 using Brushes = System.Windows.Media.Brushes;
@@ -24,11 +27,14 @@ using Brushes = System.Windows.Media.Brushes;
 namespace Beautiful.App.Finder;
 
 /// <summary>
-/// Quick Look 预览卡（Phase 6-b 起步）：文本走排版文档预览（浅色/深色卡片 + Markdown 基本渲染）、
-/// 图片 / 媒体是真实预览，PDF 与未知类型走信息卡。
+/// Quick Look 预览卡（Phase 6-b 起步）：Markdown 走排版文档预览（浅色/深色纸卡 + 基本渲染），
+/// 其余文本/源码走 QuickLook 式代码卡（常暗圆角卡 + 等宽字 + 行号列），图片 / 媒体是真实预览，
+/// PDF 与未知类型走信息卡。
 /// <para>
-/// 窗口纪律与访达/设置一致：非分层窗口（AllowsTransparency 保持 false）+ WindowChrome + DWM 圆角，
-/// 保留 ClearType 与 DWM 阴影；CaptionHeight=0，标题条自绘拖动。空格 / Esc 关闭，
+/// 窗口纪律：分层窗口（AllowsTransparency=True）——真机 Win11 26300 实测非分层窗口整机黑屏，
+/// 只能走 Dock/顶栏同款分层路径（见 XAML 头注释）；圆角由根 Border 自绘、整窗投影由影板
+/// Border 的 DropShadowEffect 出，分层固有的灰阶抗锯齿取代 ClearType。
+/// CaptionHeight=0，标题条自绘拖动。空格 / Esc 关闭，
 /// <see cref="ShowFor"/> 是进程级单例：同一路径再按空格即关闭（macOS 的开关语义），
 /// 换成另一个路径则原地替换内容，不叠出第二块预览卡。
 /// </para>
@@ -60,6 +66,23 @@ public partial class QuickLookWindow : Window
     private static readonly SolidColorBrush DocMutedDark = FrozenBrush(0xFF, 0x9A, 0x9A, 0xA0);
     private static readonly SolidColorBrush DocCodeLight = FrozenBrush(0xFF, 0xEE, 0xEE, 0xF2);
     private static readonly SolidColorBrush DocCodeDark = FrozenBrush(0xFF, 0x14, 0x14, 0x18);
+
+    // 代码卡（非 Markdown 的文本/源码）用常暗配色，不随外观翻转：代码预览是"编辑器切片"而不是纸面文档，
+    // 浅色外观下同样深底浅字（Xcode/VS Code 深色代码块语义），与 Markdown 纸卡在视觉上区分开。
+    // 三支画刷全部冻结：翻页/换文件反复渲染时渲染线程可共享。
+    private static readonly SolidColorBrush CodeSurfaceDark = FrozenBrush(0xFF, 0x1B, 0x1B, 0x20);
+    private static readonly SolidColorBrush CodeInkDark = FrozenBrush(0xFF, 0xE4, 0xE4, 0xEA);
+    private static readonly SolidColorBrush CodeGutterDark = FrozenBrush(0xFF, 0x77, 0x77, 0x82);
+
+    /// <summary>代码卡最多铺的行数：64KB 上限内短行日志能拆出数万行，不设上限会把布局卡住（页脚注明）。</summary>
+    private const int MaxCodeLines = 2000;
+
+    /// <summary>代码卡行距：行号与正文同距，软折行只加高所在行。</summary>
+    private const double CodeLineHeight = 20;
+
+    /// <summary>两种内容形态的正文边距：Markdown 纸卡松（文档观感）、代码卡紧（编辑器观感）。</summary>
+    private static readonly Thickness MarkdownBodyMargin = new(34, 26, 34, 30);
+    private static readonly Thickness CodeBodyMargin = new(24, 18, 24, 22);
 
     private static SolidColorBrush FrozenBrush(byte a, byte r, byte g, byte b)
     {
@@ -256,11 +279,7 @@ public partial class QuickLookWindow : Window
         try
         {
             var preview = ReadTextPreview(path, MaxTextBytes);
-            RenderDocument(path, preview.Text);
-            if (preview.Truncated)
-            {
-                ShowFooter($"已截断：仅显示前 64 KB（{preview.EncodingName}）。");
-            }
+            RenderDocument(path, preview.Text, preview.Truncated, preview.EncodingName);
         }
         catch (Exception ex) when (IsReadFailure(ex))
         {
@@ -270,7 +289,7 @@ public partial class QuickLookWindow : Window
         }
     }
 
-    /// <summary>只有 Markdown 走结构化渲染；其余文本（日志/源码/json…）仍按行铺成等宽正文。</summary>
+    /// <summary>只有 Markdown 走纸面结构化渲染；其余文本（源码/日志/json…）走暗色代码卡。</summary>
     private static bool IsMarkdown(string path)
     {
         var ext = Path.GetExtension(path);
@@ -279,38 +298,54 @@ public partial class QuickLookWindow : Window
     }
 
     /// <summary>
-    /// 把纯文本铺成可读文档：外层圆角卡片按外观取浅色/深底色，正文逐行生成 TextBlock。
-    /// 不引入任何 Markdown/渲染库，只用 WPF 原生控件。
+    /// 把文本铺进预览卡：Markdown 走纸面文档排版（外观取浅色/深纸色）；其余文本走 QuickLook 式
+    /// 代码卡（常暗底 + 等宽 + 行号）。不引入任何 Markdown/渲染库，只用 WPF 原生控件。
+    /// 截断/行数上限的页脚说明在这里统一拼装——页脚只有一个 <see cref="ShowFooter"/> 出口。
     /// </summary>
-    private void RenderDocument(string path, string text)
+    private void RenderDocument(string path, string text, bool truncated, string encodingName)
     {
         var palette = CurrentPalette();
-        DocumentCard.Background = palette.Paper;
         DocumentBody.Children.Clear();
 
-        var lines = text.Replace("\r\n", "\n").Replace('\r', '\n').Split('\n');
+        var lines = SplitLines(text);
+        string? note;
         if (IsMarkdown(path))
         {
+            DocumentCard.Background = palette.Paper;
+            DocumentBody.Margin = MarkdownBodyMargin;
             RenderMarkdown(lines, palette);
+            note = truncated ? TruncationNote(encodingName) + "。" : null;
         }
         else
         {
-            RenderPlainText(lines, palette);
+            note = RenderCodeCard(lines, palette, truncated, encodingName);
         }
 
         if (DocumentBody.Children.Count == 0)
         {
+            // 空文件占位：代码卡上用行号灰，纸卡上用常规弱化色（同一段话随底色换墨色）。
+            var onCode = ReferenceEquals(DocumentCard.Background, CodeSurfaceDark);
             DocumentBody.Children.Add(new TextBlock
             {
                 Text = "（此文件为空）",
                 FontFamily = palette.TextFont,
                 FontSize = 14,
-                Foreground = palette.Muted
+                Foreground = onCode ? CodeGutterDark : palette.Muted
             });
         }
 
         DocumentCard.Visibility = Visibility.Visible;
+        if (note is not null)
+        {
+            ShowFooter(note);
+        }
     }
+
+    private static IReadOnlyList<string> SplitLines(string text)
+        => text.Replace("\r\n", "\n").Replace('\r', '\n').Split('\n');
+
+    private static string TruncationNote(string encodingName)
+        => $"已截断：仅显示前 64 KB（{encodingName}）";
 
     /// <summary>
     /// Markdown 基本渲染：# 标题、-/*/+ 列表、``` 代码块、空行留白，其余为段落；
@@ -374,28 +409,84 @@ public partial class QuickLookWindow : Window
         }
     }
 
-    /// <summary>非 Markdown 文本：等宽字体 + 放大字号 + 行距 + 折行，空行留白，不再黑底小字整块倒。</summary>
-    private void RenderPlainText(IReadOnlyList<string> lines, DocPalette p)
+    /// <summary>
+    /// 代码/普通文本：macOS QuickLook 式代码卡 —— 常暗圆角卡 + 等宽字 + 左侧行号列。
+    /// 行号列宽按"显示行数的位数"用 <see cref="MeasureAdvance"/> 实测（等宽字体位数定了列宽就定了），
+    /// 每个逻辑行是自己的 Grid 行：软折行只加高所在行，行号不会随折行错位；空行保留行号并占满行距。
+    /// 超过 <see cref="MaxCodeLines"/> 行只铺前 N 行，与 64KB 截断说明一起进页脚（返回 null 表示无说明）。
+    /// </summary>
+    private string? RenderCodeCard(IReadOnlyList<string> lines, DocPalette p, bool truncated, string encodingName)
     {
-        foreach (var line in lines)
-        {
-            if (line.Trim().Length == 0)
-            {
-                AddSpacer(10);
-                continue;
-            }
+        DocumentCard.Background = CodeSurfaceDark;
+        DocumentBody.Margin = CodeBodyMargin;
 
-            DocumentBody.Children.Add(new TextBlock
+        if (lines.Count == 1 && lines[0].Length == 0)
+        {
+            // 空文件：不铺行，交给 RenderDocument 的"（此文件为空）"占位（行数说明也无从谈起）。
+            return truncated ? TruncationNote(encodingName) + "。" : null;
+        }
+
+        var shown = Math.Min(lines.Count, MaxCodeLines);
+        // 列宽 = 末行行号的实测推进宽度 + 行号与正文之间的固定间距；数字全部等宽，量一位数即可外推。
+        var gutterWidth = MeasureAdvance(new string('0', shown.ToString(CultureInfo.InvariantCulture).Length),
+            p.MonoFont, 12) + 16;
+
+        for (var i = 0; i < shown; i++)
+        {
+            var row = new Grid { MinHeight = CodeLineHeight };
+            row.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(gutterWidth) });
+            row.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+
+            var number = new TextBlock
             {
-                Text = line,
+                Text = (i + 1).ToString(CultureInfo.InvariantCulture),
+                FontFamily = p.MonoFont,
+                FontSize = 12,
+                Foreground = CodeGutterDark,
+                TextAlignment = TextAlignment.Right,
+                LineHeight = CodeLineHeight,
+                VerticalAlignment = VerticalAlignment.Top
+            };
+
+            var content = new TextBlock
+            {
+                Text = lines[i],
                 FontFamily = p.MonoFont,
                 FontSize = 13,
-                Foreground = p.Ink,
+                Foreground = CodeInkDark,
                 TextWrapping = TextWrapping.Wrap,
-                LineHeight = 20,
-                Margin = new Thickness(0, 0, 0, 2)
-            });
+                LineHeight = CodeLineHeight,
+                VerticalAlignment = VerticalAlignment.Top
+            };
+
+            Grid.SetColumn(number, 0);
+            Grid.SetColumn(content, 1);
+            row.Children.Add(number);
+            row.Children.Add(content);
+            DocumentBody.Children.Add(row);
         }
+
+        var notes = new List<string>(2);
+        if (lines.Count > MaxCodeLines)
+        {
+            notes.Add($"仅显示前 {MaxCodeLines} 行（共 {lines.Count} 行）");
+        }
+
+        if (truncated)
+        {
+            notes.Add(TruncationNote(encodingName));
+        }
+
+        return notes.Count == 0 ? null : string.Join("；", notes) + "。";
+    }
+
+    /// <summary>用指定字体实测一段文本的推进宽度（DIP），行号列宽这类确定性度量用；值随 DPI 缩放。</summary>
+    private double MeasureAdvance(string text, FontFamily font, double size)
+    {
+        var typeface = new Typeface(font, FontStyles.Normal, FontWeights.Normal, FontStretches.Normal);
+        var formatted = new FormattedText(text, CultureInfo.InvariantCulture, FlowDirection.LeftToRight,
+            typeface, size, Brushes.Transparent, VisualTreeHelper.GetDpi(this).PixelsPerDip);
+        return formatted.Width;
     }
 
     /// <summary>按 MacColorScheme 取浅色/深色卡片配色；字体与强调色也来自主题字典。</summary>
@@ -1019,7 +1110,10 @@ public partial class QuickLookWindow : Window
         base.OnClosed(e);
     }
 
-    /// <summary>WindowStyle=None 后显式请求 DWM 圆角（非分层窗口也能被 DWM 裁剪，ClearType 不受影响）。</summary>
+    /// <summary>
+    /// 显式请求 DWM 圆角。分层窗口（AllowsTransparency=True）不参与 DWM 圆角合成，此调用当前
+    /// 是空操作，圆角由根 Border 自绘（见 XAML 头注释）；保留无害，且窗口形态若改回非分层仍生效。
+    /// </summary>
     protected override void OnSourceInitialized(EventArgs e)
     {
         base.OnSourceInitialized(e);

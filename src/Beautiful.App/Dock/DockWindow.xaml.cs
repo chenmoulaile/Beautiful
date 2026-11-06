@@ -138,8 +138,37 @@ public partial class DockWindow : AcrylicWindow
     /// <summary>自动隐藏轮询（80ms：够跟手，又不会让 CPU 有感知）。</summary>
     private System.Windows.Threading.DispatcherTimer? _autoHideTimer;
 
-    /// <summary>光标离开 Dock 的时刻（UTC）；未离开为 null。</summary>
-    private DateTime? _cursorLeftAt;
+    /// <summary>
+    /// 条件隐藏档（smart/fullscreen/maximized/edge/modifier/desktop）的轮询，与自动隐藏同一节奏。
+    /// 每拍采集事实（光标/前台/最大化/修饰键）→ Core <see cref="DockHideModeDecider"/> 判定 → 滑下/滑回；
+    /// auto 档不走这里（它有自己的延迟/唤出状态机）。
+    /// </summary>
+    private System.Windows.Threading.DispatcherTimer? _conditionTimer;
+
+    /// <summary>当前生效的隐藏模式（规范化串；Core <see cref="DockHideModes.Known"/> 白名单内）。</summary>
+    private string _hideMode = "off";
+
+    /// <summary>双击边缘切换档（edge）的状态：true = 已被双击唤出，false = 只留缝。</summary>
+    private bool _edgeToggleVisible;
+
+    /// <summary>本 Dock 所在显示器的句柄（每屏覆盖配置解析与"最大化在本屏"判据用）。</summary>
+    private IntPtr _monitorHandle;
+
+    /// <summary>每屏覆盖配置的解析结果与已生效值（Core <see cref="DockScreenPlan"/>，null = 尚未解析/已消费）。</summary>
+    private DockScreenPlan? _appliedPlan;
+    private DockScreenPlan? _pendingPlan;
+
+    /// <summary>
+    /// 隐藏延迟状态机（Core <see cref="AutoHideDelayState"/>，替代旧的 _cursorLeftAt + 硬编码 500ms）：
+    /// 光标离开满设置项 <c>DockAutoHideDelayMs</c> 才滑下。判定在 Core，时间由 TickAutoHide 传入。
+    /// </summary>
+    private readonly AutoHideDelayState _hideDelay = new();
+
+    /// <summary>
+    /// 唤出状态机（Core <see cref="AutoHideRevealState"/>）：Dock 已滑下后按设置项
+    /// <c>DockAutoHideReveal</c>（touch/dwell/double）判定这次触底要不要滑回。默认 touch = 历史行为。
+    /// </summary>
+    private readonly AutoHideRevealState _reveal = new();
 
     /// <summary>滑下去后仍露在屏幕内的像素高度。</summary>
     private const int AutoHideSliverPixels = 4;
@@ -411,6 +440,9 @@ public partial class DockWindow : AcrylicWindow
         EnsureNativeMaterial();
         ApplyTheme(ThemeManager.Current);
         ThemeManager.ThemeChanged += OnThemeChanged;
+        // 图标主题覆盖（编辑器/导入主题包）变更 → 重建条目容器让图标绑定按新覆盖重取（与 ThemeChanged
+        // 同一条时序纪律：句柄已生成才订阅，OnClosed 对称解绑；通知链在 IconThemeService.NotifyChanged）。
+        IconThemeService.Changed += OnIconThemeChanged;
         // 策略重放订阅与上面的 ThemeChanged 同一条时序纪律：句柄已生成、构造已完成，
         // OnClosed 里有对称的一句解绑（半构造实例绝不挂在宿主事件上）。
         if (_taskbar is not null) _taskbar.PolicyApplied += OnTaskbarPolicyApplied;
@@ -578,7 +610,8 @@ public partial class DockWindow : AcrylicWindow
     }
 
     /// <summary>
-    /// 自动隐藏（P3-T5 隐藏模式之一）：光标不在 Dock 上 500ms 就滑下去只留 4px，触底立即滑回。
+    /// 自动隐藏（P3-T5 隐藏模式之一）：光标不在 Dock 上满 <c>DockAutoHideDelayMs</c>（默认 500ms）
+    /// 就滑下去只留 4px；唤回方式按 <c>DockAutoHideReveal</c>（touch/dwell/double，默认触底即回）。
     /// <para>
     /// 【为什么保留 AppBar 预留带】释放预留带要 ABM_REMOVE + 重注册，会触发 shell 重排；
     /// 本机还叠着任务栏策略（隐藏/自动隐藏）与顶栏，反复注册最容易把布局搞乱。
@@ -598,66 +631,127 @@ public partial class DockWindow : AcrylicWindow
             _autoHideTimer?.Stop();
             _autoHideTimer = null;
             _autoHideHidden = false;
+            _hideDelay.Reset();
+            _reveal.Reset();
             AssertWindowRect();
             Logger.Info("Dock 自动隐藏已关闭");
             return;
         }
 
+        // 唤出门按当前设置换模式（touch = 历史行为）；换模式内部会 Reset，防旧模式的会话残留串味。
+        _reveal.SetMode(AutoHidePlan.RevealModeOf(SettingsService.Current.DockAutoHideReveal));
+        _hideDelay.Reset();
         _autoHideTimer ??= new System.Windows.Threading.DispatcherTimer(
             TimeSpan.FromMilliseconds(80), System.Windows.Threading.DispatcherPriority.Background,
             (_, _) => TickAutoHide(), Dispatcher);
         _autoHideTimer.Start();
-        Logger.Info("Dock 自动隐藏已开启（光标离开 500ms 后滑下，触底滑回）");
+        Logger.Info($"Dock 自动隐藏已开启（光标离开 {SettingsService.Current.DockAutoHideDelayMs}ms 后滑下，" +
+                    $"唤出方式 {SettingsService.Current.DockAutoHideReveal}）");
     }
 
     /// <summary>
-    /// 切换到指定隐藏模式（P3-T5）：<c>off</c> 常显、<c>auto</c> 自动隐藏、<c>dim</c> 半透明。
-    /// 三种模式互斥，切换时先把上一种的副作用还原（不透明恢复、窗口归位）。
+    /// 设置页改动唤出方式后的即时生效入口：只换唤出门的模式，不动隐藏状态与 AppBar。
+    /// 延迟项不需要专门入口——TickAutoHide 每拍读 Current，下一拍自然按新值生效。
+    /// </summary>
+    public void ApplyAutoHideReveal(string? reveal)
+    {
+        var mode = AutoHidePlan.RevealModeOf(reveal);
+        _reveal.SetMode(mode);
+        Logger.Info($"Dock 唤出方式：{mode}");
+    }
+
+    /// <summary>
+    /// 切换到指定隐藏模式（对标 MyDockFinder 共 9 档，白名单与判定在 Core
+    /// <see cref="DockHideModes"/>/<see cref="DockHideModeDecider"/>）：
+    /// <c>off</c> 总是显示、<c>auto</c> 自动隐藏（含可调延迟与 touch/dwell/double 唤出——
+    /// "悬停触发延迟（延迟可调）"落在这档）、<c>smart</c> 智能隐藏（窗口遮挡才让位）、
+    /// <c>fullscreen</c> 全屏应用时隐藏、<c>maximized</c> 窗口最大化时隐藏、<c>edge</c> 双击边缘切换、
+    /// <c>modifier</c> 按住修饰键临时显示、<c>desktop</c> 仅桌面时显示、<c>dim</c> 半透明。
+    /// 模式互斥，切换时先把上一种的副作用还原（不透明恢复、窗口归位、状态清零）。
     /// </summary>
     public void ApplyHideMode(string mode, bool persist = true)
     {
-        var normalized = (mode ?? "off").Trim().ToLowerInvariant() switch
-        {
-            "auto" => "auto",
-            "dim" => "dim",
-            _ => "off"
-        };
-
+        var normalized = DockHideModes.CanonicalOf(mode);
         if (persist)
         {
             SettingsService.UpdateAndSave(SettingsService.Current with
             {
                 DockHideMode = normalized,
-                DockAutoHide = normalized == "auto"       // 旧布尔项跟随新模式，避免两处不一致
+                DockAutoHide = normalized == DockHideModes.Auto   // 旧布尔项跟随新模式，避免两处不一致
             });
         }
 
-        // 先回到"常显 + 不透明"，再按新模式生效：切模式不该留下上一种的残影。
-        Opacity = 1.0;
-        ApplyAutoHide(normalized == "auto", persist: false);
+        var kind = DockHideModes.KindOf(normalized);
+        _hideMode = normalized;
 
-        if (normalized == "dim")
+        // 先回到"常显 + 不透明 + 窗口归位"，再按新模式生效：切模式不该留下上一种的残影。
+        // edge 档的切换状态随模式切换清零（重新进入从"藏"起步，双击才唤出）。
+        Opacity = 1.0;
+        _edgeToggleVisible = false;
+        ApplyAutoHide(kind == DockHideModeKind.AutoHide, persist: false);
+
+        StopDimTimer();
+        StopConditionTimer();
+        switch (kind)
         {
-            _dimTimer ??= new System.Windows.Threading.DispatcherTimer(
-                TimeSpan.FromMilliseconds(120), System.Windows.Threading.DispatcherPriority.Background,
-                (_, _) => TickDim(), Dispatcher);
-            _dimTimer.Start();
+            case DockHideModeKind.Dim:
+                StartDimTimer();
+                break;
+
+            // 条件档共用一只轮询：每拍采事实 → Core 判定 → 滑下/滑回。
+            case DockHideModeKind.Smart:
+            case DockHideModeKind.Fullscreen:
+            case DockHideModeKind.Maximized:
+            case DockHideModeKind.EdgeToggle:
+            case DockHideModeKind.ModifierHold:
+            case DockHideModeKind.DesktopOnly:
+                StartConditionTimer();
+                break;
         }
-        else
-        {
-            _dimTimer?.Stop();
-            _dimTimer = null;
-        }
+
+        // 双击边缘档需要一条实底可落双击（滑下后窗口其余部分全是点击穿透区），其余模式不占命中。
+        EdgeHitStrip.Visibility = kind == DockHideModeKind.EdgeToggle && DockEdge == "bottom"
+            ? Visibility.Visible
+            : Visibility.Collapsed;
 
         Logger.Info($"Dock 隐藏模式：{normalized}");
     }
 
     private System.Windows.Threading.DispatcherTimer? _dimTimer;
 
-    /// <summary>半透明模式：光标不在 Dock 上时降到 45%，移上去立刻回 100%。</summary>
+    private void StartDimTimer()
+    {
+        _dimTimer ??= new System.Windows.Threading.DispatcherTimer(
+            TimeSpan.FromMilliseconds(120), System.Windows.Threading.DispatcherPriority.Background,
+            (_, _) => TickDim(), Dispatcher);
+        _dimTimer.Start();
+    }
+
+    private void StopDimTimer()
+    {
+        _dimTimer?.Stop();
+        _dimTimer = null;
+    }
+
+    private void StartConditionTimer()
+    {
+        _conditionTimer ??= new System.Windows.Threading.DispatcherTimer(
+            TimeSpan.FromMilliseconds(80), System.Windows.Threading.DispatcherPriority.Background,
+            (_, _) => TickConditionHide(), Dispatcher);
+        _conditionTimer.Start();
+    }
+
+    private void StopConditionTimer()
+    {
+        _conditionTimer?.Stop();
+        _conditionTimer = null;
+    }
+
+    /// <summary>半透明模式：光标不在 Dock 上时降到 45%，移上去立刻回 100%。
+    /// 仅底部停靠生效——竖排面板从未更新 _screenRect（那是底部 AppBar 的命中基准），拿它判"在不在 Dock 上"必然错。</summary>
     private void TickDim()
     {
-        if (_closing || !NativeMethods.GetCursorPos(out var cursor))
+        if (_closing || DockEdge != "bottom" || !NativeMethods.GetCursorPos(out var cursor))
         {
             return;
         }
@@ -673,7 +767,9 @@ public partial class DockWindow : AcrylicWindow
 
     private void TickAutoHide()
     {
-        if (_closing || !_autoHide || !NativeMethods.GetCursorPos(out var cursor))
+        // 竖排面板（左右停靠）不参与隐藏：它的落位不经 _screenRect/_windowTarget（底部 AppBar 专用基准），
+        // 在这里判"光标在不在"必然拿旧矩形算错。实验版左右停靠本就声明无隐藏语义。
+        if (_closing || !_autoHide || DockEdge != "bottom" || !NativeMethods.GetCursorPos(out var cursor))
         {
             return;
         }
@@ -681,11 +777,14 @@ public partial class DockWindow : AcrylicWindow
         // 命中判据用窗口矩形（含顶部放大余量）：光标在放大后的图标上也算"在 Dock 上"。
         var inside = cursor.X >= _screenRect.Left && cursor.X <= _screenRect.Right
                      && cursor.Y >= _screenRect.Top && cursor.Y <= _screenRect.Bottom;
+        var now = Environment.TickCount64;
 
         if (_autoHideHidden)
         {
-            // 触底（或已滑出的那条缝）立即滑回：留 2px 容差，鼠标贴边的手感不需要精确到像素
-            if (cursor.Y >= _screenRect.Bottom - AutoHideSliverPixels - 2 || inside)
+            // 触底命中区与历史一致（留 2px 容差，鼠标贴边的手感不需要精确到像素）；
+            // 要不要立即滑回交给唤出门：touch=触底即回，dwell=停留 300ms，double=二次触发。
+            var hit = cursor.Y >= _screenRect.Bottom - AutoHideSliverPixels - 2 || inside;
+            if (_reveal.Update(hit, now))
             {
                 ShowFromAutoHide();
             }
@@ -693,14 +792,7 @@ public partial class DockWindow : AcrylicWindow
             return;
         }
 
-        if (inside)
-        {
-            _cursorLeftAt = null;
-            return;
-        }
-
-        _cursorLeftAt ??= DateTime.UtcNow;
-        if ((DateTime.UtcNow - _cursorLeftAt.Value).TotalMilliseconds >= 500)
+        if (_hideDelay.Update(inside, now, SettingsService.Current.DockAutoHideDelayMs))
         {
             HideToAutoHide();
         }
@@ -717,7 +809,8 @@ public partial class DockWindow : AcrylicWindow
         }
 
         _autoHideHidden = true;
-        _cursorLeftAt = null;
+        _hideDelay.Reset();
+        _reveal.Reset();
         var top = _windowTarget.Bottom - AutoHideSliverPixels;
         NativeMethods.SetWindowPos(_hwnd, IntPtr.Zero, _windowTarget.Left, top,
             _windowTarget.Width, _windowTarget.Height,
@@ -733,9 +826,154 @@ public partial class DockWindow : AcrylicWindow
         }
 
         _autoHideHidden = false;
-        _cursorLeftAt = null;
+        _hideDelay.Reset();
+        _reveal.Reset();
         AssertWindowRect();
         Logger.Info("Dock 自动隐藏：滑回");
+    }
+
+    // ---------- 条件隐藏档（smart/fullscreen/maximized/edge/modifier/desktop） ----------
+
+    /// <summary>
+    /// 条件档的每拍判定：这里<b>只做 Win32 取值与落地</b>（光标、前台、IsZoomed、修饰键），
+    /// "这些事实意味着该不该藏"全在 Core <see cref="DockHideModeDecider"/>（纯函数，单测穷举）。
+    /// 隐藏/还原复用自动隐藏的同一对原语（<see cref="HideToAutoHide"/>/<see cref="ShowFromAutoHide"/>），
+    /// 于是 _autoHideHidden 的几何护栏（AssertWindowRect/PositionAsAppBar 不拽回）对两种来源一致生效。
+    /// </summary>
+    private void TickConditionHide()
+    {
+        // 竖排面板不参与隐藏（同 TickAutoHide 的理由）；窗口未定位过时不判（没有可依据的矩形）。
+        if (_closing || DockEdge != "bottom" || !NativeMethods.GetCursorPos(out var cursor))
+        {
+            return;
+        }
+
+        var inside = cursor.X >= _screenRect.Left && cursor.X <= _screenRect.Right
+                     && cursor.Y >= _screenRect.Top && cursor.Y <= _screenRect.Bottom;
+        // 触底命中区与自动隐藏唤出同口径（留 2px 容差）：条件档藏下后用户贴边仍能唤回。
+        var atEdge = inside || cursor.Y >= _screenRect.Bottom - AutoHideSliverPixels - 2;
+
+        // 前台事实：与全屏避让同一个取值源（FullscreenProbe，只读 4~6 个查表式 API，80ms 轮询可承受）。
+        ForegroundWindow? foreground = null;
+        var maximizedOnDockMonitor = false;
+        var desktopOrNone = true;
+        if (FullscreenProbe.Read() is { } fg)
+        {
+            foreground = fg;
+            desktopOrNone = !fg.IsEligible || fg.IsShellOrDesktop;
+            if (fg.IsEligible && NativeMethods.IsZoomed(fg.Handle) && _monitorHandle != IntPtr.Zero)
+            {
+                // "窗口最大化时隐藏"只认 Dock 所在这块屏上的最大化（副屏最大化与本屏无关）。
+                maximizedOnDockMonitor = NativeMethods.MonitorFromWindow(
+                    fg.Handle, NativeMethods.MonitorDefaultToNearest) == _monitorHandle;
+            }
+        }
+
+        var decision = DockHideModeDecider.Evaluate(new DockHideFacts(
+            DockHideModes.KindOf(_hideMode),
+            DockBandPhysical(),
+            _monitorRect,
+            foreground,
+            maximizedOnDockMonitor,
+            desktopOrNone,
+            IsModifierHeld(SettingsService.Current.DockModifierKey),
+            _edgeToggleVisible,
+            inside,
+            atEdge));
+
+        if (decision == DockHideDecision.Hidden)
+        {
+            HideToAutoHide();
+        }
+        else if (decision == DockHideDecision.Visible && _autoHideHidden)
+        {
+            ShowFromAutoHide();
+        }
+        // Dimmed 不属于条件档的取值域（Dim 是独立模式）；万一出现按"不动"处理，下一拍重判。
+    }
+
+    /// <summary>可见面板带的物理矩形（窗口矩形减去顶部放大余量）：智能隐藏判"窗口盖住 Dock"的基准。
+    /// 与 AppBar 上报的预留带同源（<see cref="VisiblePanelDip"/> × 本屏缩放），不是整个窗口矩形。</summary>
+    private PhysicalRect DockBandPhysical()
+    {
+        if (_windowTarget.Width <= 0 || _windowTarget.Height <= 0) return default;
+        var scale = _monitorScale is { } s && s > 0 ? s : 1.0;
+        var panelPx = Math.Min((int)Math.Round(VisiblePanelDip() * scale), _windowTarget.Height);
+        return new PhysicalRect(_windowTarget.Left, _windowTarget.Bottom - panelPx,
+                                _windowTarget.Right, _windowTarget.Bottom);
+    }
+
+    /// <summary>临时显示修饰键此刻是否按住（左右键都算：用户不区分 L/R）。读异步键盘状态，无副作用。</summary>
+    private static bool IsModifierHeld(string key)
+    {
+        var (left, right) = key switch
+        {
+            "alt" => (NativeMethods.VkLMenu, NativeMethods.VkRMenu),
+            "shift" => (NativeMethods.VkLShift, NativeMethods.VkRShift),
+            "win" => (NativeMethods.VkLWin, NativeMethods.VkRWin),
+            _ => (NativeMethods.VkLControl, NativeMethods.VkRControl),
+        };
+        return (NativeMethods.GetAsyncKeyState(left) & 0x8000) != 0
+               || (NativeMethods.GetAsyncKeyState(right) & 0x8000) != 0;
+    }
+
+    /// <summary>
+    /// 双击边缘切换（edge 档）：双击 Dock 残留的边缘条带（滑下后 <see cref="EdgeHitStrip"/> 是窗口里
+    /// 唯一可命中的实底）或面板本体，在"显示 ↔ 只留缝"之间翻转。状态由本窗口持有，
+    /// 下一拍条件轮询按 <see cref="DockHideFacts.EdgeToggleVisible"/> 落地。
+    /// </summary>
+    protected override void OnPreviewMouseLeftButtonDown(MouseButtonEventArgs e)
+    {
+        base.OnPreviewMouseLeftButtonDown(e);
+        if (_hideMode != DockHideModes.Edge || DockEdge != "bottom" || e.ClickCount != 2) return;
+        _edgeToggleVisible = !_edgeToggleVisible;
+        if (_edgeToggleVisible) ShowFromAutoHide();
+        else HideToAutoHide();
+        e.Handled = true;
+        Logger.Info($"Dock 双击边缘切换：{(_edgeToggleVisible ? "显示" : "隐藏")}");
+    }
+
+    // ---------- 每显示器覆盖配置（对标 MyDockFinder 多屏；schema/解析在 Core DockMonitorProfiles） ----------
+
+    /// <summary>
+    /// 条带落位定下"在哪块屏"之后解析该屏的覆盖计划：序号精确匹配优先、主屏键其次、
+    /// 无匹配逐字段回落全局（单屏机器解析结果 == 全局值，行为零回归）。经 Dispatcher.Background
+    /// 落地——OnSourceInitialized 末尾还有全局的 ApplyHideMode/ApplyEdge 兜底初始化，
+    /// 每屏覆盖必须排在它们之后才能赢。
+    /// </summary>
+    private void QueueScreenPlanResolve(IntPtr monitor)
+    {
+        if (MonitorGeometry.Identify(monitor) is not { } identity) return;   // 拔屏瞬间：保持现有计划
+        var s = SettingsService.Current;
+        _pendingPlan = DockMonitorProfiles.Resolve(s.DockMonitorProfiles, identity.Index, identity.IsPrimary,
+            s.DockHideMode, s.DockEdge, s.DockIconSize);
+        Dispatcher.BeginInvoke(ApplyPendingScreenPlan, DispatcherPriority.Background);
+    }
+
+    /// <summary>把解析好的每屏计划落地（幂等：与已生效值相同即跳过）。只动运行态，不写设置文件。</summary>
+    private void ApplyPendingScreenPlan()
+    {
+        if (_closing || _pendingPlan is not { } plan) return;
+        _pendingPlan = null;
+        var previous = _appliedPlan;
+        if (previous is { } applied && applied == plan) return;
+        _appliedPlan = plan;
+
+        // 三项覆盖各自只在与当前值不同时落地，避免 ApplyEdge/ApplyHideMode 的重注册副作用空转。
+        if (plan.Edge != DockEdge)
+        {
+            ApplyEdge(plan.Edge, persist: false);
+        }
+        if (plan.HideMode != _hideMode)
+        {
+            ApplyHideMode(plan.HideMode, persist: false);   // 每屏自动隐藏开关只扳动 off↔auto（Core 规则）
+        }
+        ApplySurfaceLayoutParams();
+        Surface.Refresh();
+        // 图标尺寸覆盖会改面板高 → AppBar 预留带必须跟着重新协商（边变化的情形 ApplyEdge 自己已重排）。
+        // 防抖合并；重排里的再解析与本计划相等即跳过，不会来回振荡。
+        if (previous is { } priorPlan && priorPlan.IconSize != plan.IconSize) ScheduleReposition();
+        Logger.Info($"Dock 每屏计划生效：边={plan.Edge} 隐藏={plan.HideMode} 图标={plan.IconSize}（覆盖解析完成，全局设置未改写）");
     }
 
     /// <summary>
@@ -776,6 +1014,23 @@ public partial class DockWindow : AcrylicWindow
     // ---------- 主题引擎（Task 13） ----------
 
     private void OnThemeChanged(ThemeDefinition theme) => ApplyTheme(theme);
+
+    /// <summary>
+    /// 图标主题覆盖变更（编辑器改图 / 导入主题包 / 恢复默认）：缓存已由 <see cref="IconThemeService"/>
+    /// 在通知前清空（MacIconCatalog + IconBakeContext），这里走既有的「重建条目容器」出口——
+    /// 模板重实例化 → 图标绑定重新求值 → 新图标立即上屏，不重启（与图标尺寸变更同一出口）。
+    /// </summary>
+    private void OnIconThemeChanged()
+    {
+        if (_closing) return;
+        if (!Dispatcher.CheckAccess())
+        {
+            Dispatcher.BeginInvoke(OnIconThemeChanged);
+            return;
+        }
+        Surface.RebindIconContainers();
+        Surface.Refresh();
+    }
 
     /// <summary>
     /// 主题切换落地：窗口级底色策略 + 间距参数；放大开关与 MaxScale 由动画/悬停路径
@@ -849,7 +1104,8 @@ public partial class DockWindow : AcrylicWindow
     {
         var s = SettingsService.Current;
         var theme = ThemeManager.Current;
-        var icon = (double)s.DockIconSize;
+        // 图标尺寸：有已解析的每屏计划用计划值（无覆盖时 == 全局值），否则全局设置。
+        var icon = (double)(_appliedPlan?.IconSize ?? s.DockIconSize);
         Surface.IconSize = icon;
         Surface.Spacing = theme.ItemSpacing;
         // 行内余量（主题 DockRowInsetDip）：面板贴不贴图标由它决定，写死 20 时三主题都是"半空黑框"。
@@ -979,6 +1235,10 @@ public partial class DockWindow : AcrylicWindow
     {
         ApplySurfaceLayoutParams();
         Surface.Refresh();
+        // 每屏覆盖配置要跟着全局设置重解析。不能只等 ScheduleReposition → PositionAsAppBar：
+        // 若 Dock 正因覆盖而竖排（AppBar 未注册），那条路径会早退，全局改动（如"恢复默认"）
+        // 就再也传不到运行态。这里主动重解析；底部模式下的重复解析幂等（计划相等即跳过）。
+        if (_monitorHandle != IntPtr.Zero) QueueScreenPlanResolve(_monitorHandle);
         ScheduleReposition();
     }
 
@@ -1027,6 +1287,7 @@ public partial class DockWindow : AcrylicWindow
         _repositionDebounce?.Stop();                 // 作废挂起的条带重排（OnClosing 后不再 ABM_SETPOS）
         _iconRebindDebounce?.Stop();                 // 作废挂起的图标重烘（OnClosing 后不再重建可视树）
         _previewDwell?.Stop();                       // 作废挂起的预览驻留
+        StopConditionTimer();                        // 作废条件隐藏轮询（条件档判定不再跑）
         FluentMenu.CloseCurrent();                   // 关掉在显右键菜单（v3.1：菜单里有"结束任务/清空回收站"，
                                                      // 重载 Dock 后孤儿弹层不该还能点到旧快照上的破坏性动作）
         _preview?.Dispose();                         // 注销缩略图句柄 + 销毁宿主窗口（Task 13，必走，防句柄泄漏）
@@ -1089,6 +1350,7 @@ public partial class DockWindow : AcrylicWindow
     protected override void OnClosed(EventArgs e)
     {
         ThemeManager.ThemeChanged -= OnThemeChanged;
+        IconThemeService.Changed -= OnIconThemeChanged;
         _nativeMaterial?.Dispose();
         _nativeMaterial = null; // 解除主题订阅，防止闭包引用已关闭窗口
         if (_taskbar is not null) _taskbar.PolicyApplied -= OnTaskbarPolicyApplied;
@@ -1098,6 +1360,7 @@ public partial class DockWindow : AcrylicWindow
         _progress = null;
         _autoHideTimer?.Stop();
         _autoHideTimer = null;
+        StopConditionTimer();
         _minTilesTimer?.Stop();
         _minTilesTimer = null;
         _minTiles?.Dispose();
@@ -1198,15 +1461,22 @@ public partial class DockWindow : AcrylicWindow
     private void PositionAsAppBar()
     {
         if (!_appbarRegistered) return;
+        if (_autoHideHidden) return;   // 自动隐藏中：条带结算（ScheduleHideSettle 的 T+0.8s/T+3s）与策略重放
+                                       // 都走这里——真机验收 r4 实测它们在滑下后 1-2s 内把 Dock 拽回全高
+                                       // （日志有"滑下（露 4px）"、屏幕上却始终完整 Dock）。几何重协商留给
+                                       // 滑回路径（ShowFromAutoHide → AssertWindowRect），隐藏期一律不写窗口矩形。
         var target = MonitorGeometry.ForEdge(_hwnd, StripEdge.Bottom, VisiblePanelDip(), StripHeadroomDip(),
                                              SettingsService.Current.DockMonitor);
         if (target is null) return;   // 显示器取不到（拔屏瞬间）：保持上次几何，不写非法矩形
         var t = target.Value;
         _monitorRect = t.MonitorRect;                       // 媒体面板水平钳制要用**本屏**左右缘
+        _monitorHandle = t.Monitor;                         // 每屏覆盖配置解析与"最大化在本屏"判据用
         // v3 T6：本屏有效缩放同时是图标烘焙的 DPI 输入。换屏 / 改缩放 / 拔屏都会重走这里，
         // 于是这一处就是"DPI 变了就重烘"的唯一入口（Configure 内部比对，值没变就零动作）。
         _monitorScale = t.DpiScale;
         ScheduleIconRebind();
+        // Dock 落定了屏 → 解析该屏的覆盖配置（边/自动隐藏/图标尺寸；无覆盖 == 全局，零回归）。
+        QueueScreenPlanResolve(t.Monitor);
         var panelH = t.Reserve.Height;                        // 预留带高（上报 shell，决定工作区）
         var headroomH = t.Window.Height - t.Reserve.Height;   // 向上越界生长的透明余量（不占工作区）
 
@@ -1454,7 +1724,9 @@ public partial class DockWindow : AcrylicWindow
         var views = new List<MenuItemView>
         {
             // Phase 6-c 互通：目录交给自家访达（与 macOS"在访达中显示"一致），文件仍走系统关联打开
-            new() { Id = "stack:open", Label = "在访达中打开", Glyph = "\uE8B7", Invoke = () => OpenInFinder(item.LaunchPath) },
+            new() { Id = "stack:open", Label = "在访达中打开",
+                    GlyphGeometry = Application.Current.TryFindResource("SymbolFolder") as Geometry,
+                    Invoke = () => OpenInFinder(item.LaunchPath) },
             new() { Id = "stack:sep", IsSeparator = true },
         };
         var count = 0;

@@ -2,6 +2,7 @@
         xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         Title="启动台" WindowStyle="None" ResizeMode="NoResize"
+        AllowsTransparency="True"
         ShowInTaskbar="False" Topmost="True" WindowStartupLocation="Manual"
         Background="#101014" Foreground="#FFFFFFFF"
         TextOptions.TextFormattingMode="Display">

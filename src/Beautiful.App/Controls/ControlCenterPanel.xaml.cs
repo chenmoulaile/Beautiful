@@ -13,12 +13,12 @@ using Beautiful.Core.Layout;
 using Beautiful.App.Interop; // IconExtractor（逐应用混音的行图标）
 using Brush = System.Windows.Media.Brush; // UseWindowsForms 隐式全局 using 与 System.Drawing.Brush 冲突
 using Button = System.Windows.Controls.Button;
-using FontFamily = System.Windows.Media.FontFamily;
 using HorizontalAlignment = System.Windows.HorizontalAlignment;
 using Image = System.Windows.Controls.Image;
 using Brushes = System.Windows.Media.Brushes; // 同上
 using RadioButton = System.Windows.Controls.RadioButton; // 同上（分段选项：WPF 只有 RadioButton 带 GroupName）
 using UserControl = System.Windows.Controls.UserControl; // 同上（WinForms 同名 UserControl）
+using Path = System.Windows.Shapes.Path; // 自绘矢量字形（SF Symbols 风格），替代 Segoe 码点字体字形
 using App = Beautiful.App.App; // 本类在 Beautiful.App.Controls 下，显式绑定 App 类避免歧义
 
 namespace Beautiful.App.Controls;
@@ -104,15 +104,17 @@ public partial class ControlCenterPanel : UserControl, IBackdropAware, IPopupSha
     private void ApplyStatus(SystemStatus status)
     {
         BatteryValue.Text = status.Battery;
-        BatteryGlyph.Text = status.BatteryGlyphKey switch
+        // 电量图标：Core 给档位键（battery-0..4 / battery-charging / battery-unknown），
+        // 这里换成对应的自绘矢量电池样式（XAML Resources 里的 CcIconBattery*，SF Symbols 风格）。
+        BatteryGlyph.Style = status.BatteryGlyphKey switch
         {
-            "battery-0" => "\uE83F",
-            "battery-1" => "\uE840",
-            "battery-2" => "\uE841",
-            "battery-3" => "\uE850",
-            "battery-4" => "\uE83F",
-            "battery-charging" => "\uE83E",
-            _ => "\uE83F"
+            "battery-0" => (Style)FindResource("CcIconBattery0"),
+            "battery-1" => (Style)FindResource("CcIconBattery1"),
+            "battery-2" => (Style)FindResource("CcIconBattery2"),
+            "battery-3" => (Style)FindResource("CcIconBattery3"),
+            "battery-4" => (Style)FindResource("CcIconBattery4"),
+            "battery-charging" => (Style)FindResource("CcIconBatteryCharging"),
+            _ => (Style)FindResource("CcIconBattery0")   // battery-unknown：问不出电量 → 空电池轮廓
         };
         NetworkValue.Text = status.Network;
         BluetoothValue.Text = status.Bluetooth;
@@ -563,6 +565,20 @@ public partial class ControlCenterPanel : UserControl, IBackdropAware, IPopupSha
         }
     }
 
+    /// <summary>
+    /// 按资源里的字形样式造一枚自绘矢量小图标（SF Symbols 风格，替代 Segoe 码点字形）。
+    /// 样式自带几何与画笔；这里只定渲染尺寸与透明度——Width/Height 本地值盖过样式里的设计尺寸，
+    /// Stretch=Uniform 负责等比缩放。
+    /// </summary>
+    private Path MakeGlyph(string styleKey, double size, double opacity)
+        => new()
+        {
+            Style = (Style)FindResource(styleKey),
+            Width = size,
+            Height = size,
+            Opacity = opacity
+        };
+
     /// <summary>一行：[图标] 名称 [静音] 滑杆 百分比。滑杆/静音直接写会话音量（即时生效）。</summary>
     private FrameworkElement BuildMixerRow(AudioSessionInfo session)
     {
@@ -574,23 +590,20 @@ public partial class ControlCenterPanel : UserControl, IBackdropAware, IPopupSha
         grid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
 
         var iconHost = new Grid { Width = 16, Height = 16, Margin = new Thickness(0, 0, 8, 0) };
-        var icon = session.ExecutablePath is null ? null : IconExtractor.GetIcon(session.ExecutablePath, 32);
+        // 行图标 macOS 图标集优先（macOS 化 r4）：与 Dock/启动台同一套键映射，与同一应用同脸；
+        // 无对应图再按原逻辑提 exe 真图标。
+        var icon = session.ExecutablePath is null
+            ? null
+            : MacIconCatalog.TryGetFor(session.ExecutablePath)
+              ?? IconExtractor.GetIcon(session.ExecutablePath, 32);
         if (icon is not null)
         {
             iconHost.Children.Add(new Image { Source = icon, Stretch = Stretch.Uniform });
         }
         else
         {
-            iconHost.Children.Add(new TextBlock
-            {
-                Text = session.IsSystemSounds ? "\uE767" : "\uE8D6",
-                FontSize = 11,
-                FontFamily = new FontFamily("Segoe Fluent Icons, Segoe MDL2 Assets"),
-                HorizontalAlignment = HorizontalAlignment.Center,
-                VerticalAlignment = VerticalAlignment.Center,
-                Opacity = 0.7,
-                Foreground = (Brush)FindResource("ThemeTextPrimary")
-            });
+            // 无 exe 图标（如"系统声音"）→ 自绘矢量小图标：系统声音用铃铛，普通应用用扬声器
+            iconHost.Children.Add(MakeGlyph(session.IsSystemSounds ? "CcIconBell" : "CcIconSpeakerWave", 12, 0.7));
         }
 
         Grid.SetColumn(iconHost, 0);
@@ -609,15 +622,13 @@ public partial class ControlCenterPanel : UserControl, IBackdropAware, IPopupSha
 
         var mute = new Button
         {
-            Content = session.Muted ? "\uE74F" : "\uE767",
+            // 静音态 = 扬声器加斜杠；正常态 = 扬声器双波（自绘矢量，替代 Segoe 码点）
+            Content = MakeGlyph(session.Muted ? "CcIconSpeakerSlash" : "CcIconSpeakerWave", 11, 1),
             Width = 20,
             Height = 20,
             Margin = new Thickness(4, 0, 4, 0),
             Padding = new Thickness(0),
-            FontSize = 11,
-            FontFamily = new FontFamily("Segoe Fluent Icons, Segoe MDL2 Assets"),
             Style = (Style)FindResource("CcFooterStyle"),
-            Foreground = (Brush)FindResource("ThemeTextPrimary"),
             Opacity = session.Muted ? 0.55 : 1.0,
             ToolTip = session.Muted ? "取消静音" : "静音"
         };

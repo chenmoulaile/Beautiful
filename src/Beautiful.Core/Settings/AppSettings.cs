@@ -43,11 +43,52 @@ public sealed record AppSettings
     public bool DockAutoHide { get; init; }
 
     /// <summary>
-    /// Dock 隐藏模式（P3-T5 剩余两档）：<c>off</c>（常显）/ <c>auto</c>（自动隐藏，滑下留 4px）/
-    /// <c>dim</c>（半透明：光标离开后整条降到 45% 不透明度，鼠标移上去立刻恢复）。
+    /// Dock 隐藏模式（对标 MyDockFinder 共 9 档，白名单 <see cref="KnownDockHideModes"/>）：
+    /// <c>off</c> 总是显示 / <c>auto</c> 自动隐藏（触边显示，延迟可调——"悬停触发延迟"落在这档）/
+    /// <c>smart</c> 智能隐藏（窗口遮挡才让位）/ <c>fullscreen</c> 全屏应用时隐藏 /
+    /// <c>maximized</c> 窗口最大化时隐藏 / <c>edge</c> 双击边缘切换 / <c>modifier</c> 按住修饰键临时显示 /
+    /// <c>desktop</c> 仅桌面时显示 / <c>dim</c> 半透明（离开时 45%，历史档保留）。
     /// 与 <see cref="DockAutoHide"/> 同时存在：布尔项是旧配置的兼容入口，字符串是完整模式。
+    /// 判定在 Core <see cref="Dock.DockHideModeDecider"/>（auto 档在 <see cref="Layout.AutoHidePlan"/>）。
     /// </summary>
     public string DockHideMode { get; init; } = "off";
+
+    /// <summary>合法隐藏模式标识（小写，9 档；与 Core DockHideModes.Known 同源，避免两份白名单）。</summary>
+    public static IReadOnlyList<string> KnownDockHideModes { get; } = Dock.DockHideModes.Known;
+
+    /// <summary>
+    /// 隐藏模式 = <c>modifier</c>（按住修饰键临时显示）时生效的修饰键：
+    /// <c>ctrl</c>（默认）/ <c>alt</c> / <c>shift</c> / <c>win</c>。每拍由 DockWindow 读
+    /// GetAsyncKeyState 取值，改动下一拍生效，无需专门的应用入口。
+    /// </summary>
+    public string DockModifierKey { get; init; } = "ctrl";
+
+    /// <summary>合法临时显示修饰键标识（小写）。</summary>
+    public static IReadOnlyList<string> KnownDockModifierKeys { get; } = ["ctrl", "alt", "shift", "win"];
+
+    /// <summary>
+    /// 每显示器 Dock 覆盖配置（对标 MyDockFinder 多屏；schema 在 Core <see cref="Dock.DockMonitorProfile"/>，
+    /// 解析在 <see cref="Dock.DockMonitorProfiles"/>）。null 字段 = 跟随全局，所以单屏机器
+    /// （列表为空）行为与无此项完全一致。Dock 落在哪块屏仍由 <see cref="DockMonitor"/> 决定；
+    /// 本列表回答"落在这块屏时用哪套边/自动隐藏/图标尺寸"。
+    /// </summary>
+    public IReadOnlyList<Dock.DockMonitorProfile> DockMonitorProfiles { get; init; } = [];
+
+    /// <summary>
+    /// 自动隐藏的触发延迟（ms，0..5000，默认 500 = 历史硬编码值）：光标离开 Dock 后满此时长才滑下。
+    /// 0 = 离开即滑。只对 <see cref="DockHideMode"/>=auto 生效；判定逻辑在 Core <see cref="Layout.AutoHidePlan"/>。
+    /// </summary>
+    public int DockAutoHideDelayMs { get; init; } = Layout.AutoHidePlan.DefaultHideDelayMs;
+
+    /// <summary>
+    /// 自动隐藏的唤出方式（已滑下后鼠标如何唤回）：<c>touch</c>（触底立即唤出，默认 = 历史行为）/
+    /// <c>dwell</c>（触底停留 300ms 才唤出，路过底边不弹）/<c>double</c>（边缘二次触发：触底→离开→
+    /// 2s 内再触底才唤出）。合法值见 <see cref="KnownDockAutoHideReveals"/>，解释在 Core <see cref="Layout.AutoHidePlan"/>。
+    /// </summary>
+    public string DockAutoHideReveal { get; init; } = "touch";
+
+    /// <summary>合法唤出方式标识（小写）。</summary>
+    public static IReadOnlyList<string> KnownDockAutoHideReveals { get; } = ["touch", "dwell", "double"];
 
     /// <summary>
     /// Dock 停靠边（实验功能）：<c>bottom</c>（默认）/ <c>left</c> / <c>right</c>。
@@ -221,11 +262,44 @@ public sealed record AppSettings
 
     public static IReadOnlyList<string> KnownHotCornerActions { get; } = ["disabled", "showdesktop", "lock", "sleep"];
 
+    // ---------- 台前调度（macOS Stage Manager 的 Windows 等效，wp-macos-parity r5；默认关） ----------
+
+    /// <summary>
+    /// 台前调度：屏幕左缘的舞台条，鼠标靠近展开后显示各应用最近窗口的 DWM 实况缩略图，
+    /// 点击切到该窗口（最小化自动还原）。<b>默认关</b>——这是改变桌面形态的常驻新表面，
+    /// 是否上屏由用户显式选择；关闭后窗口/对账定时器/前台订阅全部撤除，不留任何常驻 HWND。
+    /// </summary>
+    public bool StageManagerEnabled { get; init; }
+
     /// <summary>
     /// 顶栏是否显示"托盘图标区"入口（v3.2）：点开可看到通知区域里被收起的第三方应用图标，
     /// 点击/右键会转发回图标自己的窗口。关掉只是少一颗按钮，不影响系统托盘本身。
     /// </summary>
     public bool ShowTrayInTopBar { get; init; } = true;
+
+    /// <summary>
+    /// 顶栏 CPU 温度芯片（对标 MyDockFinder 温度显示，<b>默认关</b>）。温度来自
+    /// LibreHardwareMonitor / OpenHardwareMonitor 经 WMI 发布的传感器（用户自己装的工具），
+    /// 兜底 ACPI 热区——探测与折算在 Core <see cref="Thermal.TemperatureReader"/>（有单测），
+    /// 轮询在 App <c>ThermalMonitorService</c>。<b>没有任何数据源时芯片整体隐藏</b>（优雅空态），
+    /// 绝不显示编造的读数。
+    /// </summary>
+    public bool ThermalChipEnabled { get; init; }
+
+    /// <summary>
+    /// 温度轮询间隔（秒，<see cref="MinThermalRefreshSeconds"/>..<see cref="MaxThermalRefreshSeconds"/>，
+    /// 默认 5）。硬件温度变化以分钟计，5s 一拍足够跟手且对系统毫无压力；改值即时生效（重建轮询表）。
+    /// </summary>
+    public int ThermalRefreshSeconds { get; init; } = DefaultThermalRefreshSeconds;
+
+    /// <summary>温度轮询间隔默认值（秒）。</summary>
+    public const int DefaultThermalRefreshSeconds = 5;
+
+    /// <summary>温度轮询间隔下限（秒）。</summary>
+    public const int MinThermalRefreshSeconds = 5;
+
+    /// <summary>温度轮询间隔上限（秒）。</summary>
+    public const int MaxThermalRefreshSeconds = 120;
 
     /// <summary>
     /// genie 的渲染引擎：<c>mesh</c>（默认）= 一张纹理三角网，顶点走 macOS 灯罩曲线，
@@ -249,6 +323,35 @@ public sealed record AppSettings
 
     /// <summary>顶栏所在显示器（取值口径同 <see cref="DockMonitor"/>；两条 surface 可以分处两屏）。</summary>
     public string TopBarMonitor { get; init; } = "auto";
+
+    /// <summary>
+    /// 屏幕四角圆角遮罩（对标 MyDockFinder ScreenRound，<b>默认关</b>）。开启后每块显示器的四角
+    /// 各浮一块 topmost 且输入全穿透的小遮罩（遮罩色可配 <see cref="ScreenCornerMaskColor"/>，默认纯黑；
+    /// 形状为正方形减内切四分之一圆），整块屏幕看上去就是 macOS 的圆角。遮罩窗口的样式常量与
+    /// 落地在 App 侧 ScreenCorners/，几何在 Core <see cref="Layout.ScreenCornerPlan"/>。
+    /// </summary>
+    public bool ScreenCornersEnabled { get; init; }
+
+    /// <summary>遮罩半径（DIP，<see cref="MinScreenCornerRadius"/>..<see cref="MaxScreenCornerRadius"/>）。
+    /// 落地时按所在显示器有效缩放换算成物理像素（<see cref="Layout.ScreenCornerPlan.RadiusPx"/>）。</summary>
+    public int ScreenCornerRadius { get; init; } = DefaultScreenCornerRadius;
+
+    /// <summary>遮罩半径默认值（DIP）。</summary>
+    public const int DefaultScreenCornerRadius = 12;
+
+    /// <summary>遮罩半径下限（DIP）。</summary>
+    public const int MinScreenCornerRadius = 4;
+
+    /// <summary>遮罩半径上限（DIP）。</summary>
+    public const int MaxScreenCornerRadius = 48;
+
+    /// <summary>
+    /// 遮罩颜色（"#RRGGBB" / "#AARRGGBB"，<see cref="Layout.ScreenCornerPlan.CanonicalMaskColor"/>
+    /// 收敛为 "#AARRGGBB"，非法值回落默认）。默认不透明纯黑：macOS 真机的屏幕圆角处就是熄屏的显示边，
+    /// 浅色壁纸上深色遮罩才像"屏幕自己的圆角"。要随壁纸取色的话，走桌面取色读壁纸主色调出深色档
+    /// （例如 DominantColor 对壁纸采样的暗端），而不是跟着主题翻色——主题浅色时圆角翻白会穿帮。
+    /// </summary>
+    public string ScreenCornerMaskColor { get; init; } = Layout.ScreenCornerPlan.DefaultMaskColor;
 
     /// <summary>
     /// 图标处理方式（v3 T6）："auto"（跟随主题：macOS 圆角方块+投影 / 鸿蒙 squircle+投影 / GNOME 平铺）、
@@ -333,7 +436,7 @@ public sealed record AppSettings
 
     /// <summary>
     /// 加载侧规范化：数值字段钳制到合法区间（DockIconSize 32..96、
-    /// MagnificationStrength 1.0..2.5）；枚举串字段（主题/策略/切换器样式/停靠边/图标处理方式）
+    /// MagnificationStrength 1.0..2.5、ThermalRefreshSeconds 5..120）；枚举串字段（主题/策略/切换器样式/停靠边/图标处理方式）
     /// 小写去空白后比对白名单，未知值收敛为默认，避免手改配置把 App 侧映射打到兜底分支之外的未定义行为。
     /// 显示器选择器（DockMonitor/TopBarMonitor）走 <see cref="MonitorSelectorOrDefault"/>：
     /// 关键字（auto/primary）之外只接受 1..MaxMonitorIndex 的十进制序号。
@@ -359,6 +462,13 @@ public sealed record AppSettings
         MagnificationStrength = Math.Clamp(MagnificationStrength, MinMagnificationStrength, MaxMagnificationStrength),
         DockMonitor = MonitorSelectorOrDefault(DockMonitor),
         TopBarMonitor = MonitorSelectorOrDefault(TopBarMonitor),
+        DockAutoHideDelayMs = Math.Clamp(DockAutoHideDelayMs, Layout.AutoHidePlan.MinHideDelayMs, Layout.AutoHidePlan.MaxHideDelayMs),
+        DockAutoHideReveal = Canonical(DockAutoHideReveal, "touch", KnownDockAutoHideReveals),
+        DockHideMode = Canonical(DockHideMode, "off", KnownDockHideModes),
+        DockModifierKey = Canonical(DockModifierKey, "ctrl", KnownDockModifierKeys),
+        DockMonitorProfiles = Dock.DockMonitorProfileList.Normalized(DockMonitorProfiles),
+        ScreenCornerRadius = Math.Clamp(ScreenCornerRadius, MinScreenCornerRadius, MaxScreenCornerRadius),
+        ScreenCornerMaskColor = Layout.ScreenCornerPlan.CanonicalMaskColor(ScreenCornerMaskColor),
         IconTreatment = Canonical(IconTreatment, "auto", KnownIconTreatments),
         GenieEngine = Canonical(GenieEngine, "mesh", KnownGenieEngines),
         MinimizeEffect = Canonical(MinimizeEffect, "genie", KnownMinimizeEffects),
@@ -368,7 +478,8 @@ public sealed record AppSettings
         HotCornerTopRight = Canonical(HotCornerTopRight, "disabled", KnownHotCornerActions),
         HotCornerBottomLeft = Canonical(HotCornerBottomLeft, "disabled", KnownHotCornerActions),
         HotCornerBottomRight = Canonical(HotCornerBottomRight, "disabled", KnownHotCornerActions),
-        MaterialQuality = Canonical(MaterialQuality, "auto", KnownMaterialQualities)
+        MaterialQuality = Canonical(MaterialQuality, "auto", KnownMaterialQualities),
+        ThermalRefreshSeconds = Math.Clamp(ThermalRefreshSeconds, MinThermalRefreshSeconds, MaxThermalRefreshSeconds)
     };
 
     /// <summary>枚举串规范化：null/空白/大小写与首尾空白差异都归一为小写标识；不在白名单内取兜底。</summary>

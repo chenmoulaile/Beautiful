@@ -3,8 +3,10 @@ namespace Beautiful.Core.Icons;
 /// <summary>
 /// macOS 图标集（Tahoe 26）的**文件名解析规则**（v4.0-⑧）。
 /// <para>
-/// 【为什么需要这一层】图标集来自 MyDockFinder 的 <c>themes/Tahoe 26 Light/icons</c>（95 张 256×256 PNG，
-/// 内容占画布约 84%，四周留透明边距——这是 macOS 官方图标 canvas 规范，不能按 ink 裁切）。
+/// 【为什么需要这一层】图标集来自 MyDockFinder 的 <c>themes/Tahoe 26 Light/icons</c>（约 95 张 256×256 PNG，
+/// 内容占画布约 84%，四周留透明边距——这是 macOS 官方图标 canvas 规范，不能按 ink 裁切）；
+/// macOS 化 r4 起混入 macosicons 下载的真 macOS 26 原版（1024×1024，加载端缩到 256，见
+/// Assets/TahoeIcons 现共 110 张），键名口径不变。
 /// 这些文件的命名是**人工起的**：<c>qq.png</c> / <c>wps.png</c> / <c>cloudmusic.png</c> 这类能直接对上
 /// 可执行文件名，但 <c>weixin.exe</c> 与 <c>wechat.png</c>、<c>obs64.exe</c> 与 <c>obs.png</c> 就对不上。
 /// 本机注册表实测：61 个已安装程序的 exe 名里只有 6 个能直接同名命中 —— 所以必须有一张别名表。
@@ -111,7 +113,7 @@ public static class MacIconNames
         ["mail"] = "mail",
         ["photos"] = "photos",
         ["mspaint"] = "photo_booth",
-        ["taskmgr"] = "activity_monitor_absent",   // 图标集里没有活动监视器：显式不命中，走系统提取
+        ["taskmgr"] = "activity_monitor",          // macOS 化 r4：图标集补齐真实 Activity Monitor（下载自 macOS-26-Icons/Utilities）
         ["trash_empty"] = "trash_empty",
         ["trash_full"] = "trash_full",
 
@@ -135,11 +137,9 @@ public static class MacIconNames
     /// <summary>
     /// 图标集里**确实不存在**的键（占位用）：映射到这些值等于"明确不命中"，让别名表能表达
     /// "这个应用我知道是谁，但图标集没它的图"，而不是被迫留空看不出意图。
+    /// 目前为空（r4 补齐 Activity Monitor 后最后一条已转正）；再遇到图标集没有的应用时在此登记。
     /// </summary>
-    private static readonly HashSet<string> Absent = new(StringComparer.OrdinalIgnoreCase)
-    {
-        "activity_monitor_absent"
-    };
+    private static readonly HashSet<string> Absent = new(StringComparer.OrdinalIgnoreCase);
 
     /// <summary>
     /// 给定可执行文件路径（或裸文件名）→ 候选图标键（按优先级）。空/无效输入返回空数组。

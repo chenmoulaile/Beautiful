@@ -2,6 +2,7 @@ using System.Collections.Generic;
 using System.Diagnostics;
 using System.Linq;
 using System.Windows;
+using System.Windows.Media;
 using Beautiful.App.Controls;
 using Beautiful.App.Interop;
 using Beautiful.App.Services;
@@ -9,6 +10,7 @@ using Beautiful.App.Shell;
 using Beautiful.Core.Controls;
 using Beautiful.Core.TopBar;
 using MessageBox = System.Windows.MessageBox;
+using Application = System.Windows.Application;   // UseWindowsForms 隐式 using 消歧
 
 namespace Beautiful.App.TopBar;
 
@@ -24,19 +26,17 @@ namespace Beautiful.App.TopBar;
 /// </summary>
 public static class TopBarMenus
 {
-    // Segoe Fluent Icons 码点（与托盘菜单同一取值）
-    private const string GearGlyph = "\uE713", ThemeGlyph = "\uE790", ReloadGlyph = "\uE72C",
-                       QuitGlyph = "\uE7E8", InfoGlyph = "\uE946", MinGlyph = "\uE73F",
-                       CloseGlyph = "\uE711", FolderGlyph = "\uE8B7", DesktopGlyph = "\uE7F4",
-                       HelpGlyph = "\uE897";
+    // Symbols.xaml 的 SF-Symbols 风格矢量几何（macOS 化 r4 起全面替代 Segoe Fluent Icons 码点）。
+    private static Geometry? Sym(string key) =>
+        Application.Current?.TryFindResource(key) as Geometry;
 
     /// <summary>logo（"Beautiful" 应用菜单）：关于 / 设置… / 主题▸ / 重载 Dock / 分隔 / 退出。</summary>
     public static List<MenuItemView> BeautifulMenu(TopBarContext ctx) => new()
     {
-        new() { Id = "about", Label = "关于本机", Glyph = InfoGlyph, Invoke = ShowAbout },
+        new() { Id = "about", Label = "关于本机", GlyphGeometry = Sym("SymbolInfo"), Invoke = ShowAbout },
         new() { Id = "sep0", IsSeparator = true },
-        new() { Id = "settings", Label = "设置…", Glyph = GearGlyph, Invoke = ctx.OpenSettings },
-        new() { Id = "syssettings", Label = "系统设置…", Glyph = GearGlyph, Invoke = () => Launch("ms-settings:") },
+        new() { Id = "settings", Label = "设置…", GlyphGeometry = Sym("SymbolGear"), Invoke = ctx.OpenSettings },
+        new() { Id = "syssettings", Label = "系统设置…", GlyphGeometry = Sym("SymbolGear"), Invoke = () => Launch("ms-settings:") },
         new() { Id = "store", Label = "Microsoft Store…", Invoke = () => Launch("ms-windows-store:") },
         new() { Id = "taskmgr", Label = "任务管理器…", Invoke = () => Launch("taskmgr.exe") },
         new() { Id = "sep1", IsSeparator = true },
@@ -47,10 +47,10 @@ public static class TopBarMenus
         new() { Id = "lock", Label = "锁定屏幕", Invoke = Lock },
         new() { Id = "signout", Label = "注销…", Invoke = () => PowerAction(ctx, "/l", "注销") },
         new() { Id = "sep3", IsSeparator = true },
-        new() { Id = "theme", Label = "主题", Glyph = ThemeGlyph, Children = ThemeSubmenu(ctx) },
-        new() { Id = "reload", Label = "重载 Dock", Glyph = ReloadGlyph, Invoke = ctx.ReloadDock },
+        new() { Id = "theme", Label = "主题", GlyphGeometry = Sym("SymbolAppearance"), Children = ThemeSubmenu(ctx) },
+        new() { Id = "reload", Label = "重载 Dock", GlyphGeometry = Sym("SymbolRestart"), Invoke = ctx.ReloadDock },
         new() { Id = "sep4", IsSeparator = true },
-        new() { Id = "quit", Label = "退出 Beautiful", Glyph = QuitGlyph, Invoke = ctx.Exit },
+        new() { Id = "quit", Label = "退出 Beautiful", GlyphGeometry = Sym("SymbolLogout"), Invoke = ctx.Exit },
     };
 
     private static List<MenuItemView> ThemeSubmenu(TopBarContext ctx)
@@ -67,10 +67,10 @@ public static class TopBarMenus
     /// <summary>文件：新建窗口（无对应能力→置灰）、打开资源管理器…（真实）、分隔、关闭窗口（置灰）。</summary>
     public static List<MenuItemView> FileMenu() => new()
     {
-        new() { Id = "new", Label = "新建窗口", Glyph = "\uE710", IsEnabled = false },
-        new() { Id = "open", Label = "打开资源管理器…", Glyph = FolderGlyph, Invoke = () => Launch("explorer.exe") },
+        new() { Id = "new", Label = "新建窗口", GlyphGeometry = Sym("SymbolPlus"), IsEnabled = false },
+        new() { Id = "open", Label = "打开资源管理器…", GlyphGeometry = Sym("SymbolFolder"), Invoke = () => Launch("explorer.exe") },
         new() { Id = "sep", IsSeparator = true },
-        new() { Id = "close", Label = "关闭窗口", Glyph = CloseGlyph, IsEnabled = false },
+        new() { Id = "close", Label = "关闭窗口", GlyphGeometry = Sym("SymbolClose"), IsEnabled = false },
     };
 
     /// <summary>编辑：撤销/重做/剪切/拷贝/粘贴/全选——跨应用文本命令无可靠注入手段（会抢焦点/破坏目标应用状态），
@@ -89,7 +89,7 @@ public static class TopBarMenus
     /// <summary>视图：显示桌面（真实：最小化所有跟踪窗口）、分隔、进入全屏模式（无对应能力→置灰）。</summary>
     public static List<MenuItemView> ViewMenu(WindowTracker? tracker) => new()
     {
-        new() { Id = "desktop", Label = "显示桌面", Glyph = DesktopGlyph, Invoke = () => ShowDesktop(tracker) },
+        new() { Id = "desktop", Label = "显示桌面", GlyphGeometry = Sym("SymbolDisplay"), Invoke = () => ShowDesktop(tracker) },
         new() { Id = "sep", IsSeparator = true },
         new() { Id = "fullscreen", Label = "进入全屏模式", IsEnabled = false },
     };
@@ -97,8 +97,8 @@ public static class TopBarMenus
     /// <summary>帮助：关于 Beautiful（真实）、键盘快捷键…（无对应界面→置灰）、分隔、反馈（置灰）。</summary>
     public static List<MenuItemView> HelpMenu() => new()
     {
-        new() { Id = "about", Label = "关于 Beautiful", Glyph = InfoGlyph, Invoke = ShowAbout },
-        new() { Id = "keys", Label = "键盘快捷键…", Glyph = "\uE765", IsEnabled = false },
+        new() { Id = "about", Label = "关于 Beautiful", GlyphGeometry = Sym("SymbolInfo"), Invoke = ShowAbout },
+        new() { Id = "keys", Label = "键盘快捷键…", GlyphGeometry = Sym("SymbolKeyboard"), IsEnabled = false },
         new() { Id = "sep", IsSeparator = true },
         new() { Id = "feedback", Label = "发送反馈…", IsEnabled = false },
     };
@@ -132,8 +132,8 @@ public static class TopBarMenus
                 // 原文进 ToolTip，压窄不丢信息。
                 Label = Beautiful.Core.TopBar.WindowMenuLabel.Compact(captured.Title),
                 ToolTip = captured.Title,
-                Icon = captured.Icon,       // 真实窗口位图图标（无则 HasIcon=false → 回退空列）
-                Glyph = "\uE7C3",           // 无图标时的占位字形（窗口）
+                Icon = captured.Icon,       // 真实窗口位图图标（无则 HasIcon=false → 回退矢量几何占位）
+                GlyphGeometry = Sym("SymbolSwitcher"),   // 无图标时的占位几何（窗口）
                 IsChecked = isActive,
                 Invoke = () => tracker!.ActivateOrMinimize(captured),
             });
@@ -143,9 +143,9 @@ public static class TopBarMenus
         {
             var h = active.Handle;
             items.Add(new MenuItemView { Id = "sep", IsSeparator = true });
-            items.Add(new MenuItemView { Id = "min", Label = "最小化", Glyph = MinGlyph,
+            items.Add(new MenuItemView { Id = "min", Label = "最小化", GlyphGeometry = Sym("SymbolMinus"),
                 Invoke = () => NativeMethods.ShowWindow(h, NativeMethods.SwMinimize) });
-            items.Add(new MenuItemView { Id = "close", Label = "关闭", Glyph = CloseGlyph,
+            items.Add(new MenuItemView { Id = "close", Label = "关闭", GlyphGeometry = Sym("SymbolClose"),
                 Invoke = () => NativeMethods.PostMessage(h, (uint)NativeMethods.WmClose, IntPtr.Zero, IntPtr.Zero) });
         }
         return items;

@@ -61,6 +61,10 @@ public sealed class AppSettingsStore
             report($"设置自愈：GenieEngine={raw.GenieEngine} → {normalized.GenieEngine}");
         if (!string.Equals(raw.IconTreatment, normalized.IconTreatment, StringComparison.Ordinal))
             report($"设置自愈：IconTreatment={raw.IconTreatment} → {normalized.IconTreatment}");
+        if (!string.Equals(raw.DockHideMode, normalized.DockHideMode, StringComparison.Ordinal))
+            report($"设置自愈：DockHideMode={raw.DockHideMode} → {normalized.DockHideMode}（9 档白名单）");
+        if (!string.Equals(raw.DockModifierKey, normalized.DockModifierKey, StringComparison.Ordinal))
+            report($"设置自愈：DockModifierKey={raw.DockModifierKey} → {normalized.DockModifierKey}");
 
         try
         {

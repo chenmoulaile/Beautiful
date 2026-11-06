@@ -3,4 +3,11 @@
     <TargetFramework>net8.0</TargetFramework>
     <RootNamespace>Beautiful.Core</RootNamespace>
   </PropertyGroup>
+  <ItemGroup>
+    <!-- 温度探测（Thermal/TemperatureReader.cs）经 WMI 读 LibreHardwareMonitor /
+         OpenHardwareMonitor 命名空间与 ACPI 热区。仅 Windows 运行时真正可用：
+         非 Windows 上调用抛 PlatformNotSupportedException，探测层一律捕获按"拿不到"降级；
+         单测只跑纯函数，不触 WMI。 -->
+    <PackageReference Include="System.Management" Version="10.0.2" />
+  </ItemGroup>
 </Project>

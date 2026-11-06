@@ -90,13 +90,20 @@
                             <ColumnDefinition Width="Auto"/>
                             <ColumnDefinition Width="*"/>
                         </Grid.ColumnDefinitions>
-                        <TextBlock x:Name="SearchGlyph" Grid.Column="0" Text="&#xE721;" FontSize="26"
-                                   FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets"
-                                   VerticalAlignment="Center" Margin="4,0,14,0" Opacity="0.85"/>
+                        <Path x:Name="SearchGlyph" Grid.Column="0"
+                              Data="{StaticResource SymbolSearch}" Width="20" Height="20" Stretch="Uniform"
+                              StrokeThickness="1.6" StrokeStartLineCap="Round" StrokeEndLineCap="Round"
+                              StrokeLineJoin="Round" Fill="Transparent"
+                              Stroke="{DynamicResource ThemeTextPrimary}"
+                              VerticalAlignment="Center" Margin="6,0,16,0" Opacity="0.85"/>
                         <TextBox x:Name="SearchBox" Grid.Column="1" Style="{StaticResource SearchStyle}"
                                  AutomationProperties.Name="启动器搜索框"
                                  TextChanged="Search_TextChanged"/>
                     </Grid>
+
+                    <!-- 搜索区与结果区之间的发丝线：macOS Spotlight 输入区下有一条分隔线，
+                         与底部提示行上方的分隔线（Results/StatusText 之后那条）同色同做法。 -->
+                    <Border Height="1" Margin="22,0,22,8" Background="#1AFFFFFF"/>
 
                     <!-- 结果列表：行内是图标 + 名称 + 启动目标（真实路径，不是编的副标题）。
                          没有结果时整块隐藏，由下面的 StatusText 说明原因（建索引中 / 没有匹配 / 共 N 条）。 -->

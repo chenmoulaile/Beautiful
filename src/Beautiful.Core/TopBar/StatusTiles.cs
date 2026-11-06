@@ -18,8 +18,9 @@ public static class StatusTiles
         => percent < 0 ? "--" : $"{Math.Clamp(percent, 0, 100)}%";
 
     /// <summary>
-    /// 电量图标字形键（Segoe Fluent Icons 的电池四档 + 充电）。
-    /// 返回 <c>battery-0..4</c> / <c>battery-charging</c> / <c>battery-unknown</c>，由 App 映射成码点。
+    /// 电量图标档位键（纯语义，与图标实现解耦）。返回 <c>battery-0..4</c> / <c>battery-charging</c> /
+    /// <c>battery-unknown</c>；App 层把它映射成 Symbols.xaml 的 SymbolBattery* 矢量几何
+    /// （macOS 化 r4 起不再映射 Segoe 码点）。
     /// </summary>
     public static string BatteryGlyphKey(int percent, bool charging, bool unknown = false)
     {

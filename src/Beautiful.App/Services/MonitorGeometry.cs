@@ -158,6 +158,52 @@ public static class MonitorGeometry
         return list;
     }
 
+    /// <summary>
+    /// 一块显示器的身份：枚举序 1 基序号 + 主屏标志。每显示器 Dock 覆盖配置
+    /// （<c>DockMonitorProfiles</c>）按它解析——序号精确匹配优先，主屏键其次。
+    /// </summary>
+    /// <param name="Index">枚举序（<see cref="Options"/> 下拉里的"显示器 N"同一个 N）。</param>
+    /// <param name="IsPrimary">是否带 MONITORINFOF_PRIMARY 标志的主屏。</param>
+    public readonly record struct MonitorIdentity(int Index, bool IsPrimary);
+
+    /// <summary>
+    /// 按句柄查显示器身份；句柄无效（已拔出/未枚举到）返回 null，调用方跳过本次每屏配置解析
+    /// （保持上次的覆盖计划，与条带几何"拔屏瞬间保持上次值"同一条纪律）。
+    /// </summary>
+    public static MonitorIdentity? Identify(IntPtr monitor)
+    {
+        if (monitor == IntPtr.Zero) return null;
+        var monitors = EnumerateMonitors();
+        for (var i = 0; i < monitors.Count; i++)
+        {
+            if (monitors[i] != monitor) continue;
+            var primary = PrimaryMonitorHandle();
+            return new MonitorIdentity(i + 1, monitor == primary && primary != IntPtr.Zero);
+        }
+        return null;
+    }
+
+    /// <summary>一块在屏显示器的句柄、全屏矩形与有效缩放（屏幕圆角遮罩层的落地输入）。</summary>
+    /// <param name="Handle">显示器句柄（日志/排障用）。</param>
+    /// <param name="Rect">该屏 <c>rcMonitor</c>（物理像素全屏矩形）。</param>
+    /// <param name="DpiScale">该屏有效缩放（= MDT_EFFECTIVE_DPI / 96；取不到时 1.0）。</param>
+    public readonly record struct MonitorSurface(IntPtr Handle, PhysicalRect Rect, double DpiScale);
+
+    /// <summary>
+    /// 当前在屏的<strong>全部</strong>显示器（全量重取，不缓存）：拔插屏/改拓扑后下一次调用自然对齐。
+    /// 屏幕圆角遮罩层每次对账（1s 轮询 + 设置变更）都走这里，与触发角/全屏避让的轮询节奏同一条哲学。
+    /// </summary>
+    public static IReadOnlyList<MonitorSurface> Surfaces()
+    {
+        var list = new List<MonitorSurface>();
+        foreach (var handle in EnumerateMonitors())
+        {
+            if (!TryInfo(handle, out var info)) continue;
+            list.Add(new MonitorSurface(handle, ToCore(in info.rcMonitor), ScaleOf(handle, IntPtr.Zero)));
+        }
+        return list;
+    }
+
     // 两个 RECT 转换器是 internal：NativeMethods 本身是 internal P/Invoke 汇总，公开类型不能
     // 在签名里暴露它（CS0050/CS0051）。跨层传递的几何一律用 Core 的 PhysicalRect。
 

@@ -1,0 +1,26 @@
+<UserControl x:Class="Beautiful.App.StageManager.StageManagerSettingsCard"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             x:Name="Root">
+
+    <!-- 台前调度设置卡（wp-macos-parity r5）：独立 UserControl，自包含样式——不依赖设置窗口
+         宿主的 HintText 等内部资源，宿主把它插进任意面板即可用（接线契约见该类型的 settingsContract）。
+         开关行为自足：勾选 → 写 settings.json（StageManagerEnabled）→ 调 App.ApplyStageManager()
+         立即生效，宿主不需要写任何事件处理代码。 -->
+
+    <UserControl.Resources>
+        <Style x:Key="StageHintText" TargetType="TextBlock">
+            <Setter Property="FontSize" Value="11.5"/>
+            <Setter Property="Opacity" Value="0.75"/>
+            <Setter Property="TextWrapping" Value="Wrap"/>
+            <Setter Property="LineHeight" Value="17"/>
+        </Style>
+    </UserControl.Resources>
+
+    <StackPanel>
+        <CheckBox x:Name="EnabledCheck" Content="台前调度（左侧舞台条）"
+                  Checked="OnToggleChanged" Unchecked="OnToggleChanged"/>
+        <TextBlock Style="{StaticResource StageHintText}" Margin="0,5,0,0"
+                   Text="对标 macOS 台前调度：屏幕左缘常驻一条收起的舞台条，鼠标靠近展开。卡片显示各应用最近窗口的实况缩略图（DWM 合成，不抓帧），点击即切到该窗口，最小化的窗口自动还原；当前前台应用的卡片带强调色描边。鼠标离开或切换成功后自动收回；前台为真全屏（游戏/视频）时整条让位。"/>
+    </StackPanel>
+</UserControl>

@@ -99,10 +99,12 @@
                                             <Point X="0.5" Y="0.5"/>
                                         </Image.RenderTransformOrigin>
                                     </Image>
-                                    <TextBlock x:Name="Fallback" Text="&#xE7EF;" FontSize="26"
-                                               FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets"
-                                               Foreground="#9AFFFFFF" Visibility="Collapsed"
-                                               HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                                    <Path x:Name="Fallback" Data="{StaticResource SymbolApps}"
+                                          Width="24" Height="24" Stretch="Uniform"
+                                          Stroke="#9AFFFFFF" StrokeThickness="1.6"
+                                          StrokeStartLineCap="Round" StrokeEndLineCap="Round"
+                                          StrokeLineJoin="Round" Fill="Transparent" Visibility="Collapsed"
+                                          HorizontalAlignment="Center" VerticalAlignment="Center"/>
                                 </Grid>
                             </Border>
                             <DataTemplate.Triggers>

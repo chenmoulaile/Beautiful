@@ -217,6 +217,7 @@ internal static partial class NativeMethods
     public const int GwlpStyle = -16;
     public const long WsExToolwindow = 0x80L;
     public const long WsExNoactivate = 0x0800_0000L; // 点击不激活窗口（DWM 预览浮层、切换器覆盖层使用）。
+    public const long WsExLayered = 0x0008_0000L;    // 分层窗口（屏幕圆角遮罩层：WPF AllowsTransparency 也会置位，这里显式幂等兜底）。
     // 终审 M-2：本常量是全库唯一定义（原 :386 的 uint 同名重复已并入）。旧注释的"自绘弹层防抢焦点/
     // 防 Deactivated 竞态自关"理据已随 Task 2-3 裁定**废止**——FluentPopupHost 现按设计自行激活，
     // 不再施加本样式，勿以"防抢焦点"为由给弹层恢复它。

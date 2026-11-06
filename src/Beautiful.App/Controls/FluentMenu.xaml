@@ -103,10 +103,13 @@
                                                        Foreground="{DynamicResource ThemeAccent}"
                                                        HorizontalAlignment="Center" VerticalAlignment="Center"
                                                        Visibility="Collapsed"/>
-                                            <TextBlock x:Name="GlyphText" Grid.Column="1" Text="{Binding Glyph}"
-                                                       FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets"
-                                                       FontSize="14" Foreground="#D6FFFFFF"
-                                                       HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                                            <Path x:Name="GlyphIcon" Grid.Column="1"
+                                                   Data="{Binding GlyphGeometry}"
+                                                   Width="16" Height="16" Stretch="Uniform"
+                                                   Stroke="#D6FFFFFF" StrokeThickness="1.5"
+                                                   StrokeStartLineCap="Round" StrokeEndLineCap="Round"
+                                                   StrokeLineJoin="Round" Fill="Transparent"
+                                                   HorizontalAlignment="Center" VerticalAlignment="Center"/>
                                             <Image x:Name="IconImage" Grid.Column="1" Source="{Binding Icon}"
                                                    Width="16" Height="16" Stretch="Uniform"
                                                    HorizontalAlignment="Center" VerticalAlignment="Center"
@@ -115,11 +118,14 @@
                                                        ToolTip="{Binding ToolTip}"
                                                        FontSize="13.5" Foreground="{DynamicResource ThemeTextPrimary}"
                                                        VerticalAlignment="Center" TextTrimming="CharacterEllipsis"/>
-                                            <TextBlock x:Name="Arrow" Grid.Column="3" Text="&#xE76C;"
-                                                       FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets"
-                                                       FontSize="9" Foreground="#8CFFFFFF"
-                                                       HorizontalAlignment="Right" VerticalAlignment="Center"
-                                                       Visibility="Collapsed"/>
+                                            <Path x:Name="Arrow" Grid.Column="3"
+                                                   Data="{StaticResource SymbolChevron}"
+                                                   Width="5" Height="9" Stretch="Uniform"
+                                                   Stroke="#8CFFFFFF" StrokeThickness="2"
+                                                   StrokeStartLineCap="Round" StrokeEndLineCap="Round"
+                                                   StrokeLineJoin="Round" Fill="Transparent"
+                                                   HorizontalAlignment="Right" VerticalAlignment="Center"
+                                                   Visibility="Collapsed"/>
                                         </Grid>
                                     </Grid>
                                 </Border>
@@ -141,15 +147,15 @@
                                 <DataTrigger Binding="{Binding HasChildren}" Value="True">
                                     <Setter TargetName="Arrow" Property="Visibility" Value="Visible"/>
                                 </DataTrigger>
-                                <!-- 位图图标（窗口菜单真实图标）：有图时隐藏字形、显示 Image -->
+                                <!-- 位图图标（窗口菜单真实图标）：有图时隐藏矢量几何、显示 Image -->
                                 <DataTrigger Binding="{Binding HasIcon}" Value="True">
-                                    <Setter TargetName="GlyphText" Property="Visibility" Value="Collapsed"/>
+                                    <Setter TargetName="GlyphIcon" Property="Visibility" Value="Collapsed"/>
                                     <Setter TargetName="IconImage" Property="Visibility" Value="Visible"/>
                                 </DataTrigger>
                                 <!-- 置灰（控制器裁定：无对应系统能力的 macOS 风格条目）：淡文字、不可交互 -->
                                 <DataTrigger Binding="{Binding IsEnabled}" Value="False">
                                     <Setter TargetName="LabelText" Property="Foreground" Value="#54FFFFFF"/>
-                                    <Setter TargetName="GlyphText" Property="Foreground" Value="#3CFFFFFF"/>
+                                    <Setter TargetName="GlyphIcon" Property="Stroke" Value="#3CFFFFFF"/>
                                     <Setter TargetName="IconImage" Property="Opacity" Value="0.4"/>
                                 </DataTrigger>
                                 <DataTrigger Binding="{Binding IsSelected, RelativeSource={RelativeSource AncestorType=ListBoxItem}}" Value="True">

@@ -2,18 +2,23 @@
         xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         xmlns:chrome="clr-namespace:System.Windows.Shell;assembly=PresentationFramework"
-        Title="快速查看" Width="720" Height="540"
+        Title="快速查看" Width="776" Height="600"
         WindowStartupLocation="CenterScreen"
         WindowStyle="None" ResizeMode="NoResize"
+        AllowsTransparency="True" Background="Transparent"
         ShowInTaskbar="False" ShowActivated="True" Topmost="True"
-        Background="{DynamicResource MacWindowBackground}"
         Foreground="{DynamicResource MacTextPrimary}"
         FontFamily="{DynamicResource MacFont}"
         UseLayoutRounding="True" TextOptions.TextFormattingMode="Display">
-    <!-- Quick Look 预览卡（Phase 6-b 起步）。与设置/访达同一套窗口纪律：非分层（AllowsTransparency 保持
-         false）+ WindowChrome + DWM 圆角，字体保留 ClearType。CaptionHeight=0：标题条完全自绘，
-         拖动由 Header_MouseLeftButtonDown 承担；空格 / Esc 关闭（见代码后置 OnPreviewKeyDown）。
-         内容区一次只显示一种：文本 / 图片 / 媒体 / 信息卡；读取失败一律回退信息卡并在页脚写明原因。 -->
+    <!-- Quick Look 预览卡（Phase 6-b 起步）。
+         【必须分层（AllowsTransparency=True）】真机 Win11 26300 实测：WPF 非分层窗口（硬件与软件
+         模式都是）整机黑屏——窗口在、可激活、PrintWindow 抓出来纯黑，只有分层窗口（Dock/顶栏/
+         切换器同款路径）能出画面。圆角因此改由下方根 Border 的 CornerRadius 自绘，不再依赖 DWM
+         圆角；DWM 阴影随之失去，整窗悬浮投影改由内容区外圈的影板 Border 用 DropShadowEffect
+         出（效果只包一块圆角矩形、不包滚动内容，大文档滚动不会把可视树推进离屏滤镜管线）。
+         CaptionHeight=0：标题条完全自绘，拖动由 Header_MouseLeftButtonDown 承担；空格 / Esc 关闭
+         （见代码后置 OnPreviewKeyDown）。内容区一次只显示一种：文本 / 图片 / 媒体 / 信息卡；
+         读取失败一律回退信息卡并在页脚写明原因。 -->
     <chrome:WindowChrome.WindowChrome>
         <chrome:WindowChrome CaptionHeight="0" ResizeBorderThickness="0"
                              GlassFrameThickness="0" CornerRadius="0"
@@ -52,17 +57,35 @@
         </Style>
     </Window.Resources>
 
-    <Grid>
-        <Grid.RowDefinitions>
-            <RowDefinition Height="36"/>
-            <RowDefinition Height="*"/>
-            <RowDefinition Height="Auto"/>
-        </Grid.RowDefinitions>
+    <!-- 影板：分层窗口拿不到 DWM 阴影，Quick Look 的悬浮卡投影用一张背板 Border 出。
+         Effect 只作用于影板自己（一块圆角矩形），不包内容 Border——投影若直接挂在含
+         ScrollViewer 的卡片上，滚动会把整个可视树推进离屏滤镜管线（LauncherOverlay 的
+         Effect 裁定同理：瞬态表面可用，逐帧路径禁用）。四周留白是投影的活动空间：
+         窗口 = 卡片 720×540 + 这圈留白，卡片在屏上的可见尺寸与分层化之前一致；
+         DocumentCard 的内层投影（BlurRadius 22 + Depth 4 ≈ 26px 外扩）也随之不再被
+         窗口边缘裁切。影板与卡片同底色同圆角，卡片外露出的只有投影。 -->
+    <Grid Margin="28,24,28,36">
+        <Border CornerRadius="12" Background="{DynamicResource MacWindowBackground}">
+            <Border.Effect>
+                <DropShadowEffect BlurRadius="24" ShadowDepth="8" Direction="270"
+                                  Color="#000000" Opacity="0.5"/>
+            </Border.Effect>
+        </Border>
 
-        <!-- ============ 标题条（36px，左红点 + 居中文件名） ============ -->
-        <Border x:Name="HeaderBar" Grid.Row="0" Background="#12808080"
-                BorderBrush="{DynamicResource MacSeparator}" BorderThickness="0,0,0,1"
-                MouseLeftButtonDown="Header_MouseLeftButtonDown">
+        <!-- 分层窗口的圆角壳：卡片 Border 自绘 12px 圆角与整卡底色（窗口 Background 必须 Transparent）。
+         标题条/页脚的半透明底各自带上圆角，四角就不会有方形色块越出圆壳。 -->
+        <Border CornerRadius="12" Background="{DynamicResource MacWindowBackground}">
+        <Grid>
+            <Grid.RowDefinitions>
+                <RowDefinition Height="36"/>
+                <RowDefinition Height="*"/>
+                <RowDefinition Height="Auto"/>
+            </Grid.RowDefinitions>
+
+            <!-- ============ 标题条（36px，左红点 + 居中文件名） ============ -->
+            <Border x:Name="HeaderBar" Grid.Row="0" Background="#12808080" CornerRadius="12,12,0,0"
+                    BorderBrush="{DynamicResource MacSeparator}" BorderThickness="0,0,0,1"
+                    MouseLeftButtonDown="Header_MouseLeftButtonDown">
             <Grid Margin="13,0,13,0">
                 <Grid.ColumnDefinitions>
                     <ColumnDefinition Width="100"/>
@@ -90,9 +113,11 @@
 
         <!-- ============ 内容区：四选一 ============ -->
         <Grid Grid.Row="1" Background="Transparent">
-            <!-- 文本文档预览：浅色/深色圆角卡片 + 排版正文（标题栏已显示文件名）。
-                 Markdown 由代码后置按行渲染成标题 / 列表 / 代码块 / 段落；其余文本按行铺成等宽正文。
-                 卡片底色由代码后置按 MacColorScheme 选浅色或深色，DynamicResource 只取真实存在的 Mac* 键。 -->
+            <!-- 文本文档预览：圆角卡片 + 排版正文（标题栏已显示文件名）。
+                 Markdown 由代码后置按行渲染成标题 / 列表 / 代码块 / 段落，底色按 MacColorScheme 取纸色；
+                 其余文本（源码/日志/json）渲染成 QuickLook 式代码卡：常暗底 + 等宽字 + 左侧行号列
+                 （底色/边距/行号列宽由代码后置 RenderCodeCard 决定，卡片圆角与投影沿用本 Border）。
+                 DynamicResource 只取真实存在的 Mac* 键。 -->
             <Border x:Name="DocumentCard" Visibility="Collapsed" Margin="22,18,22,18"
                     CornerRadius="12" BorderThickness="1"
                     BorderBrush="{DynamicResource MacSeparator}"
@@ -168,11 +193,13 @@
         </Grid>
 
         <!-- ============ 页脚：截断/读取失败原因（正常预览时不占位） ============ -->
-        <Border x:Name="FooterBar" Grid.Row="2" Visibility="Collapsed"
+        <Border x:Name="FooterBar" Grid.Row="2" Visibility="Collapsed" CornerRadius="0,0,12,12"
                 Background="#0A808080" BorderBrush="{DynamicResource MacSeparator}"
                 BorderThickness="0,1,0,0" Padding="14,7">
             <TextBlock x:Name="FooterText" FontSize="11" TextWrapping="Wrap"
                        Foreground="{DynamicResource MacTextSecondary}"/>
+        </Border>
+        </Grid>
         </Border>
     </Grid>
 </Window>

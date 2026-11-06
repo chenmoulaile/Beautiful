@@ -8,6 +8,7 @@ using Beautiful.App.Dock;
 using Beautiful.App.Interop;
 using Beautiful.App.MediaWidget;
 using Beautiful.App.Services;
+using Beautiful.Core.Dock;      // 每显示器覆盖配置（DockMonitorProfile / DockMonitorProfiles）
 using Beautiful.Core.Settings;
 using Beautiful.Core.Themes;
 using Beautiful.Core.TopBar;   // 时钟样张与顶栏共用同一套 Core 折算（ClockFormat / ClockFormatter）
@@ -77,6 +78,10 @@ public partial class SettingsWindow : Window
             _saveDebounce.Stop();
             SettingsService.Save();
         };
+
+        // 图标主题编辑器（独立分区）：注入 Dock 数据源即可，格子刷新与覆盖表变更订阅都在控件内
+        // （Loaded 时 RefreshCells + IconThemeService.Changed），宿主无需再接其它事件。
+        IconThemeEditor.Attach(_dockVm);
 
         LoadState();
         _loading = false;
@@ -152,7 +157,14 @@ public partial class SettingsWindow : Window
         BounceCheck.IsChecked = s.BounceEnabled;
         CapsuleCheck.IsChecked = s.ShowMediaCapsule;
         DockWidgetCheck.IsChecked = s.DockWidgetEnabled;
-        DockHideCombo.SelectedIndex = s.DockHideMode switch { "auto" => 1, "dim" => 2, _ => 0 };
+        // Dock 隐藏模式（9 档）与 modifier 档的临时显示修饰键：按 Tag 选中，未知值由 Normalized 收敛
+        SelectByTag(DockHideCombo, s.DockHideMode, "off");
+        SelectByTag(DockModifierBox, s.DockModifierKey, "ctrl");
+        UpdateDockModifierVisibility();
+        DockRevealCombo.SelectedIndex = s.DockAutoHideReveal switch { "dwell" => 1, "double" => 2, _ => 0 };
+        DockAutoHideDelaySlider.Value = s.DockAutoHideDelayMs;   // ValueChanged 只刷标签（_loading 屏蔽应用）
+        ScreenCornersCheck.IsChecked = s.ScreenCornersEnabled;
+        ScreenCornerRadiusSlider.Value = s.ScreenCornerRadius;   // 同上
         WindowOpenAnimCheck.IsChecked = s.WindowOpenAnimation;
         WindowCloseAnimCheck.IsChecked = s.WindowCloseAnimation;
         DockEdgeCombo.SelectedIndex = s.DockEdge switch { "left" => 1, "right" => 2, _ => 0 };
@@ -241,6 +253,7 @@ public partial class SettingsWindow : Window
         var s = SettingsService.Current;
         FillMonitorBox(DockMonitorBox, s.DockMonitor);
         FillMonitorBox(TopBarMonitorBox, s.TopBarMonitor);
+        LoadPerMonitorBlock();
     }
 
     private static void FillMonitorBox(ComboBox box, string selected)
@@ -659,6 +672,102 @@ public partial class SettingsWindow : Window
         App.ApplyTopBarGeometry();
     }
 
+    // ---------- 每显示器 Dock 覆盖配置（对标 MyDockFinder 多屏；schema/解析在 Core DockMonitorProfiles） ----------
+
+    /// <summary>每屏覆盖下拉的选项（Value 即 DockMonitorProfile.Monitor 的键）。</summary>
+    public sealed record PerMonitorOption(string Value, string Label);
+
+    /// <summary>正在编辑覆盖配置的屏键（primary / "2"…；null = 尚未选择，此时三行覆盖控件全部禁用）。</summary>
+    private string? _perMonitorTarget;
+
+    private void LoadPerMonitorBlock()
+    {
+        // 键只有 primary + 序号："auto" 对单块屏没有定义（auto 是启动落位选择器的语义），不进这份下拉。
+        var items = new List<PerMonitorOption> { new("", "选择要覆盖的屏…") };
+        foreach (var option in MonitorGeometry.Options())
+            if (option.Value != "auto") items.Add(new PerMonitorOption(option.Value, option.Label));
+        PerMonitorBox.DisplayMemberPath = nameof(PerMonitorOption.Label);
+        PerMonitorBox.SelectedValuePath = nameof(PerMonitorOption.Value);
+        PerMonitorBox.ItemsSource = items;
+        PerMonitorBox.SelectedIndex = 0;    // 触发 PerMonitor_Changed → 行按未选状态复位
+        UpdatePerMonitorRows();
+    }
+
+    /// <summary>编辑目标换屏：把该屏现有覆盖（没有则全空）回填到三行控件。</summary>
+    private void UpdatePerMonitorRows()
+    {
+        _perMonitorTarget = PerMonitorBox.SelectedValue as string is { Length: > 0 } key ? key : null;
+        var profile = _perMonitorTarget is null
+            ? null
+            : SettingsService.Current.DockMonitorProfiles.FirstOrDefault(p => p.Monitor == _perMonitorTarget);
+
+        PerMonitorEdgeBox.IsEnabled = PerMonitorAutoHideBox.IsEnabled = _perMonitorTarget is not null;
+        PerMonitorIconFollowCheck.IsEnabled = _perMonitorTarget is not null;
+
+        SelectByTag(PerMonitorEdgeBox, profile?.Edge ?? "", "");
+        PerMonitorAutoHideBox.SelectedIndex = profile?.AutoHide switch { true => 1, false => 2, _ => 0 };
+        var follow = profile?.IconSize is null;
+        PerMonitorIconFollowCheck.IsChecked = follow;
+        PerMonitorIconSizeSlider.IsEnabled = !follow && _perMonitorTarget is not null;
+        PerMonitorIconSizeSlider.Value = profile?.IconSize ?? SettingsService.Current.DockIconSize;
+        PerMonitorIconSizeLabel.Text = follow ? "跟随全局" : $"{(int)PerMonitorIconSizeSlider.Value} px";
+    }
+
+    /// <summary>
+    /// 三行覆盖控件共同的落盘出口：按编辑目标 upsert 一条 <see cref="DockMonitorProfile"/>；
+    /// 三项全空（都跟随全局）时移除该条——不留下没有存在意义的配置。改完走
+    /// App.ApplyDockLayout：Dock 当前若正落在这块屏，重排路径会让覆盖立即生效（含每屏边/隐藏的运行态应用）。
+    /// </summary>
+    private void UpsertPerMonitor()
+    {
+        if (_loading || _perMonitorTarget is null) return;
+        var s = SettingsService.Current;
+        var profiles = new List<DockMonitorProfile>(s.DockMonitorProfiles);
+        var index = profiles.FindIndex(p => p.Monitor == _perMonitorTarget);
+        var edge = (TagOf(PerMonitorEdgeBox.SelectedItem) ?? "") is { Length: > 0 } e ? e : (string?)null;
+        var autoHide = PerMonitorAutoHideBox.SelectedIndex switch { 1 => (bool?)true, 2 => (bool?)false, _ => null };
+        var iconSize = PerMonitorIconFollowCheck.IsChecked == true
+            ? (int?)null
+            : (int?)Math.Round(PerMonitorIconSizeSlider.Value);
+        var updated = index >= 0
+            ? profiles[index] with { Edge = edge, AutoHide = autoHide, IconSize = iconSize }
+            : new DockMonitorProfile { Monitor = _perMonitorTarget, Edge = edge, AutoHide = autoHide, IconSize = iconSize };
+
+        if (updated.Edge is null && updated.AutoHide is null && updated.IconSize is null)
+        {
+            if (index >= 0) profiles.RemoveAt(index);
+        }
+        else if (index >= 0) profiles[index] = updated;
+        else profiles.Add(updated);
+
+        SettingsService.UpdateAndSave(s with { DockMonitorProfiles = profiles });
+        App.ApplyDockLayout();
+    }
+
+    private void PerMonitor_Changed(object sender, SelectionChangedEventArgs e) => UpdatePerMonitorRows();
+
+    private void PerMonitorEdge_Changed(object sender, SelectionChangedEventArgs e) => UpsertPerMonitor();
+
+    private void PerMonitorAutoHide_Changed(object sender, SelectionChangedEventArgs e) => UpsertPerMonitor();
+
+    private void PerMonitorIconFollow_Changed(object sender, RoutedEventArgs e)
+    {
+        if (PerMonitorIconSizeSlider is null) return;   // XAML 解析期初次触发时控件尚未就绪
+        var follow = PerMonitorIconFollowCheck.IsChecked == true;
+        PerMonitorIconSizeSlider.IsEnabled = !follow && _perMonitorTarget is not null;
+        if (!follow && PerMonitorIconSizeLabel.Text == "跟随全局")
+            PerMonitorIconSizeSlider.Value = SettingsService.Current.DockIconSize;   // 从"跟随"切到显式值：以全局当前值起步
+        PerMonitorIconSizeLabel.Text = follow ? "跟随全局" : $"{(int)PerMonitorIconSizeSlider.Value} px";
+        UpsertPerMonitor();
+    }
+
+    private void PerMonitorIconSize_ValueChanged(object sender, RoutedPropertyChangedEventArgs<double> e)
+    {
+        if (PerMonitorIconSizeLabel is null) return;    // XAML 解析期初次触发时标签尚未就绪
+        PerMonitorIconSizeLabel.Text = $"{(int)e.NewValue} px";
+        UpsertPerMonitor();
+    }
+
     // ---------- 窗口切换器 ----------
 
     private void Switcher_Changed(object sender, RoutedEventArgs e)
@@ -716,12 +825,70 @@ public partial class SettingsWindow : Window
         if (!e.Cancel && Animation.WindowCloseFx.TryBegin(this)) e.Cancel = true;
     }
 
-    /// <summary>Dock 隐藏方式（P3-T5）：常显 / 自动隐藏 / 半透明，立即生效。</summary>
+    /// <summary>Dock 隐藏方式（9 档，对标 MyDockFinder）：按 Tag 落到 Core 白名单模式，立即生效。</summary>
     private void DockHide_Changed(object sender, SelectionChangedEventArgs e)
     {
         if (_loading) return;
-        var mode = DockHideCombo.SelectedIndex switch { 1 => "auto", 2 => "dim", _ => "off" };
-        App.ApplyDockHideMode(mode);
+        UpdateDockModifierVisibility();
+        App.ApplyDockHideMode(TagOf(DockHideCombo.SelectedItem) ?? "off");
+    }
+
+    /// <summary>modifier 档的修饰键只在"按住修饰键临时显示"下有意义：其余档隐藏选择器（不制造死控件）。</summary>
+    private void UpdateDockModifierVisibility()
+        => DockModifierLabel.Visibility = DockModifierBox.Visibility =
+            (TagOf(DockHideCombo.SelectedItem) ?? "off") == "modifier" ? Visibility.Visible : Visibility.Collapsed;
+
+    /// <summary>临时显示修饰键（ctrl/alt/shift/win）：只落盘——DockWindow 每拍读 Current，下一拍生效。</summary>
+    private void DockModifier_Changed(object sender, SelectionChangedEventArgs e)
+    {
+        if (_loading) return;
+        SettingsService.UpdateAndSave(SettingsService.Current with
+        {
+            DockModifierKey = TagOf(DockModifierBox.SelectedItem) ?? "ctrl"
+        });
+    }
+
+    /// <summary>
+    /// 自动隐藏的唤出方式（touch/dwell/double）：落盘 + 让 Dock 立即换唤出门模式；
+    /// 仅自动隐藏模式消费这一项（下拉旁的灰字已说明）。
+    /// </summary>
+    private void DockReveal_Changed(object sender, SelectionChangedEventArgs e)
+    {
+        if (_loading) return;
+        var reveal = TagOf(DockRevealCombo.SelectedItem) ?? "touch";
+        SettingsService.UpdateAndSave(SettingsService.Current with { DockAutoHideReveal = reveal });
+        App.ApplyDockAutoHideOptions();
+    }
+
+    /// <summary>自动隐藏的触发延迟滑杆（0..5000ms）：400ms 防抖落盘；TickAutoHide 每拍读 Current，下一拍生效。</summary>
+    private void DockAutoHideDelay_ValueChanged(object sender, RoutedPropertyChangedEventArgs<double> e)
+    {
+        if (DockAutoHideDelayLabel is null) return; // XAML 解析期初次触发时标签尚未就绪
+        var ms = (int)e.NewValue;
+        DockAutoHideDelayLabel.Text = $"{ms} ms";
+        if (_loading) return;
+        SettingsService.Update(SettingsService.Current with { DockAutoHideDelayMs = ms });
+        ScheduleSave();
+    }
+
+    /// <summary>屏幕四角圆角遮罩（对标 MyDockFinder ScreenRound）：落盘 + 立即对账（建/撤/重摆遮罩窗）。</summary>
+    private void ScreenCorners_Changed(object sender, RoutedEventArgs e)
+    {
+        if (_loading) return;
+        SettingsService.UpdateAndSave(SettingsService.Current with { ScreenCornersEnabled = ScreenCornersCheck.IsChecked == true });
+        App.ApplyScreenCorners();
+    }
+
+    /// <summary>遮罩半径滑杆（4..48）：即时重摆遮罩（几何纯函数换算，无需重启）；400ms 防抖落盘。</summary>
+    private void ScreenCornerRadius_ValueChanged(object sender, RoutedPropertyChangedEventArgs<double> e)
+    {
+        if (ScreenCornerRadiusLabel is null) return; // XAML 解析期初次触发时标签尚未就绪
+        var radius = (int)e.NewValue;
+        ScreenCornerRadiusLabel.Text = $"{radius} px";
+        if (_loading) return;
+        SettingsService.Update(SettingsService.Current with { ScreenCornerRadius = radius });
+        App.ApplyScreenCorners();
+        ScheduleSave();
     }
 
     /// <summary>Dock 小组件开关（Phase 7-T3）：立即重排行尾，不需要重启 Dock。</summary>
@@ -802,10 +969,15 @@ public partial class SettingsWindow : Window
         if (s.SwitcherEnabled)
             App.ApplySwitcherHotkey(s.SwitcherHotkey, s.FullscreenPassthrough);
         App.ApplyDockLayout();
+        App.ApplyScreenCorners();   // 恢复默认后圆角遮罩回到"关"：对账即撤除全部遮罩窗
+        App.ApplyDockAutoHideOptions();   // 恢复默认后唤出方式回到 touch
         _mediaVm.CapsuleVisible = s.ShowMediaCapsule;
         _mediaVm.PanelAutoHideOnDeactivate = s.HidePanelOnDeactivate;
         UpdateThemeDependentControls();
         UpdateTaskbarHint();
+        // 台前调度卡自足（勾选即写即生效），但它只在 Loaded 时回读一次：
+        // 恢复默认把 StageManagerEnabled 重置为 false 后，这里显式刷新勾选态，避免 UI 与实际不一致。
+        StageManagerCard.ReloadFromSettings();
     }
 
     // ---------- 固定应用 ----------

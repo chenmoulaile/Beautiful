@@ -14,6 +14,7 @@ using Color = System.Windows.Media.Color;
 using HorizontalAlignment = System.Windows.HorizontalAlignment;
 using Point = System.Windows.Point;
 using Rectangle = System.Windows.Shapes.Rectangle;
+using Application = System.Windows.Application;   // UseWindowsForms 隐式 using 消歧
 
 namespace Beautiful.App.Controls;
 
@@ -68,13 +69,15 @@ public partial class VolumeOsdWindow : Window
         var clamped = VolumeOsd.Clamp(percent);
         var lit = VolumeOsd.LitSegments(clamped, muted);
 
-        GlyphText.Text = VolumeOsd.GlyphFor(clamped, muted) switch
+        // 喇叭图标随状态换档（macOS 化 r4：Segoe 码点 → Symbols.xaml 矢量几何）：
+        // 静音 = 喇叭带叉，音量低→高 = 弧数递增，与 16 格音量条同向。
+        GlyphIcon.Data = VolumeOsd.GlyphFor(clamped, muted) switch
         {
-            VolumeGlyph.Mute => "\uE74F",     // 喇叭带斜杠
-            VolumeGlyph.Low => "\uE993",      // 无弧
-            VolumeGlyph.Medium => "\uE994",   // 一道弧
-            _ => "\uE767"                     // 三道弧
-        };
+            VolumeGlyph.Mute => Sym("SymbolVolume0"),     // 喇叭带叉（静音）
+            VolumeGlyph.Low => Sym("SymbolVolume1"),      // 一道弧
+            VolumeGlyph.Medium => Sym("SymbolVolume2"),   // 一道大弧
+            _ => Sym("SymbolVolume3")                     // 两道弧
+        } ?? GlyphIcon.Data;
 
         // macOS 的 HUD 不显示数字：读数只留给日志与状态栏，面板上保持"图标 + 格子"的原样。
         LevelText.Text = string.Empty;
@@ -135,6 +138,10 @@ public partial class VolumeOsdWindow : Window
         brush.Freeze();
         return brush;
     }
+
+    /// <summary>按资源键取 Symbol 几何（App.xaml 全局合并 Symbols.xaml；取不到返回 null，由调用方保持原状）。</summary>
+    private static Geometry? Sym(string key) =>
+        Application.Current?.TryFindResource(key) as Geometry;
 
     private void Tick()
     {

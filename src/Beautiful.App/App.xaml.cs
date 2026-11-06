@@ -59,6 +59,8 @@ public partial class App : Application
     private TopBarWindow? _topBar;
     private FullscreenAvoidanceService? _fullscreenAvoidance;
     private HotCornerService? _hotCorners;
+    private ScreenCorners.ScreenCornerService? _screenCorners;
+    private StageManager.StageManagerService? _stageManager;
     private Switcher.SwitcherService? _switcher;
     private Switcher.SwitcherWindow? _switcherWindow;
     private Launcher.LauncherService? _launcher;
@@ -71,6 +73,9 @@ public partial class App : Application
 
     /// <summary>音量 HUD 控制器（Phase 4-T7）：持有媒体键钩子与 HUD 窗口，退出必须释放。</summary>
     private VolumeOsdController? _volumeOsd;
+
+    /// <summary>CPU 温度轮询（对标 MyDockFinder 温度显示，默认关）：后台表，退出必须停。</summary>
+    private ThermalMonitorService? _thermal;
 
     private bool _exiting;
 
@@ -203,6 +208,11 @@ public partial class App : Application
             if (SettingsService.Current.TopBarEnabled) EnsureTopBar();
             else RestartFullscreenAvoidance();   // 顶栏关闭时也要为 Dock 启动全屏避让
 
+            // 6.55 温度监控（对标 MyDockFinder 温度显示）：默认关；只在开关开且顶栏在屏时启动后台轮询。
+            // 附属能力：探测/读取全程容错，没有数据源就保持芯片隐藏（优雅空态），绝不连坐主 UI。
+            if (SettingsService.Current.ThermalChipEnabled && SettingsService.Current.TopBarEnabled)
+                StartThermalMonitor();
+
             // 6.6 切换器（Task 11）：Alt+Tab 接管。同样按"附属能力"处理——钩子装不上只是退回原生
             // Alt+Tab，绝不能连坐主 UI；但退出时必须先卸钩（见 ExitApp/OnExit）。
             // 启动器热键<b>共用</b>这一条 WH_KEYBOARD_LL（钩子回调里两条分支各判各的组合键，见 AltTabHook），
@@ -219,6 +229,36 @@ public partial class App : Application
 
             // 6.9 音量 HUD（Phase 4-T7）：设置开启时接管媒体键（不吞则系统浮层与自家 HUD 会同时出现）
             _volumeOsd = new VolumeOsdController(SettingsService.Current.VolumeOsdEnabled, Dispatcher);
+
+            // 6.10 屏幕圆角遮罩（对标 MyDockFinder ScreenRound）：每屏四角 topmost + 输入穿透的小窗，
+            // 默认关。附属表面：装配失败降级为"无遮罩"，绝不连坐主 UI（与顶栏/切换器同一处置）。
+            try
+            {
+                _screenCorners = new ScreenCorners.ScreenCornerService();
+                _screenCorners.ApplySettings();
+            }
+            catch (Exception ex)
+            {
+                try { _screenCorners?.Dispose(); } catch { /* 降级路径：Dispose 失败不掩盖原始异常 */ }
+                _screenCorners = null;
+                Logger.Warn($"屏幕圆角未启用（降级为无遮罩运行）: {ex.Message}");
+            }
+
+            // 6.11 台前调度（wp-macos-parity r5，macOS Stage Manager 等效）：左侧舞台条 + DWM 实况
+            // 缩略图，默认关（StageManagerEnabled）。附属表面：装配失败降级为"无台前调度"，
+            // 绝不连坐主 UI（与顶栏/切换器/屏幕圆角同一处置）；开关入口是 ApplySettings，
+            // 设置页的 UserControl 与这里共用它。
+            try
+            {
+                _stageManager = new StageManager.StageManagerService();
+                _stageManager.ApplySettings();
+            }
+            catch (Exception ex)
+            {
+                try { _stageManager?.Dispose(); } catch { /* 降级路径：Dispose 失败不掩盖原始异常 */ }
+                _stageManager = null;
+                Logger.Warn($"台前调度未启用（降级为无舞台条运行）: {ex.Message}");
+            }
 
             // 新通知 → 右上角横幅（历史仍由通知中心保留；关掉横幅不影响历史）
             _notifications.Arrived += (_, item) =>
@@ -469,8 +509,13 @@ public partial class App : Application
         _fullscreenAvoidance = null;
         _hotCorners?.Dispose();
         _hotCorners = null;
+        _screenCorners?.Dispose();   // 屏幕圆角遮罩（幂等；ExitApp 已走过一次则 no-op）
+        _screenCorners = null;
+        _stageManager?.Dispose();    // 台前调度：撤舞台条 + 停跟踪（幂等；缩略图句柄随窗口注销）
+        _stageManager = null;
         _launchpadHotkey?.Dispose();
         _launchpadHotkey = null;
+        StopThermalMonitor();   // 温度轮询兜底停表（ExitApp 已走过则 no-op，幂等）
         _tray?.Dispose();
         _tray = null;
         _animator?.Dispose();   // WinEvent 钩子必须卸载（幂等）
@@ -1023,11 +1068,13 @@ public partial class App : Application
         app?._switcher?.SetHookEnabled(SettingsService.Current.SwitcherEnabled);
     }
 
-    /// <summary>把 SettingsService.Current.TopBarEnabled 应用到运行中的实例（创建/销毁，均幂等）。</summary>
+    /// <summary>把 SettingsService.Current.TopBarEnabled 应用到运行中的实例（创建/销毁，均幂等）。
+    /// 温度芯片的载体是顶栏：开关顶栏必须连带对账轮询（开顶栏补启动，关顶栏停表收芯片）。</summary>
     private void ApplyTopBarEnabled()
     {
         if (SettingsService.Current.TopBarEnabled) EnsureTopBar();
         else DestroyTopBar();
+        ApplyThermalChip();
     }
 
     /// <summary>
@@ -1082,6 +1129,24 @@ public partial class App : Application
         }
     }
 
+    /// <summary>
+    /// 设置页改动自动隐藏的唤出方式：唤出门立即换模式（延迟项由 TickAutoHide 每拍读 Current，
+    /// 下一拍自然按新值生效，不需要专门入口）。
+    /// </summary>
+    internal static void ApplyDockAutoHideOptions()
+    {
+        if (Current is App { _dock: { } dock })
+        {
+            dock.ApplyAutoHideReveal(SettingsService.Current.DockAutoHideReveal);
+        }
+    }
+
+    /// <summary>设置页切换屏幕圆角遮罩 / 改半径：立即对账（遮罩窗按需建/撤/重摆，无需重启）。</summary>
+    internal static void ApplyScreenCorners() => (Current as App)?._screenCorners?.ApplySettings();
+
+    /// <summary>设置页切换台前调度：立即生效（开 = 启动跟踪 + 显出贴边小条；关 = 撤窗 + 停跟踪，无残留）。</summary>
+    internal static void ApplyStageManager() => (Current as App)?._stageManager?.ApplySettings();
+
     /// <summary>设置页切换 Dock 小组件：直接让 Dock 重排行尾（不需要重启，也不重建窗口）。</summary>
     internal static void ApplyDockWidget(bool enabled)
     {
@@ -1091,6 +1156,75 @@ public partial class App : Application
         }
 
         Logger.Info($"Dock 小组件已{(enabled ? "启用" : "停用")}");
+    }
+
+    // ---------- 温度监控（对标 MyDockFinder 温度显示；默认关） ----------
+
+    /// <summary>按当前设置启动温度轮询（幂等；只在"开关开且顶栏在屏"时调用）。
+    /// 附属能力：装配失败仅记日志降级为"无温度芯片"，不连坐主 UI。</summary>
+    private void StartThermalMonitor()
+    {
+        if (_thermal is not null || _exiting) return;
+        try
+        {
+            _thermal = new ThermalMonitorService(SettingsService.Current.ThermalRefreshSeconds, Dispatcher);
+            _thermal.Start();
+        }
+        catch (Exception ex)
+        {
+            try { _thermal?.Dispose(); } catch { /* 降级路径：Dispose 失败不掩盖原始异常 */ }
+            _thermal = null;
+            Logger.Warn($"温度监控未启用（降级为无温度芯片）: {ex.Message}");
+        }
+    }
+
+    /// <summary>停表（幂等）：Dispose 内部会停轮询并把 <see cref="ThermalMonitorService.Current"/> 置空。</summary>
+    private void StopThermalMonitor()
+    {
+        if (_thermal is null) return;
+        var old = _thermal;
+        _thermal = null;
+        old.Dispose();
+        Logger.Info("温度监控已停止");
+    }
+
+    /// <summary>
+    /// 设置页温度开关/间隔变更后的即时生效入口：按当前设置重建或停掉轮询；
+    /// 关闭时顺手收起顶栏芯片（<b>关功能即收界面</b>，不留一个不再更新的假状态）。
+    /// 间隔没变且在跑时是 no-op（不重建、不清已有读数）。
+    /// </summary>
+    internal static void ApplyThermalChip()
+    {
+        if (Current is not App app) return;
+        bool enabled = SettingsService.Current.ThermalChipEnabled && SettingsService.Current.TopBarEnabled;
+        if (!enabled)
+        {
+            app.StopThermalMonitor();
+            app._topBar?.HideThermalChip();
+            return;
+        }
+
+        // 顶栏关着时芯片没有载体：不跑轮询（WMI 一拍也不读），开顶栏时由 EnsureTopBar → 启动序重建。
+        if (!SettingsService.Current.TopBarEnabled) return;
+        app._topBar?.EnsureThermalChip();   // 运行中顶栏即时长出芯片（首次开启时 BuildRightRegion 装配被跳过）
+        if (app._thermal is { IntervalSeconds: var running } && running == SettingsService.Current.ThermalRefreshSeconds)
+        {
+            return;   // 开关已开、间隔没变：现有轮询照常工作
+        }
+
+        app.StopThermalMonitor();
+        app.StartThermalMonitor();
+    }
+
+    /// <summary>设置卡片写入口（落盘 + 即时生效，供独立设置控件 ThermalSettingsCard 调用）。</summary>
+    public static void SetThermalChip(bool enabled, int refreshSeconds)
+    {
+        SettingsService.UpdateAndSave(SettingsService.Current with
+        {
+            ThermalChipEnabled = enabled,
+            ThermalRefreshSeconds = refreshSeconds
+        });
+        ApplyThermalChip();
     }
 
     /// <summary>设置页切换音量 HUD：重建控制器（关掉时连钩子都不装，媒体键立刻回到系统行为）。</summary>
@@ -1291,6 +1425,11 @@ public partial class App : Application
             _notifications = null;
             _volumeOsd?.Dispose();    // 音量 HUD：卸媒体键钩子，恢复系统音量键行为
             _volumeOsd = null;
+            StopThermalMonitor();     // 温度轮询：停后台表（退出后不再读 WMI）
+            _screenCorners?.Dispose();   // 屏幕圆角遮罩：撤除全部置顶小窗（幂等）
+            _screenCorners = null;
+            _stageManager?.Dispose();    // 台前调度：撤舞台条 + 停跟踪（屏上不留常驻小条）
+            _stageManager = null;
             TopBar.NotificationBannerHost.CloseAll();
             _dock?.Close();          // DockWindow.OnClosing：AppBar ABM_REMOVE（hwnd 销毁前）
             _animator?.Dispose();    // WinEvent 钩子：退出过程中任何一次最小化都不该再起动画

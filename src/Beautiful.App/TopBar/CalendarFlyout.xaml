@@ -19,16 +19,24 @@
                     <ColumnDefinition Width="*"/>
                     <ColumnDefinition Width="Auto"/>
                 </Grid.ColumnDefinitions>
-                <Button x:Name="PrevBtn" Grid.Column="0" Content="&#xE76B;" Width="26" Height="26"
-                        FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets" FontSize="12"
+                <Button x:Name="PrevBtn" Grid.Column="0" Width="26" Height="26"
                         Background="Transparent" BorderThickness="0" Foreground="{DynamicResource ThemeTextPrimary}"
-                        Click="OnPrev"/>
+                        Click="OnPrev" AutomationProperties.Name="上一月">
+                    <Path Data="{StaticResource SymbolChevronLeft}" Width="7" Height="12" Stretch="Uniform"
+                          StrokeThickness="2" StrokeStartLineCap="Round" StrokeEndLineCap="Round"
+                          StrokeLineJoin="Round" Fill="Transparent"
+                          Stroke="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}"/>
+                </Button>
                 <TextBlock x:Name="MonthLabel" Grid.Column="1" FontWeight="SemiBold" FontSize="14"
                            HorizontalAlignment="Center" VerticalAlignment="Center"/>
-                <Button x:Name="NextBtn" Grid.Column="2" Content="&#xE76C;" Width="26" Height="26"
-                        FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets" FontSize="12"
+                <Button x:Name="NextBtn" Grid.Column="2" Width="26" Height="26"
                         Background="Transparent" BorderThickness="0" Foreground="{DynamicResource ThemeTextPrimary}"
-                        Click="OnNext"/>
+                        Click="OnNext" AutomationProperties.Name="下一月">
+                    <Path Data="{StaticResource SymbolChevron}" Width="7" Height="12" Stretch="Uniform"
+                          StrokeThickness="2" StrokeStartLineCap="Round" StrokeEndLineCap="Round"
+                          StrokeLineJoin="Round" Fill="Transparent"
+                          Stroke="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}"/>
+                </Button>
             </Grid>
 
             <!-- 星期表头（周日起，与 Windows 中文习惯一致） -->

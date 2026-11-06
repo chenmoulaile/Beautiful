@@ -33,3 +33,6 @@ installer/out/
 .superpowers/
 # 本地 AI 工作区（会话记忆/临时产物，不入公开仓库）
 .workbuddy-ai/
+# 本地 AI 工作区与图标下载暂存（不入公开仓库）
+.workbuddy/
+tools/_icon-download-r4/

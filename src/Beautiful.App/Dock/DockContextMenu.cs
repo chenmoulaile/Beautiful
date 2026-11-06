@@ -3,11 +3,13 @@ using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Runtime.InteropServices;
+using System.Windows;
 using System.Windows.Media;
 using Beautiful.App.Controls;
 using Beautiful.App.Interop;
 using Beautiful.App.Services;
 using Beautiful.Core.Dock;
+using Application = System.Windows.Application;   // UseWindowsForms 隐式 using 消歧
 
 namespace Beautiful.App.Dock;
 
@@ -50,12 +52,14 @@ internal static class DockContextMenuBuilder
             _ => new List<WindowItem>()
         };
         var snaps = related.Select(Snap).ToList();
-        var icons = new Dictionary<IntPtr, ImageSource?>();
-        foreach (var w in related) icons[w.Handle] = w.Icon;
-
         var executable = item.Kind == DockItemKind.RecycleBin
             ? string.Empty
             : DockViewModel.ResolveTarget(item.LaunchPath);
+        // 菜单里的逐窗图标与 tile 同源（macOS 化 r4）：图标集命中就用同一张 macOS 脸，
+        // 没有对应图才沿用窗口各自的提取图标——同一行里绝不出现两套图标语言。
+        var macIcon = string.IsNullOrWhiteSpace(executable) ? null : MacIconCatalog.TryGetFor(executable);
+        var icons = new Dictionary<IntPtr, ImageSource?>();
+        foreach (var w in related) icons[w.Handle] = macIcon ?? w.Icon;
 
         var input = new DockContextMenuInput
         {
@@ -114,7 +118,7 @@ internal static class DockContextMenuBuilder
                 {
                     Id = e.Id + ":confirm",
                     Label = e.ConfirmLabel ?? "确认执行？",
-                    Glyph = CloseGlyph,
+                    GlyphGeometry = Sym("SymbolClose"),
                     Invoke = () => exec.Execute(menu, e)
                 }
             };
@@ -127,7 +131,7 @@ internal static class DockContextMenuBuilder
         {
             Id = e.Id,
             Label = label,
-            Glyph = GlyphOf(e.Action),
+            GlyphGeometry = GlyphOf(e.Action),
             Icon = icon,
             IsChecked = e.IsChecked,
             IsEnabled = e.IsEnabled,
@@ -212,20 +216,20 @@ internal static class DockContextMenuBuilder
         catch { return string.Equals(a, b, StringComparison.OrdinalIgnoreCase); }
     }
 
-    // ---------- 字形：只取本仓库已在用的码点（未验证的码点会渲染成缺字方框，宁可留空保持对齐） ----------
-    private const string CloseGlyph = "\uE711", MinGlyph = "\uE73F", QuitGlyph = "\uE7E8",
-                         WindowGlyph = "\uE7C3", FolderGlyph = "\uE8B7", GearGlyph = "\uE713",
-                         DesktopGlyph = "\uE7F4";
+    // ---------- 字形：Symbols.xaml 的矢量几何（macOS 化 r4 起替代 Segoe 码点）；
+    // 取不到资源返回 null → 菜单图标列留空保持对齐，绝不猜 ----------
+    private static Geometry? Sym(string key) =>
+        Application.Current?.TryFindResource(key) as Geometry;
 
-    private static string? GlyphOf(DockContextAction action) => action switch
+    private static Geometry? GlyphOf(DockContextAction action) => action switch
     {
-        DockContextAction.OpenNewWindow or DockContextAction.WindowList => WindowGlyph,
-        DockContextAction.ShowAllWindows => DesktopGlyph,
-        DockContextAction.CloseAllWindows or DockContextAction.CloseWindow => CloseGlyph,
-        DockContextAction.Quit => QuitGlyph,
-        DockContextAction.Minimize => MinGlyph,
-        DockContextAction.OpenFileLocation => FolderGlyph,
-        DockContextAction.Properties => GearGlyph,
+        DockContextAction.OpenNewWindow or DockContextAction.WindowList => Sym("SymbolSwitcher"),
+        DockContextAction.ShowAllWindows => Sym("SymbolDisplay"),
+        DockContextAction.CloseAllWindows or DockContextAction.CloseWindow => Sym("SymbolClose"),
+        DockContextAction.Quit => Sym("SymbolLogout"),
+        DockContextAction.Minimize => Sym("SymbolMinus"),
+        DockContextAction.OpenFileLocation => Sym("SymbolFolder"),
+        DockContextAction.Properties => Sym("SymbolGear"),
         _ => null
     };
 }

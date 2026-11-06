@@ -73,8 +73,7 @@
                             <ColumnDefinition Width="Auto"/>
                         </Grid.ColumnDefinitions>
                         <Button x:Name="MuteButton" Grid.Column="0" Width="32" Height="30" Margin="0,0,8,0"
-                                Padding="0" FontSize="14"
-                                FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets"
+                                Padding="0"
                                 Foreground="{DynamicResource ThemeTextPrimary}"
                                 Style="{StaticResource RowButtonStyle}" Click="Mute_Click"
                                 AutomationProperties.Name="静音开关"/>

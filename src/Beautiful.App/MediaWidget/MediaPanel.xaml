@@ -33,8 +33,6 @@
         <Style x:Key="TransportButtonStyle" TargetType="Button">
             <Setter Property="Width" Value="64"/>
             <Setter Property="Height" Value="38"/>
-            <Setter Property="FontFamily" Value="Segoe Fluent Icons,Segoe MDL2 Assets"/>
-            <Setter Property="FontSize" Value="18"/>
             <Setter Property="Foreground" Value="{DynamicResource ThemeTextPrimary}"/>
             <Setter Property="Focusable" Value="False"/>
             <Setter Property="Cursor" Value="Hand"/>
@@ -56,14 +54,41 @@
                 </Setter.Value>
             </Setter>
         </Style>
-        <!-- 播放/暂停：字形随 IsPlaying 切换（\uE768 播放 / \uE769 暂停） -->
+        <!-- 播放/暂停：Symbols.xaml 矢量几何随 IsPlaying 切换（macOS 化 r4 替代 Segoe \uE768/\uE769 码点）。
+             双 Path 都放在模板里由 DataTrigger 切可见性——模板按 Button 实例展开，
+             避免旧做法（Style Setter 提供 Content 元素）在多实例间的元素共享问题。 -->
         <Style x:Key="PlayPauseButtonStyle" TargetType="Button" BasedOn="{StaticResource TransportButtonStyle}">
-            <Setter Property="Content" Value="&#xE768;"/>
-            <Style.Triggers>
-                <DataTrigger Binding="{Binding IsPlaying}" Value="True">
-                    <Setter Property="Content" Value="&#xE769;"/>
-                </DataTrigger>
-            </Style.Triggers>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Button">
+                        <Border x:Name="Bg" CornerRadius="8" Background="Transparent">
+                            <Grid>
+                                <Path x:Name="PlayIcon" Data="{StaticResource SymbolPlay}"
+                                      Width="18" Height="18" Stretch="Uniform" Fill="Transparent"
+                                      StrokeThickness="1.8" StrokeStartLineCap="Round" StrokeEndLineCap="Round"
+                                      StrokeLineJoin="Round" Stroke="{TemplateBinding Foreground}"/>
+                                <Path x:Name="PauseIcon" Data="{StaticResource SymbolPause}"
+                                      Width="18" Height="18" Stretch="Uniform" Fill="Transparent"
+                                      StrokeThickness="1.8" StrokeStartLineCap="Round" StrokeEndLineCap="Round"
+                                      StrokeLineJoin="Round" Stroke="{TemplateBinding Foreground}"
+                                      Visibility="Collapsed"/>
+                            </Grid>
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="Bg" Property="Background" Value="#22FFFFFF"/>
+                            </Trigger>
+                            <Trigger Property="IsPressed" Value="True">
+                                <Setter TargetName="Bg" Property="Background" Value="#33FFFFFF"/>
+                            </Trigger>
+                            <DataTrigger Binding="{Binding IsPlaying}" Value="True">
+                                <Setter TargetName="PlayIcon" Property="Visibility" Value="Collapsed"/>
+                                <Setter TargetName="PauseIcon" Property="Visibility" Value="Visible"/>
+                            </DataTrigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
         </Style>
     </services:AcrylicWindow.Resources>
 
@@ -137,13 +162,25 @@
                 </Slider.Style>
             </Slider>
 
-            <!-- 上一首 \uE9AB / 播放暂停 \uE768-\uE769 / 下一首 \uE9AA
-                 （实取字形经本机字体渲染核对：E89A/E89B 在 Segoe Fluent Icons/MDL2 里是
-                 页面/评论图形，真正的跳曲键为 E9AA(▷|)/E9AB(|◁)） -->
+            <!-- 上一首 / 播放暂停 / 下一首：Symbols.xaml 矢量几何（macOS 化 r4 替代 Segoe E9AB/E768/E9AA 码点）；
+                 描边随按钮前景色走（主题切换/置灰同色）。 -->
             <UniformGrid Grid.Row="2" Columns="3" Margin="0,8,0,0">
-                <Button Style="{StaticResource TransportButtonStyle}" Content="&#xE9AB;" Command="{Binding PrevCommand}"/>
-                <Button Style="{StaticResource PlayPauseButtonStyle}" Command="{Binding TogglePlayCommand}"/>
-                <Button Style="{StaticResource TransportButtonStyle}" Content="&#xE9AA;" Command="{Binding NextCommand}"/>
+                <Button Style="{StaticResource TransportButtonStyle}" Command="{Binding PrevCommand}"
+                        AutomationProperties.Name="上一首">
+                    <Path Data="{StaticResource SymbolPrev}" Width="18" Height="18" Stretch="Uniform"
+                          Fill="Transparent" StrokeThickness="1.8" StrokeStartLineCap="Round"
+                          StrokeEndLineCap="Round" StrokeLineJoin="Round"
+                          Stroke="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}"/>
+                </Button>
+                <Button Style="{StaticResource PlayPauseButtonStyle}" Command="{Binding TogglePlayCommand}"
+                        AutomationProperties.Name="播放或暂停"/>
+                <Button Style="{StaticResource TransportButtonStyle}" Command="{Binding NextCommand}"
+                        AutomationProperties.Name="下一首">
+                    <Path Data="{StaticResource SymbolNext}" Width="18" Height="18" Stretch="Uniform"
+                          Fill="Transparent" StrokeThickness="1.8" StrokeStartLineCap="Round"
+                          StrokeEndLineCap="Round" StrokeLineJoin="Round"
+                          Stroke="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}"/>
+                </Button>
             </UniformGrid>
         </Grid>
     </Border>

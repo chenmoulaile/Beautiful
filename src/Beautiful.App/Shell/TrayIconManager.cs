@@ -1,11 +1,16 @@
+using System.IO;
 using System.Linq;
 using System.Runtime.InteropServices;
+using System.Windows;
+using System.Windows.Media;
+using System.Windows.Media.Imaging;
 using System.Windows.Forms;
 using Beautiful.App.Controls;
 using Beautiful.App.Services;
 using Beautiful.Core.Controls;
 using Beautiful.App.Themes;
 using Point = System.Windows.Point;
+using Application = System.Windows.Application;   // UseWindowsForms 隐式 using 消歧
 
 namespace Beautiful.App.Shell;
 
@@ -21,8 +26,8 @@ namespace Beautiful.App.Shell;
 public sealed class TrayIconManager : IDisposable
 {
     private readonly NotifyIcon _notify;
-    private readonly Icon _icon;
-    private readonly bool _ownsIcon; // SystemIcons.* 为进程级共享图标，不可 Dispose；仅自绘图标拥有
+    private readonly Icon? _icon;
+    private readonly bool _ownsIcon; // 自绘/资源兜底图标拥有所有权；null = 极端降级无图标
     private readonly Action _openSettings;
     private readonly Action _reloadDock;
     private readonly Action _exit;
@@ -72,22 +77,30 @@ public sealed class TrayIconManager : IDisposable
         var theme = _currentTheme();
         return new List<MenuItemView>
         {
-            new() { Id = "settings", Label = "设置…", Glyph = "\uE713", Invoke = _openSettings },
+            new() { Id = "settings", Label = "设置…", GlyphGeometry = Sym("SymbolGear"), Invoke = _openSettings },
             // 主题子菜单直接来自 QuickSettings.Themes 这一份白名单（与控制中心分段、顶栏主题菜单同源）：
             // v4 只剩 macOS 一项；未来换外观模式时同样只改这一处投影。
-            new() { Id = "theme", Label = "主题", Glyph = "\uE790",
+            new() { Id = "theme", Label = "主题", GlyphGeometry = Sym("SymbolAppearance"),
                     Children = [.. QuickSettings.Themes.Select(o => ThemeItem(o.Id, o.Label, theme))] },
-            new() { Id = "reload", Label = "重载 Dock", Glyph = "\uE72C", Invoke = _reloadDock },
+            new() { Id = "reload", Label = "重载 Dock", GlyphGeometry = Sym("SymbolRestart"), Invoke = _reloadDock },
             new() { Id = "sep", IsSeparator = true },
-            new() { Id = "quit", Label = "退出", Glyph = "\uE7E8", Invoke = _exit },
+            new() { Id = "quit", Label = "退出", GlyphGeometry = Sym("SymbolLogout"), Invoke = _exit },
         };
     }
+
+    /// <summary>按资源键取 Symbol 几何（App.xaml 全局合并 Symbols.xaml；取不到返回 null 留空图标列）。</summary>
+    private static Geometry? Sym(string key) =>
+        Application.Current?.TryFindResource(key) as Geometry;
 
     private MenuItemView ThemeItem(string id, string label, string current) =>
         new() { Id = id, Label = label, IsChecked = current == id, Invoke = () => _applyTheme(id) };
 
-    /// <summary>代码生成 16x16 圆点图标：主题强调色实心圆 + 抗锯齿。失败兜底系统应用图标（不拥有，勿 Dispose）。</summary>
-    private static (Icon icon, bool owned) CreateIcon(string accentHex)
+    /// <summary>
+    /// 代码生成 16x16 圆点图标：主题强调色实心圆 + 抗锯齿。失败兜底 TahoeIcons 的 custom.png
+    /// （macOS 空白 squircle 通用应用底板，macOS 化 r4 起替代 SystemIcons.Application——
+    /// Windows 系统图标不再出现在任何位置）；两者都失败（程序集资源级损坏）则托盘不显示图标。
+    /// </summary>
+    private static (Icon? icon, bool owned) CreateIcon(string accentHex)
     {
         IntPtr hIcon = IntPtr.Zero;
         try
@@ -104,12 +117,51 @@ public sealed class TrayIconManager : IDisposable
         }
         catch (Exception ex)
         {
-            Logger.Warn($"托盘图标生成失败，回退系统图标: {ex.Message}");
-            return (SystemIcons.Application, false);
+            Logger.Warn($"托盘图标生成失败，回退 macOS 通用应用图标: {ex.Message}");
+            return (TryLoadCustomAppIcon(), true);
         }
         finally
         {
             if (hIcon != IntPtr.Zero) DestroyIcon(hIcon);
+        }
+    }
+
+    /// <summary>
+    /// 从程序集资源加载 TahoeIcons/custom.png（macOS 风格空白 squircle）缩成 16×16 的托盘图标。
+    /// 失败返回 null（不回退 Windows 系统图标）。
+    /// </summary>
+    private static Icon? TryLoadCustomAppIcon()
+    {
+        try
+        {
+            var uri = new Uri("pack://application:,,,/Assets/TahoeIcons/custom.png", UriKind.Absolute);
+            var info = Application.GetResourceStream(uri);
+            if (info is null) return null;
+            using var stream = info.Stream;   // StreamResourceInfo 自身不实现 IDisposable，收它持有的 Stream
+            var decoder = new PngBitmapDecoder(stream, BitmapCreateOptions.None, BitmapCacheOption.OnLoad);
+            if (decoder.Frames.Count == 0) return null;
+            var frame = decoder.Frames[0];
+            if (frame.Format != PixelFormats.Pbgra32)
+                frame = BitmapFrame.Create(new FormatConvertedBitmap(frame, PixelFormats.Pbgra32, null, 0));
+            var scaled = new TransformedBitmap(frame,
+                new ScaleTransform(16.0 / frame.PixelWidth, 16.0 / frame.PixelHeight));
+
+            using var ms = new MemoryStream();
+            var encoder = new BmpBitmapEncoder();
+            encoder.Frames.Add(BitmapFrame.Create(scaled));
+            encoder.Save(ms);
+            ms.Position = 0;
+            using var bmp = new System.Drawing.Bitmap(ms);
+            var hIcon = bmp.GetHicon();
+            // 同主路径：Clone 持有独立副本，原句柄即刻销毁防泄漏
+            var icon = (Icon)Icon.FromHandle(hIcon).Clone();
+            DestroyIcon(hIcon);
+            return icon;
+        }
+        catch (Exception ex)
+        {
+            Logger.Warn($"托盘兜底图标加载失败（不回退系统图标）: {ex.Message}");
+            return null;
         }
     }
 
@@ -132,7 +184,7 @@ public sealed class TrayIconManager : IDisposable
         FluentMenu.CloseCurrent(); // 退出清理时关闭在显弹层（防孤儿窗口/回调重入）
         _notify.Visible = false;   // 先隐藏再 Dispose：立即从托盘区移除
         _notify.Dispose();
-        if (_ownsIcon) _icon.Dispose();
+        if (_ownsIcon) _icon?.Dispose();
     }
 
     [DllImport("user32.dll", SetLastError = true)]

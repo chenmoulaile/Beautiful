@@ -56,7 +56,6 @@ namespace Beautiful.App.TopBar;
 public partial class TopBarWindow : AcrylicWindow
 {
     private const double BarHeightDip = 24; // macOS 顶栏视觉高度（DIP；AppBar 条带同值）
-    private const int IconFontDip = 13;
 
     /// <summary>
     /// "点顶栏图标收起控制中心"的**重开抑制窗口**（毫秒）：面板失活后由看门狗（40ms × 2 拍 ≈ 80ms）
@@ -110,6 +109,10 @@ public partial class TopBarWindow : AcrylicWindow
     private System.Windows.Shapes.Path? _batteryIcon;
     private TextBlock? _batteryText;
     private Button? _batteryButton;
+    // 温度芯片（对标 MyDockFinder 温度显示；默认关）：图标 + 取整读数，形态与电量项一致。
+    // 数据来自 ThermalMonitorService 的后台轮询；开关关/无数据源 = 整体隐藏（不留灰态占位）。
+    private Button? _thermalChipButton;
+    private TextBlock? _thermalChipText;
     private MediaViewModel? _subscribedMedia;
 
     // v3 T7：控制中心面板（宿主 + 入口按钮 + "刚关过"抑制位；见 ToggleControlCenter 的竞态说明）
@@ -190,6 +193,8 @@ public partial class TopBarWindow : AcrylicWindow
     protected override void OnClosed(EventArgs e)
     {
         ThemeManager.ThemeChanged -= OnThemeChanged;
+        // 温度芯片的静态事件必须解绑：顶栏随 Dock 重载而销毁重建，留着订阅会钉住半死窗口。
+        ThermalMonitorService.ChipChanged -= OnThermalChipChanged;
         _nativeMaterial?.Dispose();
         _nativeMaterial = null;
         if (_subscribedMedia is not null) _subscribedMedia.PropertyChanged -= OnMediaChanged;
@@ -564,7 +569,7 @@ public partial class TopBarWindow : AcrylicWindow
     private void BuildRightRegion()
     {
         // 媒体迷你（无会话隐藏）
-        (_mediaButton, _mediaText) = MakeStatusItem("媒体", iconFont: false);
+        (_mediaButton, _mediaText) = MakeStatusItem("媒体");
         _mediaButton.Visibility = Visibility.Collapsed;
         _mediaText.MaxWidth = 190;
         _mediaButton.Click += (_, _) => { _context.OpenMediaPanel(); };
@@ -587,12 +592,12 @@ public partial class TopBarWindow : AcrylicWindow
         // 增减 3 个字符的改动不会让整个状态区左右抖动，唯一会位移的是最左的媒体迷你，而它有 MaxWidth 钳制。
         // 输入法指示（P4-T10）：时钟左侧一个小徽标（中 / EN / あ）。只读 InputLanguageManager，
         // 不可用就显示 EN——不猜、不写假状态。
-        (_inputButton, _inputText) = MakeStatusItem("输入法", iconFont: false);
+        (_inputButton, _inputText) = MakeStatusItem("输入法");
         _inputButton.ToolTip = "当前输入法";
         _inputButton.Click += (_, _) => OpenInputSettings();
         StartInputBadge();
 
-        (_clockButton, _clockText) = MakeStatusItem("时钟", iconFont: false);
+        (_clockButton, _clockText) = MakeStatusItem("时钟");
         // 左键 = 通知中心（Big Sur 语义）；右键保留原来的月历浮层（不想读系统通知时的轻量入口）
         _clockButton.Click += (_, _) => OpenClockFlyout();
         _clockButton.MouseRightButtonUp += (_, e) =>
@@ -603,14 +608,14 @@ public partial class TopBarWindow : AcrylicWindow
         RightHost.Children.Add(_clockButton);
 
         // 音量（点击 → 自家音量面板；原来是 sndvol.exe，整块 UI 都是 Windows 的）。
-        // alpha.24：Segoe 字形 → mac 式描边图标（喇叭 + 声波），资源缺失回退字形。
-        var (vol, _) = MakeSymbolItem("SymbolVolume", "\uE767", "音量");
+        // alpha.24 起 mac 式描边图标（喇叭 + 声波）；r4 起连 Segoe 防御回退也移除。
+        var (vol, _) = MakeSymbolItem("SymbolVolume", "音量");
         _volumeButton = vol;
         vol.Click += Volume_Click;
         RightHost.Children.Add(vol);
 
         // 网络（点击 → 自家 WiFi 面板；状态由每分钟定时器对账）：Wi-Fi 扇形替代地球字形
-        var (net, netIcon) = MakeSymbolItem("SymbolWifi", "\uE701", "网络");
+        var (net, netIcon) = MakeSymbolItem("SymbolWifi", "网络");
         _networkIcon = netIcon;
         _wifiButton = net;
         net.Click += Wifi_Click;
@@ -636,9 +641,13 @@ public partial class TopBarWindow : AcrylicWindow
         bat.Visibility = Visibility.Collapsed;
         RightHost.Children.Add(bat);
 
+        // 温度芯片（对标 MyDockFinder 温度显示）：默认关；开了也只在拿到读数后显示，
+        // 没有数据源（未装 LibreHardwareMonitor/OpenHardwareMonitor 且 ACPI 热区不可用）时永远隐藏。
+        EnsureThermalChip();
+
         // 通知中心入口（alpha.24 新增，铃铛）：macOS 菜单栏的"通知"位；与时钟左键同一落地路径
         // （通知中心开关关着时 OpenClockFlyout 自动回退月历，行为与点时钟一致）。
-        var (bell, _) = MakeSymbolItem("SymbolBell", "\uEA8F", "通知");
+        var (bell, _) = MakeSymbolItem("SymbolBell", "通知");
         bell.ToolTip = "通知中心";
         bell.Click += (_, _) => OpenClockFlyout();
         RightHost.Children.Add(bell);
@@ -649,7 +658,12 @@ public partial class TopBarWindow : AcrylicWindow
         // 一次可见的展开动作，与"常驻表面不做实时抓屏"的裁定冲突。点开才读、读一次就停。
         if (SettingsService.Current.ShowTrayInTopBar)
         {
-            var (tray, _) = MakeStatusItem("\uE91C", iconFont: true); // Segoe Fluent: 向上飞轮（与 Windows 隐藏区同语义）
+            // 向上箭头（Windows 隐藏区同语义；r4 起用 Symbols.xaml 的 SymbolChevronUp 矢量，
+            // 替代 Segoe \uE91C 码点——描边随主题走，与其它状态图标同一语言）。
+            var trayIcon = NewSymbolPath("SymbolChevronUp");
+            var tray = NewBarButton(trayIcon);
+            trayIcon.SetBinding(System.Windows.Shapes.Shape.StrokeProperty,
+                new System.Windows.Data.Binding(nameof(Button.Foreground)) { Source = tray });
             AutomationProperties.SetName(tray, "托盘图标");
             tray.ToolTip = "托盘图标：通知区域里被收起的应用";
             _trayButton = tray;
@@ -661,15 +675,15 @@ public partial class TopBarWindow : AcrylicWindow
         // 最右一位是"快捷设置"的既有位置（macOS/Win11 都是），新入口不该去抢它，
         // 而验收脚本也是按"控制中心"这个名字点最右一颗的（位置口径不变）。
         // ToolTip 里刻意不写热键：热键是设置项，改了顶栏按钮不会被重建，写上去就会变成过期承诺。
-        var (launcherButton, _) = MakeSymbolItem("SymbolSearch", "\uE721", "启动器");
+        var (launcherButton, _) = MakeSymbolItem("SymbolSearch", "启动器");
         launcherButton.ToolTip = "启动器：搜索并启动应用";
         launcherButton.Click += (_, _) => _context.OpenLauncher();
         RightHost.Children.Add(launcherButton);
 
         // 控制中心入口（v3 T7，最右一位 = macOS/Win11 的"快捷设置"位置）：
-        // 字形取已在托盘/顶栏菜单里验证过能渲染的 \uE790（与状态项同一套 Segoe 图标字体 + 同一字号），
+        // r4 起图标为 Symbols.xaml 的 SymbolControlCenter 矢量（alpha.24 的 Segoe 回退已移除），
         // 打开态用样式同款的主题面板底色做持久高亮（见 ToggleControlCenter）。
-        var (controlCenter, _) = MakeSymbolItem("SymbolControlCenter", "\uE790", "控制中心");
+        var (controlCenter, _) = MakeSymbolItem("SymbolControlCenter", "控制中心");
         _controlCenterButton = controlCenter;
         controlCenter.ToolTip = "控制中心";
         controlCenter.Click += (_, _) => ToggleControlCenter();
@@ -681,51 +695,31 @@ public partial class TopBarWindow : AcrylicWindow
         UpdateBattery();
     }
 
-    /// <summary>创建一个扁平状态按钮（内含文本块）。<paramref name="iconFont"/>=true 用 Segoe 图标字体渲染 <paramref name="text"/>。</summary>
-    private (Button button, TextBlock text) MakeStatusItem(string text, bool iconFont)
+    /// <summary>创建一个扁平状态按钮（内含文本块）。文本状态项（媒体/输入法/时钟）专用。</summary>
+    private (Button button, TextBlock text) MakeStatusItem(string text)
     {
         var tb = new TextBlock
         {
             Text = text,
-            FontSize = iconFont ? IconFontDip : 12,
+            FontSize = 12,
             VerticalAlignment = VerticalAlignment.Center,
             TextTrimming = TextTrimming.CharacterEllipsis,
         };
-        if (iconFont)
-            tb.FontFamily = new FontFamily("Segoe Fluent Icons, Segoe MDL2 Assets");
         var b = NewBarButton(tb);
         return (b, tb);
     }
 
     /// <summary>
-    /// 创建一枚 mac 式状态图标按钮（alpha.24）：Symbols.xaml 的 SF-Symbols 风格单色描边几何，
-    /// 描边绑定到按钮 Foreground（与文字同色随主题走）。资源缺失时回退 Segoe 字形，按钮照常可点——
-    /// 顶栏是全屏常驻表面，宁可字形丑也不允许出现空按钮或 NRE。
+    /// 创建一枚 mac 式状态图标按钮：Symbols.xaml 的 SF-Symbols 风格单色描边几何，
+    /// 描边绑定到按钮 Foreground（与文字同色随主题走）。资源缺失（程序集级损坏才可能）时
+    /// 给空 Path：按钮照常可点、无 NRE，但绝不回退 Segoe 字形（macOS 化 r4 起全仓不再出现）。
     /// </summary>
-    private (Button button, System.Windows.Shapes.Path? icon) MakeSymbolItem(string symbolKey, string fallbackGlyph, string automationName)
+    private (Button button, System.Windows.Shapes.Path icon) MakeSymbolItem(string symbolKey, string automationName)
     {
-        object content;
-        System.Windows.Shapes.Path? icon = null;
-        if (TryFindResource(symbolKey) is Geometry g)
-        {
-            icon = NewSymbolPath(g);
-            content = icon;
-        }
-        else
-        {
-            // 走不到的防御分支（Symbols.xaml 已在 App.xaml 全局合并）：保留旧字形兜底
-            content = new TextBlock
-            {
-                Text = fallbackGlyph,
-                FontFamily = new FontFamily("Segoe Fluent Icons, Segoe MDL2 Assets"),
-                FontSize = IconFontDip,
-                VerticalAlignment = VerticalAlignment.Center,
-            };
-        }
-        var b = NewBarButton(content);
-        if (icon is not null)
-            icon.SetBinding(System.Windows.Shapes.Shape.StrokeProperty,
-                new System.Windows.Data.Binding(nameof(Button.Foreground)) { Source = b });
+        var icon = NewSymbolPath(symbolKey);
+        var b = NewBarButton(icon);
+        icon.SetBinding(System.Windows.Shapes.Shape.StrokeProperty,
+            new System.Windows.Data.Binding(nameof(Button.Foreground)) { Source = b });
         AutomationProperties.SetName(b, automationName);
         return (b, icon);
     }
@@ -983,6 +977,66 @@ public partial class TopBarWindow : AcrylicWindow
         _batteryText.Text = $"{pct}%";
         _batteryButton.ToolTip = charging ? $"电量 {pct}%（充电中）" : $"电量 {pct}%";
         _batteryButton.Visibility = Visibility.Visible;
+    }
+
+    // ---------- 温度芯片（对标 MyDockFinder 温度显示；默认关） ----------
+
+    /// <summary>
+    /// 温度状态到达（UI 线程，<see cref="ThermalMonitorService.ChipChanged"/>）：有文字就更新显示，
+    /// Text 为 null（无数据源）整体收起——空态是"这一项不存在"，不是一颗灰按钮。
+    /// 服务只在文字变化时发布，这里不会每 5s 被打扰。
+    /// </summary>
+    private void OnThermalChipChanged(object? sender, ThermalChipUpdate update)
+    {
+        if (_thermalChipButton is null || _thermalChipText is null) return;
+        if (string.IsNullOrEmpty(update.Text))
+        {
+            _thermalChipButton.Visibility = Visibility.Collapsed;
+            return;
+        }
+        _thermalChipText.Text = update.Text;
+        _thermalChipButton.ToolTip = update.ToolTip;
+        _thermalChipButton.Visibility = Visibility.Visible;
+    }
+
+    /// <summary>设置关掉温度芯片（或轮询被停）后由 App 调：收起芯片。幂等。</summary>
+    public void HideThermalChip()
+    {
+        if (_thermalChipButton is not null) _thermalChipButton.Visibility = Visibility.Collapsed;
+    }
+
+    /// <summary>确保温度芯片在屏（幂等）：设置开启且还没装配时装配；关着或已装配时 no-op。
+    /// 启动序与设置页开关共用这一条入口，开关开着重载顶栏不会装配第二份。</summary>
+    public void EnsureThermalChip()
+    {
+        if (_thermalChipButton is not null || !SettingsService.Current.ThermalChipEnabled) return;
+        BuildThermalChip();
+    }
+
+    /// <summary>装配温度芯片：图标 + 读数放在电量之后（硬件状态一组），默认收起，
+    /// 首个读数到达才出现。订阅静态事件 + 立即向服务要一次当前状态（顶栏重载时不闪空）。</summary>
+    private void BuildThermalChip()
+    {
+        var thermalIcon = NewSymbolPath("SymbolThermometer");
+        _thermalChipText = new TextBlock
+        {
+            FontSize = 12,
+            VerticalAlignment = VerticalAlignment.Center,
+            Margin = new Thickness(4, 0, 0, 0),
+        };
+        var thermalPanel = new StackPanel { Orientation = Orientation.Horizontal, VerticalAlignment = VerticalAlignment.Center };
+        thermalPanel.Children.Add(thermalIcon);
+        thermalPanel.Children.Add(_thermalChipText);
+        var chip = NewBarButton(thermalPanel);
+        AutomationProperties.SetName(chip, "温度");
+        thermalIcon.SetBinding(System.Windows.Shapes.Shape.StrokeProperty,
+            new System.Windows.Data.Binding(nameof(Button.Foreground)) { Source = chip });
+        chip.Visibility = Visibility.Collapsed;
+        _thermalChipButton = chip;
+        RightHost.Children.Add(chip);
+
+        ThermalMonitorService.ChipChanged += OnThermalChipChanged;
+        ThermalMonitorService.PublishLatest();   // 服务已在跑 → 立即按当前读数摆位；没在跑 → 保持隐藏
     }
 
     // ---------- 媒体迷你 ----------

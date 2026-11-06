@@ -1,0 +1,52 @@
+<UserControl x:Class="Beautiful.App.Settings.ThermalSettingsCard"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+    <!-- 温度芯片设置卡（对标 MyDockFinder 温度显示）：**自包含** UserControl——样式与资源全部
+         定义在本文件，不引用设置窗口宿主的任何 StaticResource（并行接线：设置集成匠人只需把
+         本控件放进"系统"分区即可，样式不依赖宿主字典，放哪里都不掉样式）。配色沿用宿主同款
+         分区卡片观感（半透明白底 + 灰描边 + SystemColors 文字），与其它分区视觉一致。 -->
+    <UserControl.Resources>
+        <Style x:Key="ThermalSectionTitle" TargetType="TextBlock">
+            <Setter Property="FontSize" Value="13"/>
+            <Setter Property="FontWeight" Value="SemiBold"/>
+            <Setter Property="Margin" Value="0,0,0,10"/>
+        </Style>
+        <Style x:Key="ThermalHint" TargetType="TextBlock">
+            <Setter Property="FontSize" Value="11"/>
+            <Setter Property="Opacity" Value="0.72"/>
+            <Setter Property="TextWrapping" Value="Wrap"/>
+            <Setter Property="Margin" Value="0,6,0,0"/>
+        </Style>
+    </UserControl.Resources>
+
+    <Border Background="#0FFFFFFF" BorderBrush="#22808080" BorderThickness="1"
+            CornerRadius="10" Padding="16,12" Margin="0,0,0,12">
+        <StackPanel>
+            <TextBlock Text="温度" Style="{StaticResource ThermalSectionTitle}"/>
+
+            <CheckBox x:Name="ThermalEnabledCheck" Content="顶栏显示 CPU 温度芯片"
+                      Margin="0,0,0,8"
+                      Checked="ThermalEnabled_Changed" Unchecked="ThermalEnabled_Changed"/>
+
+            <StackPanel Orientation="Horizontal">
+                <TextBlock Text="刷新间隔" VerticalAlignment="Center" Margin="0,0,12,0"/>
+                <ComboBox x:Name="RefreshSecondsBox" Width="120" VerticalAlignment="Center"
+                          SelectionChanged="RefreshSeconds_Changed">
+                    <ComboBoxItem Content="5 秒" Tag="5"/>
+                    <ComboBoxItem Content="10 秒" Tag="10"/>
+                    <ComboBoxItem Content="15 秒" Tag="15"/>
+                    <ComboBoxItem Content="30 秒" Tag="30"/>
+                    <ComboBoxItem Content="60 秒" Tag="60"/>
+                    <ComboBoxItem Content="120 秒" Tag="120"/>
+                </ComboBox>
+            </StackPanel>
+
+            <!-- 数据源状态（实时）：读到什么显示什么，拿不到就明说"芯片保持隐藏"——
+                 不猜不装，让"为什么没有温度"在这里就有答案。 -->
+            <TextBlock x:Name="SourceStatusText" Style="{StaticResource ThermalHint}"
+                       Text="数据源状态：检测中…"/>
+            <TextBlock Style="{StaticResource ThermalHint}"
+                       Text="温度来自 LibreHardwareMonitor / OpenHardwareMonitor（在各自设置里勾选 WMI 提供方后可用）经 WMI 发布的传感器，兜底读取系统 ACPI 热区。都没有时芯片整体隐藏，不会显示编造的读数。"/>
+        </StackPanel>
+    </Border>
+</UserControl>

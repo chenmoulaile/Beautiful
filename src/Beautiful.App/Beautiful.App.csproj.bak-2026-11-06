@@ -1,0 +1,35 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net8.0-windows10.0.19041.0</TargetFramework>
+    <SupportedOSPlatformVersion>10.0.17763.0</SupportedOSPlatformVersion>
+    <UseWPF>true</UseWPF>
+    <UseWindowsForms>true</UseWindowsForms>
+    <ApplicationManifest>app.manifest</ApplicationManifest>
+    <RootNamespace>Beautiful.App</RootNamespace>
+    <AssemblyName>Beautiful</AssemblyName>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\Beautiful.Core\Beautiful.Core.csproj" />
+  </ItemGroup>
+  <!-- D-FONT（v4 Phase 1 T5）：SF Pro 字体由所有者本地放到 Assets/Fonts/（.gitignore 排除，
+       公开仓库不分发 Apple 资产）。文件存在就编进 exe；不存在则跳过，云 CI 无字体也能过门禁。 -->
+  <ItemGroup Condition="Exists('Assets\Fonts')">
+    <Resource Include="Assets\Fonts\*.otf" />
+    <Resource Include="Assets\Fonts\*.ttf" />
+  </ItemGroup>
+  <!-- macOS Tahoe 26 图标集（95 张 256×256 PNG）：整张 canvas 直接画，内容只占画布约 84%
+       是 macOS 官方比例，按 ink 裁切会毁掉观感。文件存在才编进资源，缺了自动回退系统图标。 -->
+  <ItemGroup Condition="Exists('Assets\TahoeIcons')">
+    <Resource Include="Assets\TahoeIcons\*.png" />
+  </ItemGroup>
+  <!-- Native 产物随 publish 落到 exe 旁（Phase 2）；未构建 native 时条件为假，纯 C# 形态仍可发布。 -->
+  <ItemGroup>
+    <Content Include="..\Beautiful.Native\bin\$(Configuration)\Beautiful.Native.dll"
+             Condition="Exists('..\Beautiful.Native\bin\$(Configuration)\Beautiful.Native.dll')"
+             Link="Beautiful.Native.dll" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+    <Content Include="..\Beautiful.TrayBridge\bin\$(Configuration)\Beautiful.TrayBridge.dll"
+             Condition="Exists('..\Beautiful.TrayBridge\bin\$(Configuration)\Beautiful.TrayBridge.dll')"
+             Link="Beautiful.TrayBridge.dll" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+  </ItemGroup>
+</Project>

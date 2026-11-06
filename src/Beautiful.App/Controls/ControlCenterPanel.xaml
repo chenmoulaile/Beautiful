@@ -15,7 +15,12 @@
          → InnerGlow（顶部内高光）。Shell.Margin 给自绘投影留位——分层窗口上"没画到"就是看穿到桌面的洞，
          两条分支都必须把整张卡铺满。渲染恒为深色玻璃（与托盘菜单/日历浮层同一观感），不随主题明暗。
          【Card 用定宽而不是 MinWidth】宿主按 Measure(inf,inf) 同步量尺寸来决定弹层大小与是否翻转，
-         定宽让星号列/换行文本在第一趟布局就定形（同 CalendarFlyout 用固定单元格的同一教训）。 -->
+         定宽让星号列/换行文本在第一趟布局就定形（同 CalendarFlyout 用固定单元格的同一教训）。
+         【Sonoma 版式】顶部小拖拽横条（装饰；弹层由宿主定位，不做真实拖动）→
+         左侧 2×2 圆角连接卡（Wi-Fi 真开关 / 蓝牙 / 隔空投送 / 专注模式，圆钮 + 名称，Sonoma 观感），
+         右侧亮度、音量两根竖向胶囊滑杆小瓦片；以下依次是系统状态行、逐应用混音、外观、Dock 砖块、
+         系统任务栏与底部动作。图标一律是 Resources 里的自绘 SF Symbols 风格矢量（CcIcon* 样式），
+         不再使用 Segoe MDL2/Fluent 码点。 -->
     <UserControl.Resources>
         <!-- alpha.22：macOS 无把手粗胶囊滑条（填充段即把手，点哪跳哪、拖填充边缘走）。
              自足样式：填充白胶囊在亮/暗两主题下都与 MacControlFillHover 轨道有足够对比；
@@ -32,66 +37,6 @@
                 </Setter.Value>
             </Setter>
         </Style>
-        <Style x:Key="CcMacSliderDecrease" TargetType="RepeatButton">
-            <Setter Property="Focusable" Value="False"/>
-            <Setter Property="IsTabStop" Value="False"/>
-            <Setter Property="Template">
-                <Setter.Value>
-                    <ControlTemplate TargetType="RepeatButton">
-                        <Grid Height="26" Background="Transparent">
-                            <Border Height="20" CornerRadius="10" VerticalAlignment="Center"
-                                    Background="#F0FFFFFF"/>
-                        </Grid>
-                    </ControlTemplate>
-                </Setter.Value>
-            </Setter>
-        </Style>
-        <Style x:Key="CcMacSliderIncrease" TargetType="RepeatButton">
-            <Setter Property="Focusable" Value="False"/>
-            <Setter Property="IsTabStop" Value="False"/>
-            <Setter Property="Template">
-                <Setter.Value>
-                    <ControlTemplate TargetType="RepeatButton">
-                        <Grid Height="26" Background="Transparent">
-                            <Border Height="20" CornerRadius="10" VerticalAlignment="Center"
-                                    Background="{DynamicResource MacControlFillHover}"/>
-                        </Grid>
-                    </ControlTemplate>
-                </Setter.Value>
-            </Setter>
-        </Style>
-        <Style x:Key="CcMacSlider" TargetType="Slider">
-            <Setter Property="Height" Value="26"/>
-            <Setter Property="Minimum" Value="0"/>
-            <Setter Property="Maximum" Value="100"/>
-            <Setter Property="IsMoveToPointEnabled" Value="True"/>
-            <Setter Property="FocusVisualStyle" Value="{x:Null}"/>
-            <Setter Property="Template">
-                <Setter.Value>
-                    <ControlTemplate TargetType="Slider">
-                        <Grid Height="26" Background="Transparent">
-                            <Track x:Name="PART_Track" Orientation="Horizontal" VerticalAlignment="Center">
-                                <Track.DecreaseRepeatButton>
-                                    <RepeatButton Command="{x:Static Slider.DecreaseLarge}"
-                                                  Style="{StaticResource CcMacSliderDecrease}"/>
-                                </Track.DecreaseRepeatButton>
-                                <Track.Thumb>
-                                    <Thumb Width="14" Height="20" Style="{StaticResource CcMacThumb}"/>
-                                </Track.Thumb>
-                                <Track.IncreaseRepeatButton>
-                                    <RepeatButton Command="{x:Static Slider.IncreaseLarge}"
-                                                  Style="{StaticResource CcMacSliderIncrease}"/>
-                                </Track.IncreaseRepeatButton>
-                            </Track>
-                        </Grid>
-                    </ControlTemplate>
-                </Setter.Value>
-            </Setter>
-        </Style>
-
-        <!-- macOS 控制中心最标志性的一块：亮度 / 音量两根并排**竖向**粗胶囊滑杆。
-             横向滑杆一眼就是 Windows 快速设置；这里把轨道竖起来，填充段从底部往上长，
-             Thumb 保留但视觉透明（只占填充边缘可拖区），与横向那套同一套配色语义。 -->
         <Style x:Key="CcMacSliderVDecrease" TargetType="RepeatButton">
             <Setter Property="Focusable" Value="False"/>
             <Setter Property="IsTabStop" Value="False"/>
@@ -164,6 +109,174 @@
         </LinearGradientBrush>
         <DropShadowEffect x:Key="CardShadow" BlurRadius="32" ShadowDepth="9" Direction="270"
                           Color="#000000" Opacity="0.6"/>
+
+        <!-- ============ 自绘字形库（SF Symbols 风格，替代 Segoe MDL2/Fluent 码点） ============
+             每个 CcIcon* 是一个 Path 样式：几何 + 画笔 + 设计尺寸一次给足，用法
+             <Path Style="{StaticResource CcIconX}"/> 或 code-behind 里 new Path{Style=FindResource(...)}。
+             描边风格（线性小图标）：16×16 视框、圆帽圆拐、1.3~1.4 描边；填充风格（电池/月亮）：F0 奇偶填充。
+             所有 x:Name 与事件接线不变，真实开关逻辑不受影响。 -->
+        <Style x:Key="CcGlyph" TargetType="Path">
+            <Setter Property="Stretch" Value="Uniform"/>
+            <Setter Property="HorizontalAlignment" Value="Center"/>
+            <Setter Property="VerticalAlignment" Value="Center"/>
+            <Setter Property="Fill" Value="{x:Null}"/>
+            <Setter Property="Stroke" Value="{DynamicResource ThemeTextPrimary}"/>
+            <Setter Property="StrokeThickness" Value="1.4"/>
+            <Setter Property="StrokeStartLineCap" Value="Round"/>
+            <Setter Property="StrokeEndLineCap" Value="Round"/>
+            <Setter Property="StrokeLineJoin" Value="Round"/>
+        </Style>
+
+        <!-- Wi-Fi：同心圆弧 + 底部圆点（连接卡白、状态行不用） -->
+        <Style x:Key="CcIconWifiLight" TargetType="Path" BasedOn="{StaticResource CcGlyph}">
+            <Setter Property="Stroke" Value="#F2FFFFFF"/>
+            <Setter Property="Width" Value="14"/>
+            <Setter Property="Height" Value="14"/>
+            <Setter Property="Data">
+                <Setter.Value>
+                    <StreamGeometry>M7.3,12.7 L8.7,12.7 M5.6,10.2 A3.4,3.4 0 0 1 10.4,10.2 M2.8,9.6 A6,6 0 0 1 13.2,9.6 M0.55,8.3 A8.6,8.6 0 0 1 15.45,8.3</StreamGeometry>
+                </Setter.Value>
+            </Setter>
+        </Style>
+        <!-- 蓝牙符文（连接卡白色 / 状态行主题色） -->
+        <Style x:Key="CcIconBluetooth" TargetType="Path" BasedOn="{StaticResource CcGlyph}">
+            <Setter Property="Width" Value="16"/>
+            <Setter Property="Height" Value="16"/>
+            <Setter Property="Data">
+                <Setter.Value>
+                    <StreamGeometry>M8,2 L11.3,4.9 L4.7,11.1 M8,14 L11.3,11.1 L4.7,4.9 M8,2 L8,14</StreamGeometry>
+                </Setter.Value>
+            </Setter>
+        </Style>
+        <Style x:Key="CcIconBluetoothLight" TargetType="Path" BasedOn="{StaticResource CcIconBluetooth}">
+            <Setter Property="Stroke" Value="#F2FFFFFF"/>
+            <Setter Property="Width" Value="14"/>
+            <Setter Property="Height" Value="14"/>
+        </Style>
+        <!-- 隔空投送：中心点 + 左右各两道电波（dot.radiowaves.left.and.right） -->
+        <Style x:Key="CcIconAirDropLight" TargetType="Path" BasedOn="{StaticResource CcGlyph}">
+            <Setter Property="Stroke" Value="#F2FFFFFF"/>
+            <Setter Property="Width" Value="14"/>
+            <Setter Property="Height" Value="14"/>
+            <Setter Property="Data">
+                <Setter.Value>
+                    <StreamGeometry>M7.2,8 L8.8,8 M9.83,5.38 A3.2,3.2 0 0 1 9.83,10.62 M11.33,3.25 A5.8,5.8 0 0 1 11.33,12.75 M6.17,5.38 A3.2,3.2 0 0 0 6.17,10.62 M4.67,3.25 A5.8,5.8 0 0 0 4.67,12.75</StreamGeometry>
+                </Setter.Value>
+            </Setter>
+        </Style>
+        <!-- 专注模式：新月（moon.fill） -->
+        <Style x:Key="CcIconMoonLight" TargetType="Path" BasedOn="{StaticResource CcGlyph}">
+            <Setter Property="Fill" Value="#F2FFFFFF"/>
+            <Setter Property="Stroke" Value="{x:Null}"/>
+            <Setter Property="Width" Value="13"/>
+            <Setter Property="Height" Value="13"/>
+            <Setter Property="Data">
+                <Setter.Value>
+                    <StreamGeometry>M14,8.53 A6,6 0 1 1 7.47,2 A4.67,4.67 0 0 0 14,8.53 Z</StreamGeometry>
+                </Setter.Value>
+            </Setter>
+        </Style>
+        <!-- 网络：经纬地球（状态行，替代码点 E774） -->
+        <Style x:Key="CcIconGlobe" TargetType="Path" BasedOn="{StaticResource CcGlyph}">
+            <Setter Property="StrokeThickness" Value="1.3"/>
+            <Setter Property="Width" Value="16"/>
+            <Setter Property="Height" Value="16"/>
+            <Setter Property="Data">
+                <Setter.Value>
+                    <StreamGeometry>M8,2 A6,6 0 0 1 8,14 A6,6 0 0 1 8,2 M8,2 A2.7,6 0 0 1 8,14 A2.7,6 0 0 1 8,2 M2.1,8 L13.9,8</StreamGeometry>
+                </Setter.Value>
+            </Setter>
+        </Style>
+        <!-- 亮度：太阳（圆盘 + 八向光芒，替代 E706） -->
+        <Style x:Key="CcIconSun" TargetType="Path" BasedOn="{StaticResource CcGlyph}">
+            <Setter Property="StrokeThickness" Value="1.3"/>
+            <Setter Property="Width" Value="13"/>
+            <Setter Property="Height" Value="13"/>
+            <Setter Property="Data">
+                <Setter.Value>
+                    <StreamGeometry>M5.4,8 A2.6,2.6 0 1 1 10.6,8 A2.6,2.6 0 1 1 5.4,8 M8,1.8 L8,3.6 M14.2,8 L12.4,8 M8,14.2 L8,12.4 M1.8,8 L3.6,8 M11.11,4.89 L12.38,3.62 M11.11,11.11 L12.38,12.38 M4.89,11.11 L3.62,12.38 M4.89,4.89 L3.62,3.62</StreamGeometry>
+                </Setter.Value>
+            </Setter>
+        </Style>
+        <!-- 扬声器 + 双波（音量，替代 E8D6/E767 的常态位） -->
+        <Style x:Key="CcIconSpeakerWave" TargetType="Path" BasedOn="{StaticResource CcGlyph}">
+            <Setter Property="Width" Value="14"/>
+            <Setter Property="Height" Value="14"/>
+            <Setter Property="Data">
+                <Setter.Value>
+                    <StreamGeometry>M3,6.4 L5.5,6.4 L9.2,3.4 L9.2,12.6 L5.5,9.6 L3,9.6 Z M11.6,5.9 A3.4,3.4 0 0 1 11.6,10.1 M13.5,3.9 A6.2,6.2 0 0 1 13.5,12.1</StreamGeometry>
+                </Setter.Value>
+            </Setter>
+        </Style>
+        <!-- 扬声器 + 斜杠（静音态） -->
+        <Style x:Key="CcIconSpeakerSlash" TargetType="Path" BasedOn="{StaticResource CcGlyph}">
+            <Setter Property="Width" Value="14"/>
+            <Setter Property="Height" Value="14"/>
+            <Setter Property="Data">
+                <Setter.Value>
+                    <StreamGeometry>M3,6.4 L5.5,6.4 L9.2,3.4 L9.2,12.6 L5.5,9.6 L3,9.6 Z M2.6,2.6 L13.4,13.4</StreamGeometry>
+                </Setter.Value>
+            </Setter>
+        </Style>
+        <!-- 铃铛（混音器"系统声音"行的小图标） -->
+        <Style x:Key="CcIconBell" TargetType="Path" BasedOn="{StaticResource CcGlyph}">
+            <Setter Property="Width" Value="14"/>
+            <Setter Property="Height" Value="14"/>
+            <Setter Property="Data">
+                <Setter.Value>
+                    <StreamGeometry>M8,2.4 A3.5,3.5 0 0 1 11.5,5.9 L11.5,8.4 L12.9,10.8 L3.1,10.8 L4.5,8.4 L4.5,5.9 A3.5,3.5 0 0 1 8,2.4 Z M6.7,12.6 A1.4,1.4 0 0 0 9.3,12.6</StreamGeometry>
+                </Setter.Value>
+            </Setter>
+        </Style>
+        <!-- 电池五档 + 充电（24×12 视框，奇偶填充：外圈 - 内腔成环，另叠电量条/闪电）。
+             键名与 Core StatusTiles.BatteryGlyphKey 的档位键一一对应（battery-0..4 / battery-charging）。 -->
+        <Style x:Key="CcIconBattery0" TargetType="Path" BasedOn="{StaticResource CcGlyph}">
+            <Setter Property="Fill" Value="{DynamicResource ThemeTextPrimary}"/>
+            <Setter Property="Stroke" Value="{x:Null}"/>
+            <Setter Property="Width" Value="22"/>
+            <Setter Property="Height" Value="11"/>
+            <Setter Property="Margin" Value="0,2,0,1"/>
+            <Setter Property="Data">
+                <Setter.Value>
+                    <StreamGeometry>F0 M3.5,2 L16.5,2 A2.5,2.5 0 0 1 19,4.5 L19,7.5 A2.5,2.5 0 0 1 16.5,10 L3.5,10 A2.5,2.5 0 0 1 1,7.5 L1,4.5 A2.5,2.5 0 0 1 3.5,2 Z M3.5,3 L16.5,3 A1.5,1.5 0 0 1 18,4.5 L18,7.5 A1.5,1.5 0 0 1 16.5,9 L3.5,9 A1.5,1.5 0 0 1 2,7.5 L2,4.5 A1.5,1.5 0 0 1 3.5,3 Z M20.6,4.4 C21.4,4.7 21.9,5.3 21.9,6 C21.9,6.7 21.4,7.3 20.6,7.6 Z</StreamGeometry>
+                </Setter.Value>
+            </Setter>
+        </Style>
+        <Style x:Key="CcIconBattery1" TargetType="Path" BasedOn="{StaticResource CcIconBattery0}">
+            <Setter Property="Data">
+                <Setter.Value>
+                    <StreamGeometry>F0 M3.5,2 L16.5,2 A2.5,2.5 0 0 1 19,4.5 L19,7.5 A2.5,2.5 0 0 1 16.5,10 L3.5,10 A2.5,2.5 0 0 1 1,7.5 L1,4.5 A2.5,2.5 0 0 1 3.5,2 Z M3.5,3 L16.5,3 A1.5,1.5 0 0 1 18,4.5 L18,7.5 A1.5,1.5 0 0 1 16.5,9 L3.5,9 A1.5,1.5 0 0 1 2,7.5 L2,4.5 A1.5,1.5 0 0 1 3.5,3 Z M20.6,4.4 C21.4,4.7 21.9,5.3 21.9,6 C21.9,6.7 21.4,7.3 20.6,7.6 Z M3,4 L6.5,4 L6.5,8 L3,8 Z</StreamGeometry>
+                </Setter.Value>
+            </Setter>
+        </Style>
+        <Style x:Key="CcIconBattery2" TargetType="Path" BasedOn="{StaticResource CcIconBattery0}">
+            <Setter Property="Data">
+                <Setter.Value>
+                    <StreamGeometry>F0 M3.5,2 L16.5,2 A2.5,2.5 0 0 1 19,4.5 L19,7.5 A2.5,2.5 0 0 1 16.5,10 L3.5,10 A2.5,2.5 0 0 1 1,7.5 L1,4.5 A2.5,2.5 0 0 1 3.5,2 Z M3.5,3 L16.5,3 A1.5,1.5 0 0 1 18,4.5 L18,7.5 A1.5,1.5 0 0 1 16.5,9 L3.5,9 A1.5,1.5 0 0 1 2,7.5 L2,4.5 A1.5,1.5 0 0 1 3.5,3 Z M20.6,4.4 C21.4,4.7 21.9,5.3 21.9,6 C21.9,6.7 21.4,7.3 20.6,7.6 Z M3,4 L10,4 L10,8 L3,8 Z</StreamGeometry>
+                </Setter.Value>
+            </Setter>
+        </Style>
+        <Style x:Key="CcIconBattery3" TargetType="Path" BasedOn="{StaticResource CcIconBattery0}">
+            <Setter Property="Data">
+                <Setter.Value>
+                    <StreamGeometry>F0 M3.5,2 L16.5,2 A2.5,2.5 0 0 1 19,4.5 L19,7.5 A2.5,2.5 0 0 1 16.5,10 L3.5,10 A2.5,2.5 0 0 1 1,7.5 L1,4.5 A2.5,2.5 0 0 1 3.5,2 Z M3.5,3 L16.5,3 A1.5,1.5 0 0 1 18,4.5 L18,7.5 A1.5,1.5 0 0 1 16.5,9 L3.5,9 A1.5,1.5 0 0 1 2,7.5 L2,4.5 A1.5,1.5 0 0 1 3.5,3 Z M20.6,4.4 C21.4,4.7 21.9,5.3 21.9,6 C21.9,6.7 21.4,7.3 20.6,7.6 Z M3,4 L13.5,4 L13.5,8 L3,8 Z</StreamGeometry>
+                </Setter.Value>
+            </Setter>
+        </Style>
+        <Style x:Key="CcIconBattery4" TargetType="Path" BasedOn="{StaticResource CcIconBattery0}">
+            <Setter Property="Data">
+                <Setter.Value>
+                    <StreamGeometry>F0 M3.5,2 L16.5,2 A2.5,2.5 0 0 1 19,4.5 L19,7.5 A2.5,2.5 0 0 1 16.5,10 L3.5,10 A2.5,2.5 0 0 1 1,7.5 L1,4.5 A2.5,2.5 0 0 1 3.5,2 Z M3.5,3 L16.5,3 A1.5,1.5 0 0 1 18,4.5 L18,7.5 A1.5,1.5 0 0 1 16.5,9 L3.5,9 A1.5,1.5 0 0 1 2,7.5 L2,4.5 A1.5,1.5 0 0 1 3.5,3 Z M20.6,4.4 C21.4,4.7 21.9,5.3 21.9,6 C21.9,6.7 21.4,7.3 20.6,7.6 Z M3,4 L17,4 L17,8 L3,8 Z</StreamGeometry>
+                </Setter.Value>
+            </Setter>
+        </Style>
+        <Style x:Key="CcIconBatteryCharging" TargetType="Path" BasedOn="{StaticResource CcIconBattery0}">
+            <Setter Property="Data">
+                <Setter.Value>
+                    <StreamGeometry>F0 M3.5,2 L16.5,2 A2.5,2.5 0 0 1 19,4.5 L19,7.5 A2.5,2.5 0 0 1 16.5,10 L3.5,10 A2.5,2.5 0 0 1 1,7.5 L1,4.5 A2.5,2.5 0 0 1 3.5,2 Z M3.5,3 L16.5,3 A1.5,1.5 0 0 1 18,4.5 L18,7.5 A1.5,1.5 0 0 1 16.5,9 L3.5,9 A1.5,1.5 0 0 1 2,7.5 L2,4.5 A1.5,1.5 0 0 1 3.5,3 Z M20.6,4.4 C21.4,4.7 21.9,5.3 21.9,6 C21.9,6.7 21.4,7.3 20.6,7.6 Z M11.6,3.4 L8.4,6.6 L10.4,6.6 L9.2,8.6 L12.4,5.4 L10.4,5.4 Z</StreamGeometry>
+                </Setter.Value>
+            </Setter>
+        </Style>
 
         <!-- 分段按钮（主题 / 任务栏策略三选一）：WPF 里"同组互斥"只有 RadioButton 有（ToggleButton 没有
              GroupName），所以用 RadioButton + 完全自绘模板（看不到圆点，只有 pill 底色），
@@ -258,7 +371,7 @@
             </Setter>
         </Style>
 
-        <!-- 分组容器（Big Sur 控制中心里"显示/声音"那种整块瓦片）：圆角 12 + 1px 发丝边 + 半透明底。 -->
+        <!-- 分组容器（显示/声音、逐应用音量那种整块瓦片）：圆角 12 + 1px 发丝边 + 半透明底。 -->
         <Style x:Key="CcGroupStyle" TargetType="Border">
             <Setter Property="CornerRadius" Value="12"/>
             <Setter Property="Background" Value="#12FFFFFF"/>
@@ -268,35 +381,94 @@
             <Setter Property="Margin" Value="0,0,0,8"/>
         </Style>
 
-        <!-- 动作瓦片（蓝牙 / 隔空投送 / 专注）：与开关瓦片同尺寸同观感，但语义是"打开系统页"或"不可用"。
-             副标题走 Tag，置灰时仍显示原因——不做"看起来能开、其实没反应"的假开关。 -->
-        <Style x:Key="CcActionTileStyle" TargetType="Button">
-            <Setter Property="Height" Value="66"/>
+        <!-- ============ Sonoma 连接卡：整块大圆角玻璃底，内部 2×2 格 ============ -->
+        <Style x:Key="CcConnCard" TargetType="Border">
+            <Setter Property="CornerRadius" Value="16"/>
+            <Setter Property="Background" Value="#0FFFFFFF"/>
+            <Setter Property="BorderBrush" Value="#1FFFFFFF"/>
+            <Setter Property="BorderThickness" Value="1"/>
+            <Setter Property="Padding" Value="4"/>
+        </Style>
+
+        <!-- 连接格通用骨架：左圆钮（SF 符号白字形）右两行文字（名称 + 状态/说明行）。
+             圆钮"开"态压 ThemeAccent（macOS systemBlue），"关"态是半透明白灰；
+             状态行不只靠颜色：Wi-Fi 开关给"开/关"，置灰时抄 ToolTip 里的原因（与 CcTileStyle 同一口径）。 -->
+        <!-- Wi-Fi（真开关：WlanSetInterface） -->
+        <Style x:Key="CcConnToggle" TargetType="ToggleButton">
             <Setter Property="Foreground" Value="{DynamicResource ThemeTextPrimary}"/>
-            <Setter Property="Background" Value="#14FFFFFF"/>
-            <Setter Property="HorizontalContentAlignment" Value="Left"/>
+            <Setter Property="Background" Value="Transparent"/>
+            <Setter Property="Margin" Value="2"/>
+            <Setter Property="SnapsToDevicePixels" Value="True"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="ToggleButton">
+                        <Border x:Name="bg" CornerRadius="12" Background="{TemplateBinding Background}"
+                                Padding="7,9">
+                            <DockPanel VerticalAlignment="Center" LastChildFill="True">
+                                <Border x:Name="circle" DockPanel.Dock="Left" Width="28" Height="28"
+                                        CornerRadius="14" Background="#3DFFFFFF">
+                                    <Path Style="{StaticResource CcIconWifiLight}"/>
+                                </Border>
+                                <StackPanel Margin="6,0,0,0" VerticalAlignment="Center">
+                                    <TextBlock Text="{TemplateBinding Content}" FontSize="11" FontWeight="SemiBold"
+                                               TextTrimming="CharacterEllipsis"
+                                               Foreground="{TemplateBinding Foreground}"/>
+                                    <TextBlock x:Name="State" FontSize="9.5" Opacity="0.66" Margin="0,1,0,0"
+                                               TextTrimming="CharacterEllipsis"
+                                               Foreground="{TemplateBinding Foreground}"/>
+                                </StackPanel>
+                            </DockPanel>
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsChecked" Value="True">
+                                <Setter TargetName="circle" Property="Background" Value="{DynamicResource ThemeAccent}"/>
+                                <Setter TargetName="State" Property="Text" Value="开"/>
+                            </Trigger>
+                            <Trigger Property="IsChecked" Value="False">
+                                <Setter TargetName="State" Property="Text" Value="关"/>
+                            </Trigger>
+                            <!-- 置灰：原因抄到状态行（全文在 ToolTip），整格压暗 -->
+                            <Trigger Property="IsEnabled" Value="False">
+                                <Setter Property="Opacity" Value="0.45"/>
+                                <Setter TargetName="State" Property="Text" Value="{Binding Path=ToolTip, RelativeSource={RelativeSource TemplatedParent}}"/>
+                            </Trigger>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="bg" Property="Background" Value="#14FFFFFF"/>
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+        <!-- 蓝牙（诚实入口：点开系统蓝牙页，不做假开关） -->
+        <Style x:Key="CcConnBluetooth" TargetType="Button">
+            <Setter Property="Foreground" Value="{DynamicResource ThemeTextPrimary}"/>
+            <Setter Property="Background" Value="Transparent"/>
+            <Setter Property="Margin" Value="2"/>
             <Setter Property="SnapsToDevicePixels" Value="True"/>
             <Setter Property="Template">
                 <Setter.Value>
                     <ControlTemplate TargetType="Button">
-                        <Border x:Name="bg" CornerRadius="9" Background="{TemplateBinding Background}"
-                                BorderBrush="#1FFFFFFF" BorderThickness="1" Padding="9,7">
-                            <Grid>
-                                <Grid.RowDefinitions>
-                                    <RowDefinition Height="*"/>
-                                    <RowDefinition Height="Auto"/>
-                                </Grid.RowDefinitions>
-                                <TextBlock Grid.Row="0" Text="{TemplateBinding Content}"
-                                           FontSize="13" FontWeight="SemiBold" VerticalAlignment="Center"
-                                           Foreground="{TemplateBinding Foreground}"/>
-                                <TextBlock Grid.Row="1" Text="{TemplateBinding Tag}" FontSize="10.5" Opacity="0.72"
-                                           TextTrimming="CharacterEllipsis"
-                                           Foreground="{TemplateBinding Foreground}"/>
-                            </Grid>
+                        <Border x:Name="bg" CornerRadius="12" Background="{TemplateBinding Background}"
+                                Padding="7,9">
+                            <DockPanel VerticalAlignment="Center" LastChildFill="True">
+                                <Border x:Name="circle" DockPanel.Dock="Left" Width="28" Height="28"
+                                        CornerRadius="14" Background="#3DFFFFFF">
+                                    <Path Style="{StaticResource CcIconBluetoothLight}"/>
+                                </Border>
+                                <StackPanel Margin="6,0,0,0" VerticalAlignment="Center">
+                                    <TextBlock Text="{TemplateBinding Content}" FontSize="11" FontWeight="SemiBold"
+                                               TextTrimming="CharacterEllipsis"
+                                               Foreground="{TemplateBinding Foreground}"/>
+                                    <TextBlock FontSize="9.5" Opacity="0.66" Margin="0,1,0,0"
+                                               Text="{TemplateBinding Tag}" TextTrimming="CharacterEllipsis"
+                                               Foreground="{TemplateBinding Foreground}"/>
+                                </StackPanel>
+                            </DockPanel>
                         </Border>
                         <ControlTemplate.Triggers>
                             <Trigger Property="IsMouseOver" Value="True">
-                                <Setter TargetName="bg" Property="Background" Value="#2EFFFFFF"/>
+                                <Setter TargetName="bg" Property="Background" Value="#14FFFFFF"/>
                             </Trigger>
                             <Trigger Property="IsEnabled" Value="False">
                                 <Setter Property="Opacity" Value="0.45"/>
@@ -305,6 +477,84 @@
                     </ControlTemplate>
                 </Setter.Value>
             </Setter>
+        </Style>
+        <!-- 隔空投送（Windows 无对应能力，整格置灰 + 原因） -->
+        <Style x:Key="CcConnAirDrop" TargetType="Button" BasedOn="{StaticResource CcConnBluetooth}">
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Button">
+                        <Border x:Name="bg" CornerRadius="12" Background="{TemplateBinding Background}"
+                                Padding="7,9">
+                            <DockPanel VerticalAlignment="Center" LastChildFill="True">
+                                <Border x:Name="circle" DockPanel.Dock="Left" Width="28" Height="28"
+                                        CornerRadius="14" Background="#3DFFFFFF">
+                                    <Path Style="{StaticResource CcIconAirDropLight}"/>
+                                </Border>
+                                <StackPanel Margin="6,0,0,0" VerticalAlignment="Center">
+                                    <TextBlock Text="{TemplateBinding Content}" FontSize="11" FontWeight="SemiBold"
+                                               TextTrimming="CharacterEllipsis"
+                                               Foreground="{TemplateBinding Foreground}"/>
+                                    <TextBlock FontSize="9.5" Opacity="0.66" Margin="0,1,0,0"
+                                               Text="{TemplateBinding Tag}" TextTrimming="CharacterEllipsis"
+                                               Foreground="{TemplateBinding Foreground}"/>
+                                </StackPanel>
+                            </DockPanel>
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="bg" Property="Background" Value="#14FFFFFF"/>
+                            </Trigger>
+                            <Trigger Property="IsEnabled" Value="False">
+                                <Setter Property="Opacity" Value="0.45"/>
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+        <!-- 专注模式（诚实入口：点开系统专注助手设置页） -->
+        <Style x:Key="CcConnFocus" TargetType="Button" BasedOn="{StaticResource CcConnBluetooth}">
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Button">
+                        <Border x:Name="bg" CornerRadius="12" Background="{TemplateBinding Background}"
+                                Padding="7,9">
+                            <DockPanel VerticalAlignment="Center" LastChildFill="True">
+                                <Border x:Name="circle" DockPanel.Dock="Left" Width="28" Height="28"
+                                        CornerRadius="14" Background="#3DFFFFFF">
+                                    <Path Style="{StaticResource CcIconMoonLight}"/>
+                                </Border>
+                                <StackPanel Margin="6,0,0,0" VerticalAlignment="Center">
+                                    <TextBlock Text="{TemplateBinding Content}" FontSize="11" FontWeight="SemiBold"
+                                               TextTrimming="CharacterEllipsis"
+                                               Foreground="{TemplateBinding Foreground}"/>
+                                    <TextBlock FontSize="9.5" Opacity="0.66" Margin="0,1,0,0"
+                                               Text="{TemplateBinding Tag}" TextTrimming="CharacterEllipsis"
+                                               Foreground="{TemplateBinding Foreground}"/>
+                                </StackPanel>
+                            </DockPanel>
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="bg" Property="Background" Value="#14FFFFFF"/>
+                            </Trigger>
+                            <Trigger Property="IsEnabled" Value="False">
+                                <Setter Property="Opacity" Value="0.45"/>
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+
+        <!-- 亮度 / 音量的竖滑杆小瓦片（iOS 式圆角块：滑杆在上，图标 + 百分比在下） -->
+        <Style x:Key="CcSliderTile" TargetType="Border">
+            <Setter Property="Width" Value="46"/>
+            <Setter Property="CornerRadius" Value="14"/>
+            <Setter Property="Background" Value="#0FFFFFFF"/>
+            <Setter Property="BorderBrush" Value="#1FFFFFFF"/>
+            <Setter Property="BorderThickness" Value="1"/>
+            <Setter Property="Padding" Value="4,10"/>
         </Style>
 
         <!-- 底部动作按钮（打开设置… / 重载 Dock）：与顶栏 BarButton 同一观感（透明底 + 悬停强调） -->
@@ -333,7 +583,7 @@
     <Grid x:Name="Shell" Margin="20,18,20,24">
         <!-- macOS 控制中心的大圆角玻璃卡：20DIP 圆角 + 几乎看不见的发丝边；原来的 12DIP +
              #2AFFFFFF 描边在深色壁纸上是明显一圈白框，读起来是 Windows 面板而不是 mac 的下拉卡。 -->
-        <Border x:Name="Card" Width="330" CornerRadius="20" BorderThickness="1" BorderBrush="#16FFFFFF"
+        <Border x:Name="Card" Width="348" CornerRadius="20" BorderThickness="1" BorderBrush="#16FFFFFF"
                 Background="{StaticResource CardFillSolid}" Effect="{StaticResource CardShadow}">
             <Grid>
                 <Border x:Name="Scrim" CornerRadius="19" IsHitTestVisible="False" Background="Transparent"/>
@@ -349,35 +599,99 @@
                     </Border.Background>
                 </Border>
 
-                <StackPanel Margin="16,14,16,12">
-                    <!-- macOS 控制中心没有"控制中心"这个标题：面板顶部直接是连接卡。
-                         左侧标题收起，右侧当前主题保留（打开时快照，切主题后由 RebuildAll 刷新）。 -->
-                    <Grid Margin="2,0,2,9">
-                        <TextBlock Text="控制中心" FontSize="13.5" FontWeight="SemiBold" Visibility="Collapsed"/>
+                <StackPanel Margin="16,10,16,12">
+                    <!-- 顶部：小拖拽横条（装饰性抓握提示——弹层由宿主定位，这里不做真实拖动）
+                         + 右侧当前主题（打开时快照，切主题后由 RebuildAll 刷新）。 -->
+                    <Grid Margin="2,0,2,10">
+                        <Border Width="38" Height="4" CornerRadius="2" Background="#2EFFFFFF"
+                                HorizontalAlignment="Center" VerticalAlignment="Center"
+                                IsHitTestVisible="False"/>
                         <TextBlock x:Name="ThemeLabel" HorizontalAlignment="Right" FontSize="11.5" Opacity="0.72"/>
                     </Grid>
 
-                    <!-- ============ 连接组（Big Sur 的 2×2 瓦片） ============
-                         Wi-Fi 是真开关（WlanSetInterface）；蓝牙要管理员权限、隔空投送在 Windows 上没有对应物，
-                         所以后两者**不做假开关**：蓝牙点开系统蓝牙页，隔空投送置灰并写明原因。 -->
-                    <UniformGrid Columns="2" Margin="0,0,0,8">
-                        <ToggleButton x:Name="WifiTile" Content="Wi-Fi" Style="{StaticResource CcTileStyle}"
-                                      Margin="0,0,4,4" Checked="WifiTile_Changed" Unchecked="WifiTile_Changed"
-                                      AutomationProperties.Name="控制中心 Wi-Fi 开关"/>
-                        <Button x:Name="BluetoothButton" Content="蓝牙" Tag="打开系统蓝牙页"
-                                Style="{StaticResource CcActionTileStyle}" Margin="4,0,0,4"
-                                Click="Bluetooth_Click"
-                                AutomationProperties.Name="控制中心 打开蓝牙设置"/>
-                        <Button x:Name="AirDropButton" Content="隔空投送" Tag="Windows 无对应能力"
-                                Style="{StaticResource CcActionTileStyle}" Margin="0,4,4,0"
-                                IsEnabled="False"
-                                ToolTip="Windows 没有与隔空投送对等的系统能力（就近共享需应用自行实现）"
-                                AutomationProperties.Name="控制中心 隔空投送（不可用）"/>
-                        <Button x:Name="FocusButton" Content="专注模式" Tag="打开系统专注设置"
-                                Style="{StaticResource CcActionTileStyle}" Margin="4,4,0,0"
-                                Click="Focus_Click"
-                                AutomationProperties.Name="控制中心 打开专注模式设置"/>
-                    </UniformGrid>
+                    <!-- ============ 顶部区：左连接卡 + 右双竖滑杆（Sonoma 骨架） ============
+                         左：2×2 连接格——Wi-Fi 是真开关（WlanSetInterface）；蓝牙要管理员权限、
+                         隔空投送在 Windows 上没有对应物，所以后两者**不做假开关**：蓝牙点开系统蓝牙页，
+                         隔空投送置灰并写明原因。右：亮度、音量两根竖向胶囊滑杆各自一片小瓦片。 -->
+                    <Grid Margin="0,0,0,8">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*"/>
+                            <ColumnDefinition Width="Auto"/>
+                        </Grid.ColumnDefinitions>
+                        <Border Grid.Column="0" Style="{StaticResource CcConnCard}" Margin="0,0,6,0">
+                            <UniformGrid Columns="2">
+                                <ToggleButton x:Name="WifiTile" Content="Wi-Fi" Style="{StaticResource CcConnToggle}"
+                                              Checked="WifiTile_Changed" Unchecked="WifiTile_Changed"
+                                              AutomationProperties.Name="控制中心 Wi-Fi 开关"/>
+                                <Button x:Name="BluetoothButton" Content="蓝牙" Tag="打开系统蓝牙页"
+                                        Style="{StaticResource CcConnBluetooth}"
+                                        ToolTip="打开系统蓝牙页"
+                                        Click="Bluetooth_Click"
+                                        AutomationProperties.Name="控制中心 打开蓝牙设置"/>
+                                <Button x:Name="AirDropButton" Content="隔空投送" Tag="Windows 无对应能力"
+                                        Style="{StaticResource CcConnAirDrop}"
+                                        IsEnabled="False"
+                                        ToolTip="Windows 没有与隔空投送对等的系统能力（就近共享需应用自行实现）"
+                                        AutomationProperties.Name="控制中心 隔空投送（不可用）"/>
+                                <Button x:Name="FocusButton" Content="专注模式" Tag="打开系统专注设置"
+                                        Style="{StaticResource CcConnFocus}"
+                                        ToolTip="打开系统专注设置"
+                                        Click="Focus_Click"
+                                        AutomationProperties.Name="控制中心 打开专注模式设置"/>
+                            </UniformGrid>
+                        </Border>
+                        <UniformGrid Grid.Column="1" Columns="2" VerticalAlignment="Stretch">
+                            <Border Style="{StaticResource CcSliderTile}" Margin="0,0,4,0">
+                                <Grid>
+                                    <Grid.RowDefinitions>
+                                        <RowDefinition Height="*"/>
+                                        <RowDefinition Height="Auto"/>
+                                        <RowDefinition Height="Auto"/>
+                                    </Grid.RowDefinitions>
+                                    <Slider x:Name="BrightnessSlider" Grid.Row="0" Height="106"
+                                            HorizontalAlignment="Center" VerticalAlignment="Center"
+                                            Minimum="0" Maximum="100"
+                                            Style="{StaticResource CcMacSliderVertical}"
+                                            IsMoveToPointEnabled="True"
+                                            TickFrequency="1" SmallChange="1" LargeChange="5"
+                                            ValueChanged="Brightness_ValueChanged"
+                                            AutomationProperties.Name="屏幕亮度"/>
+                                    <Path Grid.Row="1" Style="{StaticResource CcIconSun}" Margin="0,5,0,0"
+                                          HorizontalAlignment="Center"/>
+                                    <TextBlock x:Name="BrightnessText" Grid.Row="2" FontSize="10.5" Opacity="0.85"
+                                               Margin="0,2,0,0" HorizontalAlignment="Center"/>
+                                </Grid>
+                            </Border>
+                            <Border Style="{StaticResource CcSliderTile}">
+                                <Grid>
+                                    <Grid.RowDefinitions>
+                                        <RowDefinition Height="*"/>
+                                        <RowDefinition Height="Auto"/>
+                                        <RowDefinition Height="Auto"/>
+                                    </Grid.RowDefinitions>
+                                    <Slider x:Name="VolumeSlider" Grid.Row="0" Height="106"
+                                            HorizontalAlignment="Center" VerticalAlignment="Center"
+                                            Minimum="0" Maximum="100"
+                                            Style="{StaticResource CcMacSliderVertical}"
+                                            IsMoveToPointEnabled="True"
+                                            TickFrequency="1" SmallChange="1" LargeChange="5"
+                                            ValueChanged="Volume_ValueChanged"
+                                            PreviewMouseLeftButtonDown="Volume_DragBegin"
+                                            PreviewMouseLeftButtonUp="Volume_DragEnd"
+                                            LostMouseCapture="Volume_DragEnd"
+                                            AutomationProperties.Name="系统音量"/>
+                                    <Button x:Name="MuteButton" Grid.Row="1" Width="24" Height="22" Margin="0,5,0,0"
+                                            Padding="0"
+                                            Style="{StaticResource CcFooterStyle}" Click="Mute_Click"
+                                            AutomationProperties.Name="静音开关">
+                                        <Path Style="{StaticResource CcIconSpeakerWave}"/>
+                                    </Button>
+                                    <TextBlock x:Name="VolumeText" Grid.Row="2" FontSize="10.5" Opacity="0.85"
+                                               Margin="0,2,0,0" HorizontalAlignment="Center"/>
+                                </Grid>
+                            </Border>
+                        </UniformGrid>
+                    </Grid>
                     <TextBlock x:Name="AccountLine" Text="未登录" FontSize="10.5" Opacity="0.62"
                                Margin="4,0,4,8" TextTrimming="CharacterEllipsis"
                                ToolTip="账户与可移动磁盘数量"/>
@@ -386,29 +700,23 @@
 
                     <!-- ============ 系统状态行（P4-T9 / P4-T10） ============
                          电量 / 网络 / 蓝牙 / 输入法：四项一次采样、同一行显示，避免"电量新、网络旧"。
-                         全部只读系统接口，读不到就显示占位，不做假开关。 -->
+                         全部只读系统接口，读不到就显示占位，不做假开关。图标为 CcIcon* 自绘矢量。 -->
                     <Border Style="{StaticResource CcGroupStyle}" Margin="0,0,0,8">
                         <UniformGrid Columns="4">
                             <StackPanel>
-                                <TextBlock x:Name="BatteryGlyph" Text="&#xE83F;" FontSize="14"
-                                           HorizontalAlignment="Center"
-                                           FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets"
-                                           Foreground="{DynamicResource ThemeTextPrimary}"/>
+                                <Path x:Name="BatteryGlyph" Style="{StaticResource CcIconBattery0}"
+                                      HorizontalAlignment="Center"/>
                                 <TextBlock x:Name="BatteryValue" Text="--" FontSize="10.5" Opacity="0.72"
                                            HorizontalAlignment="Center" Margin="0,2,0,0"/>
                             </StackPanel>
                             <StackPanel>
-                                <TextBlock Text="&#xE774;" FontSize="14" HorizontalAlignment="Center"
-                                           FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets"
-                                           Foreground="{DynamicResource ThemeTextPrimary}"/>
+                                <Path Style="{StaticResource CcIconGlobe}" HorizontalAlignment="Center"/>
                                 <TextBlock x:Name="NetworkValue" Text="离线" FontSize="10.5" Opacity="0.72"
                                            HorizontalAlignment="Center" Margin="0,2,0,0"
                                            TextTrimming="CharacterEllipsis" MaxWidth="66"/>
                             </StackPanel>
                             <StackPanel>
-                                <TextBlock Text="&#xE702;" FontSize="14" HorizontalAlignment="Center"
-                                           FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets"
-                                           Foreground="{DynamicResource ThemeTextPrimary}"/>
+                                <Path Style="{StaticResource CcIconBluetooth}" HorizontalAlignment="Center"/>
                                 <TextBlock x:Name="BluetoothValue" Text="不可用" FontSize="10.5" Opacity="0.72"
                                            HorizontalAlignment="Center" Margin="0,2,0,0"/>
                             </StackPanel>
@@ -422,66 +730,7 @@
                         </UniformGrid>
                     </Border>
 
-                    <!-- ============ 亮度 / 音量：macOS 控制中心两根并排的竖向粗胶囊滑杆 ============
-                         真机对照里横滑杆是最刺眼的 Windows 味；这里把轨道竖起来，填充段从底部往上长。
-                         所有 x:Name 与事件处理器保持原样，code-behind 的真实音量/亮度读写不受影响。 -->
-                    <UniformGrid Columns="2" Margin="0,0,0,8">
-                        <Border Style="{StaticResource CcGroupStyle}" Margin="0,0,4,0">
-                            <Grid>
-                                <Grid.RowDefinitions>
-                                    <RowDefinition Height="*"/>
-                                    <RowDefinition Height="Auto"/>
-                                </Grid.RowDefinitions>
-                                <Slider x:Name="BrightnessSlider" Grid.Row="0" HorizontalAlignment="Center"
-                                        VerticalAlignment="Center" Minimum="0" Maximum="100"
-                                        Style="{StaticResource CcMacSliderVertical}"
-                                        IsMoveToPointEnabled="True"
-                                        TickFrequency="1" SmallChange="1" LargeChange="5"
-                                        ValueChanged="Brightness_ValueChanged"
-                                        AutomationProperties.Name="屏幕亮度"/>
-                                <StackPanel Grid.Row="1" Orientation="Horizontal" HorizontalAlignment="Center"
-                                            Margin="0,8,0,0">
-                                    <TextBlock Text="&#xE706;" FontSize="14" Margin="0,0,6,0"
-                                               VerticalAlignment="Center" Opacity="0.85"
-                                               FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets"
-                                               Foreground="{DynamicResource ThemeTextPrimary}"/>
-                                    <TextBlock x:Name="BrightnessText" MinWidth="42"
-                                               FontSize="11.5" Opacity="0.85" TextAlignment="Right"
-                                               VerticalAlignment="Center"/>
-                                </StackPanel>
-                            </Grid>
-                        </Border>
-                        <Border Style="{StaticResource CcGroupStyle}" Margin="4,0,0,0">
-                            <Grid>
-                                <Grid.RowDefinitions>
-                                    <RowDefinition Height="*"/>
-                                    <RowDefinition Height="Auto"/>
-                                </Grid.RowDefinitions>
-                                <Slider x:Name="VolumeSlider" Grid.Row="0" HorizontalAlignment="Center"
-                                        VerticalAlignment="Center" Minimum="0" Maximum="100"
-                                        Style="{StaticResource CcMacSliderVertical}"
-                                        IsMoveToPointEnabled="True"
-                                        TickFrequency="1" SmallChange="1" LargeChange="5"
-                                        ValueChanged="Volume_ValueChanged"
-                                        PreviewMouseLeftButtonDown="Volume_DragBegin"
-                                        PreviewMouseLeftButtonUp="Volume_DragEnd"
-                                        LostMouseCapture="Volume_DragEnd"
-                                        AutomationProperties.Name="系统音量"/>
-                                <StackPanel Grid.Row="1" Orientation="Horizontal" HorizontalAlignment="Center"
-                                            Margin="0,8,0,0">
-                                    <Button x:Name="MuteButton" Width="26" Height="24" Margin="0,0,6,0"
-                                            Content="&#xE767;" FontSize="13" Padding="0"
-                                            FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets"
-                                            Foreground="{DynamicResource ThemeTextPrimary}"
-                                            Style="{StaticResource CcFooterStyle}" Click="Mute_Click"
-                                            AutomationProperties.Name="静音开关"/>
-                                    <TextBlock x:Name="VolumeText" MinWidth="42"
-                                               FontSize="11.5" Opacity="0.85" TextAlignment="Right"
-                                               VerticalAlignment="Center"/>
-                                </StackPanel>
-                            </Grid>
-                        </Border>
-                    </UniformGrid>
+                    <!-- 亮度 / 音量置灰原因（滑杆不可用时这里给出中文说明，滑杆本体不伪造读数） -->
                     <TextBlock x:Name="BrightnessReason" FontSize="10.5" Opacity="0.62" TextWrapping="Wrap"
                                Margin="4,0,4,6" Visibility="Collapsed"/>
                     <TextBlock x:Name="VolumeReason" FontSize="10.5" Opacity="0.62" TextWrapping="Wrap"

@@ -1,0 +1,105 @@
+using Beautiful.Core.Layout;
+using Xunit;
+
+/// <summary>屏幕圆角（对标 MyDockFinder ScreenRound）的遮罩几何：角矩形 / 圆心 / 半径换算与钳制。</summary>
+public class ScreenCornerPlanTests
+{
+    private static readonly PhysicalRect Monitor = new(0, 0, 1920, 1080);
+
+    // ---------- 半径换算（DIP → 物理像素） ----------
+
+    [Theory]
+    [InlineData(12, 1.0, 12)]
+    [InlineData(12, 1.5, 18)]    // 150% 屏：12 DIP → 18 物理像素
+    [InlineData(12, 2.0, 24)]
+    [InlineData(10, 1.25, 13)]   // 125% 屏：四舍五入（AwayFromZero）
+    public void 半径按本屏缩放换算(int radiusDip, double scale, int expectedPx)
+        => Assert.Equal(expectedPx, ScreenCornerPlan.RadiusPx(radiusDip, scale));
+
+    [Fact]
+    public void 半径换算的钳制区间()
+    {
+        Assert.Equal(ScreenCornerPlan.MinRadiusPx, ScreenCornerPlan.RadiusPx(1, 1.0));
+        Assert.Equal(ScreenCornerPlan.MinRadiusPx, ScreenCornerPlan.RadiusPx(12, 0.1));  // 缩放异常不至于把遮罩缩没
+        Assert.Equal(ScreenCornerPlan.MaxRadiusPx, ScreenCornerPlan.RadiusPx(500, 1.0));
+        Assert.Equal(ScreenCornerPlan.MaxRadiusPx, ScreenCornerPlan.RadiusPx(48, 4.0));  // 400% 屏也封顶
+    }
+
+    // ---------- 角矩形（副屏负坐标同样成立） ----------
+
+    [Theory]
+    [InlineData(ScreenCorner.TopLeft, 0, 0, 16, 16)]
+    [InlineData(ScreenCorner.TopRight, 1904, 0, 1920, 16)]
+    [InlineData(ScreenCorner.BottomLeft, 0, 1064, 16, 1080)]
+    [InlineData(ScreenCorner.BottomRight, 1904, 1064, 1920, 1080)]
+    public void 四角正方形贴显示器角(ScreenCorner corner, int left, int top, int right, int bottom)
+    {
+        var square = ScreenCornerPlan.CornerSquare(Monitor, corner, 16);
+        Assert.Equal(new PhysicalRect(left, top, right, bottom), square);
+    }
+
+    [Fact]
+    public void 副屏负坐标同样成立()
+    {
+        var secondary = new PhysicalRect(-2560, 0, 0, 1440);   // 主屏左侧的副屏
+        var topLeft = ScreenCornerPlan.CornerSquare(secondary, ScreenCorner.TopLeft, 12);
+        Assert.Equal(new PhysicalRect(-2560, 0, -2548, 12), topLeft);
+        var bottomRight = ScreenCornerPlan.CornerSquare(secondary, ScreenCorner.BottomRight, 12);
+        Assert.Equal(new PhysicalRect(-12, 1428, 0, 1440), bottomRight);
+    }
+
+    [Fact]
+    public void 半径大于半屏时钳到短边一半_避免四角互相重叠()
+    {
+        // 100×60 的小屏，半径 80 → 钳到 30（短边 60 的一半）
+        var tiny = new PhysicalRect(0, 0, 100, 60);
+        var square = ScreenCornerPlan.CornerSquare(tiny, ScreenCorner.TopLeft, 80);
+        Assert.Equal(new PhysicalRect(0, 0, 30, 30), square);
+        // 四块遮罩互不重叠：对角遮罩的矩形不相交
+        var opposite = ScreenCornerPlan.CornerSquare(tiny, ScreenCorner.BottomRight, 80);
+        Assert.True(opposite.Left >= square.Right && opposite.Top >= square.Bottom);
+    }
+
+    [Fact]
+    public void 退化显示器返回空矩形()
+    {
+        Assert.Equal(default, ScreenCornerPlan.CornerSquare(default, ScreenCorner.TopLeft, 12));
+        Assert.Equal(default, ScreenCornerPlan.CornerSquare(new PhysicalRect(0, 0, 0, 1080), ScreenCorner.TopLeft, 12));
+    }
+
+    // ---------- 圆心（"朝屏幕内侧"的顶点，App 侧据此画四分之一圆） ----------
+
+    [Fact]
+    public void 圆心是角正方形朝屏幕内侧的顶点()
+    {
+        var topLeft = ScreenCornerPlan.CornerSquare(Monitor, ScreenCorner.TopLeft, 16);
+        Assert.Equal((16, 16), ScreenCornerPlan.ArcCenter(topLeft, ScreenCorner.TopLeft));
+
+        var topRight = ScreenCornerPlan.CornerSquare(Monitor, ScreenCorner.TopRight, 16);
+        Assert.Equal((1904, 16), ScreenCornerPlan.ArcCenter(topRight, ScreenCorner.TopRight));
+
+        var bottomLeft = ScreenCornerPlan.CornerSquare(Monitor, ScreenCorner.BottomLeft, 16);
+        Assert.Equal((16, 1064), ScreenCornerPlan.ArcCenter(bottomLeft, ScreenCorner.BottomLeft));
+
+        var bottomRight = ScreenCornerPlan.CornerSquare(Monitor, ScreenCorner.BottomRight, 16);
+        Assert.Equal((1904, 1064), ScreenCornerPlan.ArcCenter(bottomRight, ScreenCorner.BottomRight));
+    }
+
+    [Theory]
+    [InlineData(ScreenCorner.TopLeft, 0, 16, 16, 0)]      // 弧端点：左边缘上的 (L,B) 与上边缘上的 (R,T)（相对正方形左上角）
+    [InlineData(ScreenCorner.TopRight, 0, 0, 16, 16)]     // (L,T) 与 (R,B)
+    [InlineData(ScreenCorner.BottomLeft, 0, 0, 16, 16)]   // (L,T) 与 (R,B)
+    [InlineData(ScreenCorner.BottomRight, 0, 16, 16, 0)]  // (L,B) 与 (R,T)
+    public void 圆心到两条弧端点的距离等于半径(ScreenCorner corner, int ax, int ay, int bx, int by)
+    {
+        // 遮罩 = 正方形 − 内切四分之一圆：弧必须恰好穿过两条边上的两个端点（到圆心距离都为 r），
+        // 这是"圆角遮罩边界就是这条弧"成立的前提。屏幕角点本身到圆心是 r√2（被遮罩盖住，符合预期）。
+        // 端点坐标以正方形左上角为原点（ax/ay 与 bx/by），再平移到该角的 square。
+        var square = ScreenCornerPlan.CornerSquare(Monitor, corner, 16);
+        var (cx, cy) = ScreenCornerPlan.ArcCenter(square, corner);
+        var originX = corner is ScreenCorner.TopLeft or ScreenCorner.TopRight ? square.Left : square.Right - 16;
+        var originY = corner is ScreenCorner.TopLeft or ScreenCorner.TopRight ? square.Top : square.Bottom - 16;
+        Assert.Equal(16, Math.Sqrt(Math.Pow(cx - (originX + ax), 2) + Math.Pow(cy - (originY + ay), 2)), 6);
+        Assert.Equal(16, Math.Sqrt(Math.Pow(cx - (originX + bx), 2) + Math.Pow(cy - (originY + by), 2)), 6);
+    }
+}

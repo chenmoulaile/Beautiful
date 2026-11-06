@@ -45,11 +45,13 @@ public sealed class MacIconNamesTests
     }
 
     [Fact]
-    public void 明确标记缺失的键不产出候选()
+    public void 任务管理器映射到活动监视器()
     {
-        // taskmgr → activity_monitor_absent：图标集里没有活动监视器，表达"知道是谁但没这张图"
+        // macOS 化 r4：图标集补齐了真实 Activity Monitor（下载自 macOS-26-Icons/Utilities，
+        // Assets/TahoeIcons/activity_monitor.png），taskmgr 从"显式不命中"转正为别名映射：
+        // 原生 taskmgr 键不存在，别名在前、exe 原名在后。
         var keys = MacIconNames.CandidateKeys("taskmgr.exe");
-        Assert.DoesNotContain("activity_monitor_absent", keys);
+        Assert.Equal(new[] { "activity_monitor", "taskmgr" }, keys);
     }
 
     [Theory]

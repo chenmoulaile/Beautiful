@@ -9,6 +9,7 @@ using Button = System.Windows.Controls.Button;
 using UserControl = System.Windows.Controls.UserControl;
 using Brush = System.Windows.Media.Brush;      // UseWindowsForms 隐式 using 与 System.Drawing.Brush 冲突
 using Brushes = System.Windows.Media.Brushes;  // 同上
+using Application = System.Windows.Application;   // UseWindowsForms 隐式 using 消歧
 
 namespace Beautiful.App.TopBar;
 
@@ -98,10 +99,34 @@ public partial class VolumePanel : UserControl, IBackdropAware, IPopupShadow
 
     private void ApplyMuteGlyph()
     {
-        // E767 有声 / E74F 静音：静音态再压暗一点，状态一眼可读
-        MuteButton.Content = _muted ? "" : "";
+        // 静音 = 喇叭带叉 / 有声 = 喇叭带弧（macOS 化 r4：Segoe 码点 → Symbols.xaml 矢量几何）；
+        // 静音态再压暗一点，状态一眼可读
+        var glyph = MakeGlyph(_muted ? "SymbolVolume0" : "SymbolVolume3");
+        if (glyph is not null)
+        {
+            // Shape.Stroke 不继承 Foreground：显式绑到按钮前景，随主题/置灰一起变色
+            glyph.SetBinding(System.Windows.Shapes.Path.StrokeProperty,
+                new System.Windows.Data.Binding(nameof(Button.Foreground)) { Source = MuteButton });
+        }
+        MuteButton.Content = glyph;
         MuteButton.Opacity = _muted ? 0.55 : 1.0;
     }
+
+    /// <summary>按资源键构造一枚单色描边小图标；键不存在返回 null（宁可空也不回退 Segoe 字形）。</summary>
+    private static System.Windows.Shapes.Path? MakeGlyph(string symbolKey)
+        => Application.Current?.TryFindResource(symbolKey) as Geometry is { } g
+            ? new System.Windows.Shapes.Path
+            {
+                Data = g,
+                Width = 16,
+                Height = 16,
+                Stretch = Stretch.Uniform,
+                StrokeThickness = 1.5,
+                StrokeStartLineCap = PenLineCap.Round,
+                StrokeEndLineCap = PenLineCap.Round,
+                StrokeLineJoin = PenLineJoin.Round,
+            }
+            : null;
 
     private void ShowReason(string text)
     {

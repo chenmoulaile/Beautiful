@@ -325,7 +325,10 @@ public sealed class SwitcherService : IDisposable
     private BitmapSource? IconFor(string appId)
     {
         if (_iconCache.TryGetValue(appId, out var cached)) return cached;
-        var icon = appId.StartsWith("cls:", StringComparison.Ordinal) ? null : IconExtractor.GetIcon(appId);
+        // macOS 图标集优先（macOS 化 r4）：切换器 tile 与 Dock/启动台同一张脸；无对应图回落原提取。
+        var icon = appId.StartsWith("cls:", StringComparison.Ordinal)
+            ? null
+            : MacIconCatalog.TryGetFor(appId) ?? IconExtractor.GetIcon(appId);
         _iconCache[appId] = icon;
         return icon;
     }

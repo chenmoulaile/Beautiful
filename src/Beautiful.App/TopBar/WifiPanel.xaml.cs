@@ -13,6 +13,7 @@ using Brushes = System.Windows.Media.Brushes;              // 同上
 using Color = System.Windows.Media.Color;                  // 同上
 using FontFamily = System.Windows.Media.FontFamily;        // 同上
 using Point = System.Windows.Point;                        // 同上
+using Application = System.Windows.Application;            // 同上，System.Windows.Forms.Application
 
 namespace Beautiful.App.TopBar;
 
@@ -139,8 +140,11 @@ public partial class WifiPanel : UserControl, IBackdropAware, IPopupShadow
 
         if (n.Connected)
         {
-            Grid.SetColumn(MakeGlyph("\uE73E"), 2);   // Segoe Fluent CheckMark
-            grid.Children.Add(MakeGlyph("\uE73E"));
+            // 已连接勾选符：Symbols.xaml 的矢量几何（macOS 化 r4 起替代 Segoe Fluent CheckMark 码点）。
+            // 旧实现 MakeGlyph 调用两次，SetColumn 作用在被丢弃的第一个实例上、实际显示的没设列——一并修正。
+            var check = MakeCheckGlyph();
+            Grid.SetColumn(check, 2);
+            grid.Children.Add(check);
         }
 
         var row = new Button
@@ -181,15 +185,29 @@ public partial class WifiPanel : UserControl, IBackdropAware, IPopupShadow
         return panel;
     }
 
-    private static TextBlock MakeGlyph(string glyph) => new()
+    /// <summary>
+    /// 勾选符（SymbolCheckmark 单色描边矢量）：描边跟行文字同色（白系主题 token），尺寸对齐原 Segoe 字形列。
+    /// 取不到资源返回空 Path 占位（不回退 Segoe 字形）。
+    /// </summary>
+    private static System.Windows.Shapes.Path MakeCheckGlyph()
     {
-        Text = glyph,
-        FontFamily = new FontFamily("Segoe Fluent Icons, Segoe MDL2 Assets"),
-        FontSize = 13,
-        VerticalAlignment = VerticalAlignment.Center,
-        Margin = new Thickness(6, 0, 0, 0),
-        Opacity = 0.8,
-    };
+        var path = new System.Windows.Shapes.Path
+        {
+            Width = 13,
+            Height = 13,
+            Stretch = Stretch.Uniform,
+            StrokeThickness = 1.6,
+            StrokeStartLineCap = PenLineCap.Round,
+            StrokeEndLineCap = PenLineCap.Round,
+            StrokeLineJoin = PenLineJoin.Round,
+            VerticalAlignment = VerticalAlignment.Center,
+            Margin = new Thickness(6, 0, 0, 0),
+            Opacity = 0.8,
+        };
+        if (Application.Current?.TryFindResource("SymbolCheckmark") is Geometry g)
+            path.Data = g;
+        return path;
+    }
 
     // ---------- 交互 ----------
 

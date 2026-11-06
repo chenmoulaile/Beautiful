@@ -36,6 +36,15 @@ dotnet publish "src\Beautiful.App" -c Release -r win-x64 --self-contained true -
 if errorlevel 1 goto fail
 
 if not exist "%OUT%\Beautiful.exe" goto missing
+
+rem 产物自检：真机 r4 验收曾因"bin\Release 构建输出盖拷进发布目录"混出 framework-dependent 的
+rem runtimeconfig（安装版双击即 "No frameworks were found"）。这里把三件套钉死，坏了就大声失败。
+findstr /C:"includedFrameworks" "%OUT%\Beautiful.runtimeconfig.json" >nul 2>nul
+if errorlevel 1 goto badartifact
+findstr /C:"runtimepack" "%OUT%\Beautiful.deps.json" >nul 2>nul
+if errorlevel 1 goto badartifact
+if not exist "%OUT%\hostfxr.dll" goto badartifact
+
 for %%F in ("%OUT%\Beautiful.exe") do set "EXE_SIZE=%%~zF"
 echo [4/4] 发布完成。
 echo.
@@ -59,5 +68,13 @@ exit /b 1
 
 :missing
 echo [错误] 发布流程结束但没有找到 %OUT%\Beautiful.exe
+pause
+exit /b 1
+
+:badartifact
+echo [错误] 发布产物自检失败：runtimeconfig/deps.json 不是自包含形态（缺 includedFrameworks/runtimepack）或缺 hostfxr.dll。
+echo        这样的产物双击启动会报 "No frameworks were found"（真机 r4 验收缺陷 1 的根因）。
+echo        排查：发布命令必须带 --self-contained true -r win-x64；%OUT% 必须是干净的发布目录，
+echo        绝不要把 bin\Release 构建输出手工拷进发布目录。
 pause
 exit /b 1

@@ -10,17 +10,26 @@
         <Style x:Key="CapsulePlayButton" TargetType="Button">
             <Setter Property="Width" Value="26"/>
             <Setter Property="Height" Value="26"/>
-            <Setter Property="FontFamily" Value="Segoe Fluent Icons,Segoe MDL2 Assets"/>
-            <Setter Property="FontSize" Value="12"/>
             <Setter Property="Foreground" Value="{DynamicResource ThemeTextPrimary}"/>
             <Setter Property="Focusable" Value="False"/>
             <Setter Property="Cursor" Value="Hand"/>
-            <Setter Property="Content" Value="&#xE768;"/>
             <Setter Property="Template">
                 <Setter.Value>
                     <ControlTemplate TargetType="Button">
                         <Border x:Name="Bg" CornerRadius="13" Background="Transparent">
-                            <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                            <!-- 播放/暂停：Symbols.xaml 矢量几何随 IsPlaying 切换（macOS 化 r4
+                                 替代 Segoe \uE768/\uE769 码点）；模板按实例展开，无元素共享问题。 -->
+                            <Grid>
+                                <Path x:Name="PlayIcon" Data="{StaticResource SymbolPlay}"
+                                      Width="11" Height="11" Stretch="Uniform" Fill="Transparent"
+                                      StrokeThickness="1.4" StrokeStartLineCap="Round" StrokeEndLineCap="Round"
+                                      StrokeLineJoin="Round" Stroke="{TemplateBinding Foreground}"/>
+                                <Path x:Name="PauseIcon" Data="{StaticResource SymbolPause}"
+                                      Width="11" Height="11" Stretch="Uniform" Fill="Transparent"
+                                      StrokeThickness="1.4" StrokeStartLineCap="Round" StrokeEndLineCap="Round"
+                                      StrokeLineJoin="Round" Stroke="{TemplateBinding Foreground}"
+                                      Visibility="Collapsed"/>
+                            </Grid>
                         </Border>
                         <ControlTemplate.Triggers>
                             <Trigger Property="IsMouseOver" Value="True">
@@ -29,15 +38,14 @@
                             <Trigger Property="IsPressed" Value="True">
                                 <Setter TargetName="Bg" Property="Background" Value="#4DFFFFFF"/>
                             </Trigger>
+                            <DataTrigger Binding="{Binding IsPlaying}" Value="True">
+                                <Setter TargetName="PlayIcon" Property="Visibility" Value="Collapsed"/>
+                                <Setter TargetName="PauseIcon" Property="Visibility" Value="Visible"/>
+                            </DataTrigger>
                         </ControlTemplate.Triggers>
                     </ControlTemplate>
                 </Setter.Value>
             </Setter>
-            <Style.Triggers>
-                <DataTrigger Binding="{Binding IsPlaying}" Value="True">
-                    <Setter Property="Content" Value="&#xE769;"/>
-                </DataTrigger>
-            </Style.Triggers>
         </Style>
     </UserControl.Resources>
 

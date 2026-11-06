@@ -4,13 +4,15 @@
         xmlns:chrome="clr-namespace:System.Windows.Shell;assembly=PresentationFramework"
         Title="通知中心" Width="360" Height="640"
         WindowStyle="None" ResizeMode="NoResize" ShowInTaskbar="False" Topmost="True"
+        AllowsTransparency="True" Background="Transparent"
         WindowStartupLocation="Manual" UseLayoutRounding="True"
         TextOptions.TextFormattingMode="Display"
-        FontFamily="{DynamicResource MacFont}"
-        Background="{DynamicResource MacWindowBackground}">
+        FontFamily="{DynamicResource MacFont}">
     <!-- Phase 4-T5：Big Sur 通知中心（右侧贴边全高面板）。
-         非分层窗口 + WindowChrome + DWM 圆角：面板是纯文字界面，分层窗口会关掉 ClearType，
-         和设置页/关于卡同一处置（见 README 里"为什么不用 AllowsTransparency"）。
+         【必须分层（AllowsTransparency=True）】真机 Win11 26300 实测：WPF 非分层窗口的呈现路径
+         （硬件与软件模式都是）整机黑屏——窗口在、可激活、PrintWindow 抓出来纯黑，只有分层窗口
+         （Dock/顶栏/切换器同款路径）能出画面。分层会关 ClearType，但"显示"优先于"次像素"；
+         圆角由下方根 Border 的 CornerRadius 自绘（不再依赖 DWM 圆角）。
          CaptionHeight=0：面板不拖动，整块区域都是内容（macOS 的通知中心也不可拖）。 -->
     <chrome:WindowChrome.WindowChrome>
         <chrome:WindowChrome CaptionHeight="0" ResizeBorderThickness="0"

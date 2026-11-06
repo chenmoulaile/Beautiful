@@ -19,10 +19,12 @@
                 <ColumnDefinition Width="Auto"/>
                 <ColumnDefinition Width="Auto"/>
             </Grid.ColumnDefinitions>
-            <TextBlock x:Name="GlyphText" Text="&#xE767;"
-                       FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets"
-                       FontSize="36" Foreground="#FFFFFFFF"
-                       VerticalAlignment="Center" Width="40" TextAlignment="Center"/>
+            <Path x:Name="GlyphIcon" Data="{StaticResource SymbolVolume3}"
+                  Width="32" Height="32" Stretch="Uniform"
+                  Stroke="#FFFFFFFF" StrokeThickness="1.8"
+                  StrokeStartLineCap="Round" StrokeEndLineCap="Round" StrokeLineJoin="Round"
+                  Fill="Transparent"
+                  VerticalAlignment="Center" HorizontalAlignment="Center"/>
             <StackPanel x:Name="SegmentHost" Grid.Column="1" Orientation="Horizontal"
                         VerticalAlignment="Center" Margin="14,0,0,0"/>
             <TextBlock x:Name="LevelText" Text="" FontSize="11" Foreground="#B3FFFFFF"

@@ -125,7 +125,8 @@ public sealed class LauncherService : IDisposable
         => _index.Search(query, limit);
 
     /// <summary>
-    /// 结果行图标：<b>走 v3 T6 的提取管线（请求 256px，LRU 缓存）</b>，不在这里按 26/32px 重新提一次。
+    /// 结果行图标：macOS 图标集优先（macOS 化 r4，与 Dock 同一套键映射），没有对应图再走
+    /// v3 T6 的提取管线（请求 256px，LRU 缓存），不在这里按 26/32px 重新提一次。
     /// 提取失败返回 null → 行画空框而不是编一个图标。
     /// </summary>
     public BitmapSource? IconOf(LauncherApp app, int size = IconExtractor.PreferredSize)
@@ -136,6 +137,10 @@ public sealed class LauncherService : IDisposable
         // 资源管理器图标——那是"错图标"，比"没图标"更糟。这类条目只认 IconPath（包内 logo 路径，
         // 读不到就是空框）。其余条目沿用"没有 IconPath 就用启动目标"的降级链。
         var isAppsFolder = LauncherTarget.AppsFolderAumidOf(app.LaunchPath, app.Arguments) is not null;
+        // macOS 图标集的键源与 Dock 同一策略：普通条目按启动路径（.lnk 显示名走显示名表），
+        // AppsFolder 条目绝不拿 explorer.exe 当键源（否则全体 UWP 画成访达）。
+        var mac = MacIconCatalog.TryGetFor(isAppsFolder ? app.IconPath : app.LaunchPath);
+        if (mac is not null) return mac;
         var source = isAppsFolder
             ? app.IconPath
             : string.IsNullOrWhiteSpace(app.IconPath) ? app.LaunchPath : app.IconPath;

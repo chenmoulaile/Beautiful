@@ -193,8 +193,15 @@
          逐帧不再有 Margin/LayoutTransform 改写。
          窗口保持 AllowsTransparency=True + Background={x:Null}（分层窗口）：面板矩形之外不参与命中测试，
          条带两侧与顶部余量点击穿透（Task 4 约束，勿改成实底）。 -->
-    <Grid x:Name="PanelHost" HorizontalAlignment="Center" VerticalAlignment="Bottom"
-          TextElement.FontFamily="{DynamicResource ThemeFontFamily}">
+    <Grid>
+        <!-- 双击边缘切换（隐藏模式 edge）的命中带：Dock 滑下后窗口其余部分全是点击穿透区
+             （Background={x:Null} 的分层窗口），双击必须有一条实底可落。这条 6 DIP 的透明 Border
+             只参与命中、不画任何像素，窗口全宽贴底——藏下时正好盖住 4px 残留缝。
+             默认收起，仅 edge 档且底部停靠时由 ApplyHideMode 展开。 -->
+        <Border x:Name="EdgeHitStrip" Height="6" VerticalAlignment="Bottom"
+                Background="Transparent" Visibility="Collapsed"/>
+        <Grid x:Name="PanelHost" HorizontalAlignment="Center" VerticalAlignment="Bottom"
+              TextElement.FontFamily="{DynamicResource ThemeFontFamily}">
         <Border x:Name="DockPanelRoot" Padding="10,6"
                 CornerRadius="{DynamicResource ThemePanelCornerRadius}"
                 Background="{DynamicResource ThemeDockGlassBackground}"
@@ -219,5 +226,6 @@
         <dock:DockSurface x:Name="Surface" Margin="10,6"
                           ItemsSource="{Binding Items}"
                           TemplateSelector="{StaticResource ItemSelector}"/>
+        </Grid>
     </Grid>
 </services:AcrylicWindow>
