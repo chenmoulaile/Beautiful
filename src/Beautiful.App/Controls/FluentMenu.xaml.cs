@@ -97,9 +97,9 @@ public partial class FluentMenu : UserControl, IBackdropAware, IPopupShadow
     // ---------- 背板（v3 T2/T3：宿主显示前抓屏自绘模糊，交回画刷或 null） ----------
 
     /// <summary>
-    /// 拿到抓屏模糊 → 卡底铺该画刷，并在其上压一层 <c>CardFillBlur</c> 半透明深色遮罩（文字对比度靠它，
+    /// 拿到抓屏模糊 → 卡底铺该画刷，并在其上压一层 <c>AurPopupFillBlur</c> 半透明深色遮罩（文字对比度靠它，
     /// 不是靠"透出系统模糊"）；拿不到（抓屏失败 / <c>BEAUTIFUL_NOBLUR=1</c> / 瞄准越界）→ 卡底铺实心渐变
-    /// <c>CardFillSolid</c>、遮罩层透明。两条分支都把整张卡铺满：宿主是分层窗口，"没画到"= 看穿到桌面，
+    /// <c>AurPopupFillSolid</c>、遮罩层透明。两条分支都把整张卡铺满：宿主是分层窗口，"没画到"= 看穿到桌面，
     /// 那正是 v2 顶栏与弹层的故障形态，绝不能在任何降级里重演。
     /// <para>
     /// 画刷由宿主瞄准到**窗口矩形**后交回（见 <see cref="IBackdropAware.OnBackdropReady"/> 的取舍说明）：
@@ -112,10 +112,10 @@ public partial class FluentMenu : UserControl, IBackdropAware, IPopupShadow
         if (blur is not null)
         {
             Card.Background = blur;
-            Scrim.Background = (Brush)Resources["CardFillBlur"];
+            Scrim.Background = (Brush)FindResource("AurPopupFillBlur");
             return;
         }
-        Card.Background = (Brush)Resources["CardFillSolid"];
+        Card.Background = (Brush)FindResource("AurPopupFillSolid");
         Scrim.Background = Brushes.Transparent;
     }
 

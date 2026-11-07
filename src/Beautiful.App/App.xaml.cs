@@ -387,6 +387,14 @@ public partial class App : Application
             // 7.2 --launchpad：启动台（验证/截图入口；与 F4 同一窗口）
             if (e.Args.Contains("--launchpad", StringComparer.OrdinalIgnoreCase))
                 Launcher.LaunchpadWindow.ShowOrToggle(_launcher);
+            // 7.21 --switcher：切换器面板（alpha.29 取证/截图入口）：走呼出热键同一条"无状态打开"
+            // 路径（无键盘会话，鼠标点选提交），不写设置、不接管 Alt+Tab。面板未装配（接管开关关着）
+            // 时如实记录而不是静默吞掉——取证入口的失败必须可 grep。
+            if (e.Args.Contains("--switcher", StringComparer.OrdinalIgnoreCase))
+            {
+                if (_switcher is { } switcherForProbe) switcherForProbe.OpenForHotkey();
+                else Logger.Warn("--switcher：切换器服务未装配，面板无法打开");
+            }
 
             // 文件夹诊断入口要等启动台 Loaded + 索引就绪，延后一拍再开（否则窗口还没载入，调了也没用）。
             var launchpadFolder = ParseArgValue(e.Args, "--launchpad-folder");
@@ -874,6 +882,9 @@ public partial class App : Application
             svc.KeepHookForLauncher = SettingsService.Current.LauncherEnabled;
             _switcher = svc;
             svc.Start(SettingsService.Current.SwitcherEnabled);
+            // 呼出热键（alpha.29）：消息窗 RegisterHotKey，与低级钩子零接触；与面板装配同源
+            // （接管关着 = 面板与呼出热键一并摘除，不留"按了没反应"的死键）。
+            svc.ApplyOpenHotkey(SettingsService.Current.SwitcherEnabled);
             EnsureSwitcherWindow();
         }
         catch (Exception ex)
@@ -1047,6 +1058,8 @@ public partial class App : Application
         SettingsService.UpdateAndSave(SettingsService.Current with { SwitcherEnabled = enabled });
         var app = Current as App;
         app?._switcher?.SetHookEnabled(enabled);
+        // 呼出热键与面板装配同源：关开关连热键一起摘（面板都没了，热键就是"按了没反应"的死键）。
+        app?._switcher?.ApplyOpenHotkey(enabled);
         if (enabled) app?.EnsureSwitcherWindow();
         else app?.DestroySwitcherWindow(); // 关接管即收起面板：不留任何自绘界面在屏幕上
     }
@@ -1066,6 +1079,17 @@ public partial class App : Application
         var app = Current as App;
         app?._switcher?.StopHook();
         app?._switcher?.SetHookEnabled(SettingsService.Current.SwitcherEnabled);
+    }
+
+    /// <summary>
+    /// 设置页改切换器<b>呼出</b>热键的即时生效入口（alpha.29）：落盘 + 消息窗热键重注册。
+    /// 与 <see cref="ApplySwitcherHotkey"/>（Alt+Tab 触发组合，低级钩子侧）是两条互不相干的注册；
+    /// 非法值已由 Normalized 收敛为默认 Ctrl+`，注册被占用时只记日志（SwitcherHotkeyService）。
+    /// </summary>
+    public static void ApplySwitcherOpenHotkey(string hotkey)
+    {
+        SettingsService.UpdateAndSave(SettingsService.Current with { SwitcherOpenHotkey = hotkey });
+        (Current as App)?._switcher?.ApplyOpenHotkey(SettingsService.Current.SwitcherEnabled);
     }
 
     /// <summary>把 SettingsService.Current.TopBarEnabled 应用到运行中的实例（创建/销毁，均幂等）。
@@ -1156,6 +1180,27 @@ public partial class App : Application
         }
 
         Logger.Info($"Dock 小组件已{(enabled ? "启用" : "停用")}");
+    }
+
+    /// <summary>设置页切换启动台常驻格：直接让 Dock 重排行首（同 ApplyDockWidget 的最小差异路径）。</summary>
+    internal static void ApplyDockLaunchpad(bool enabled)
+    {
+        if (Current is App { _dock: { } dock })
+        {
+            dock.Vm.ApplyLaunchpadEnabled(enabled);
+        }
+
+        Logger.Info($"Dock 启动台格已{(enabled ? "启用" : "停用")}");
+    }
+
+    /// <summary>
+    /// 设置页切换 Dock 运行指示形态（dot/pill）：DockWindow 窗口级样式覆写立即生效——
+    /// 不重排行、不重建条目容器，DynamicResource 随覆写键即时重解析。
+    /// </summary>
+    internal static void ApplyDockIndicatorStyle()
+    {
+        (Current as App)?._dock?.ApplyIndicatorStyle();
+        Logger.Info($"Dock 运行指示：{SettingsService.Current.DockIndicatorStyle}");
     }
 
     // ---------- 温度监控（对标 MyDockFinder 温度显示；默认关） ----------

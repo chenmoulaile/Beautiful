@@ -46,7 +46,8 @@ public static class QuickSettings
 
     public static IReadOnlyList<QuickOption> Themes { get; } =
     [
-        new("macos", "macOS")
+        new("macos", "macOS"),
+        new("aurora", "Aurora")
     ];
 
     /// <summary>系统任务栏策略分段。中文措辞沿用设置页（隐藏/自动隐藏/保留），同一件事不出现两个名字。</summary>

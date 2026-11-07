@@ -10,4 +10,9 @@
          单测只跑纯函数，不触 WMI。 -->
     <PackageReference Include="System.Management" Version="10.0.2" />
   </ItemGroup>
+  <ItemGroup>
+    <!-- 温度数据源工作包：单测需要走 internal 的 zip 校验安装（LibreHardwareMonitorTool.
+         ValidateAndInstall——本地构造 zip 走与真下载同一条校验/解压路径）与传感器表读取签名。 -->
+    <InternalsVisibleTo Include="Beautiful.Core.Tests" />
+  </ItemGroup>
 </Project>

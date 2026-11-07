@@ -92,3 +92,47 @@ public class LauncherHotkeyTests
         Assert.Equal("ctrl+alt+j", legal.LauncherHotkey);
     }
 }
+
+// ---------- 切换器呼出热键（alpha.29 残项清零）：grave 主键 + 独立兜底 ----------
+
+public class SwitcherOpenHotkeyTests
+{
+    [Theory]
+    [InlineData("ctrl+`", true)]          // 默认键位的自然写法（设置页允许直接敲反引号）
+    [InlineData("ctrl+grave", true)]
+    [InlineData("Ctrl + Grave", true)]
+    [InlineData("alt+grave", true)]
+    [InlineData("ctrl+shift+grave", true)]
+    public void grave主键_解析通过(string raw, bool ok)
+        => Assert.Equal(ok, LauncherHotkey.TryParse(raw, out var g) && g.ToText().EndsWith("grave"));
+
+    [Fact]
+    public void ctrl反引号_规范化为ctrl加grave()
+    {
+        Assert.True(LauncherHotkey.TryParse("ctrl+`", out var gesture));
+        Assert.Equal("ctrl+grave", gesture.ToText());
+    }
+
+    [Fact]
+    public void 默认切换器呼出热键_不与启动器默认相同_且带修饰键()
+    {
+        Assert.Equal("ctrl+grave", LauncherHotkey.DefaultSwitcherOpen);
+        Assert.NotEqual(LauncherHotkey.Default, LauncherHotkey.DefaultSwitcherOpen);
+        Assert.True(LauncherHotkey.TryParse(LauncherHotkey.DefaultSwitcherOpen, out var g));
+        Assert.True(g.Ctrl || g.Alt || g.Win);   // 硬约束：呼出热键也必须带修饰键
+    }
+
+    [Fact]
+    public void 非法呼出热键_自愈回切换器默认而非启动器默认()
+    {
+        var healed = new AppSettings { SwitcherOpenHotkey = "space" }.Normalized();
+        Assert.Equal(LauncherHotkey.DefaultSwitcherOpen, healed.SwitcherOpenHotkey);
+        // CanonicalizeWithFallback 的兜底可指定：两条热键的默认键位不同，绝不能互相抄
+        Assert.Equal("ctrl+grave", LauncherHotkey.CanonicalizeWithFallback("junk", LauncherHotkey.DefaultSwitcherOpen));
+        Assert.Equal(LauncherHotkey.Default, LauncherHotkey.CanonicalizeWithFallback("junk", LauncherHotkey.Default));
+    }
+
+    [Fact]
+    public void 设置默认值与Core切换器呼出默认同源()
+        => Assert.Equal(LauncherHotkey.DefaultSwitcherOpen, new AppSettings().SwitcherOpenHotkey);
+}

@@ -29,6 +29,13 @@ public static class ThemeManager
     /// <summary>当前实际是否深色（auto 时取系统 AppsUseLightTheme）。</summary>
     public static bool IsDark => AppearanceModes.IsDark(_appearance, SystemAppearance.IsLight);
 
+    /// <summary>
+    /// 当前生效的强调色 hex（<see cref="ApplyTokens"/> 每次重算时刷新）。图标兜底链的首字母色块
+    /// （<c>Services.LetterTileRenderer</c>）在后台线程取色用：string 引用读原子，无需加锁；
+    /// 首次 Apply 之前读它得到 macOS 默认蓝（字段初始化值）。
+    /// </summary>
+    public static string AccentHex { get; private set; } = "#0A84FF";
+
     public static void Apply(ThemeDefinition theme, Application app)
     {
         Current = theme;
@@ -61,9 +68,24 @@ public static class ThemeManager
 
     private static void ApplyTokens(ResourceDictionary dict, ThemeDefinition theme, double iconSize)
     {
-        var accent = MacAccents.Hex(SettingsService.Current.AccentColor, IsDark);
-        MacTokenDictionary.Apply(dict, MacTokens.For(IsDark), accent, FontProbe.Current.Family);
+        // 强调色默认值分支：用户没显式选过强调色（仍是默认 blue）时，Aurora 显示其签名色 aurora
+        // 而非蓝；用户选过任何色（含 blue）都用户优先，两条主题线互不污染。
+        var accentId = SettingsService.Current.AccentColor;
+        if (theme.Id == "Aurora" && accentId == MacAccents.DefaultId) accentId = "aurora";
+        var accent = MacAccents.Hex(accentId, IsDark);
+        AccentHex = accent;   // 后台线程（首字母色块渲染）的取色口；见 AccentHex 注释
+        // 字体按主题解析：Aurora 走 Inter 链（内嵌 → 系统 → Segoe 回退），macOS 维持 SF Pro 三态链。
+        var font = FontProbe.FamilyFor(theme.Id);
+        // 面板圆角：macOS 维持字典既有 18（record 25 与字典 18 的存量矛盾按"不回归"原则保留现状），
+        // 其余主题按参数层 PanelCornerRadius 注入（Aurora=26）。
+        var panelRadius = theme.Id == "MacOS" ? 18d : theme.PanelCornerRadius;
+        if (theme.Id == "Aurora")
+            AuroraTokenDictionary.Apply(dict, AuroraTokens.For(IsDark), accent, font, panelRadius);
+        else
+            MacTokenDictionary.Apply(dict, MacTokens.For(IsDark), accent, font, panelRadius);
         ApplyDockMetrics(dict, theme, iconSize);
+        // 强调色/主题可能变了：首字母色块缓存整体作废（条目个位数，重建零负担）。
+        Services.LetterTileRenderer.ClearCache();
     }
 
     private static ResourceDictionary? FindThemeDictionary(Application app)

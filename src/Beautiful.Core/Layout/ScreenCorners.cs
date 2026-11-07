@@ -33,6 +33,19 @@ public static class ScreenCornerPlan
     /// </summary>
     public const string DefaultMaskColor = "#FF000000";
 
+    /// <summary>
+    /// 遮罩色的<b>预设条目</b>（alpha.29 残项清零，设置页下拉与 settingsContract 同源）：
+    /// 名称 + 规范化 hex。全部是熄屏边色系的深色（alpha 恒 FF）——遮罩要像"屏幕自己的圆角"，
+    /// 预设不随主题翻色（理由同 <see cref="DefaultMaskColor"/>：浅色主题下圆角翻白会穿帮）；
+    /// 色值取自 r4 收尾记录的 settingsContract 建议（纯黑/深灰/炭黑）。
+    /// </summary>
+    public static IReadOnlyList<(string Name, string Hex)> PresetMaskColors { get; } =
+    [
+        ("纯黑（默认）", "#FF000000"),
+        ("深灰", "#FF1E1E1E"),
+        ("炭黑", "#FF262626"),
+    ];
+
     /// <summary>设置半径（DIP）→ 本屏物理像素半径：按该屏有效缩放换算，钳到 [MinRadiusPx, MaxRadiusPx]。</summary>
     public static int RadiusPx(int radiusDip, double dpiScale)
     {

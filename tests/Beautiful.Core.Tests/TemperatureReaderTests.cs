@@ -133,6 +133,32 @@ public class TemperatureReaderTests
         ]));
     }
 
+    [Fact]
+    public void 传感器名与父标识大小写不敏感()
+    {
+        // WMI 行的 Parent/Name 大小写取决于提供方（"/intelcpu/0" vs "/IntelCPU/0"）：
+        // 识别必须 OrdinalIgnoreCase，否则某些主板的 CPU 传感器整条被漏。
+        var pick = TemperatureReader.PickCpuPackageCelsius(
+        [
+            new("cpu package", "/IntelCPU/0", 44.0),
+            new("Temperature", "/lpc/nct6776f/0", 39.0),
+        ]);
+        Assert.Equal(44.0, pick);
+    }
+
+    [Fact]
+    public void 封装温度档位压过AMD的Tctl档位()
+    {
+        // 同表混有 Intel 封装与 AMD Tctl（双平台工具混报的罕见形态）：
+        // ①"package" > ②"tctl/tdie" 的档位序必须稳定。
+        var pick = TemperatureReader.PickCpuPackageCelsius(
+        [
+            new("Core (Tctl/Tdie)", "/amdcpu/0", 61.0),
+            new("CPU Package", "/intelcpu/0", 48.0),
+        ]);
+        Assert.Equal(48.0, pick);
+    }
+
     // ---------- Describe：来源中文名（ToolTip/设置页状态行共用） ----------
 
     [Theory]

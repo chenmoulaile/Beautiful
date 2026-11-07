@@ -8,6 +8,7 @@ using System.Windows.Controls;
 using System.Windows.Input;
 using System.Windows.Interop;
 using System.Windows.Media;
+using System.Windows.Media.Animation;
 using System.Windows.Threading;
 using Beautiful.App.Controls;
 using Beautiful.App.Interop;
@@ -66,6 +67,9 @@ public partial class DockWindow : AcrylicWindow
 
     /// <summary>进度条服务（Phase 7-T1）：轮询 Explorer 拷贝对话框的 UIA 进度。</summary>
     private TaskbarProgressService? _progress;
+
+    /// <summary>回收站满/空轮询（alpha.29 残项清零）：满/空翻转驱动回收站槽图标 trash_empty↔trash_full。</summary>
+    private RecycleBinMonitor? _recycleBinMonitor;
 
     /// <summary>小组件天气源（Phase 7-T3）：wttr.in，15 分钟缓存，失败静默。</summary>
     private WeatherService? _weather;
@@ -128,6 +132,9 @@ public partial class DockWindow : AcrylicWindow
     private double? _monitorScale;
     private bool _appbarRegistered;
     private bool _closing; // OnClosing 起置位：阻止关闭前挂起的 BeginInvoke 重注册在 ABM_REMOVE 后复活 AppBar
+
+    /// <summary>首现弹入是否已播（Aurora 主题一次性入场，窗口生命周期内只播一次）。</summary>
+    private bool _entrancePlayed;
 
     /// <summary>自动隐藏开关（设置项 DockAutoHide）。</summary>
     private bool _autoHide;
@@ -450,6 +457,9 @@ public partial class DockWindow : AcrylicWindow
         // 角标（Phase 7-T2）：标题解析是纯函数，服务只做定时采样；关窗口时在 OnClosed 里停掉。
         _badges = new DockBadgeService(_vm, Surface, Dispatcher);
         _progress = new TaskbarProgressService(Surface, Dispatcher);
+        // 回收站满/空轮询（alpha.29 残项清零）：构造即首拍校正，满/空翻转换回收站槽实例；
+        // 关窗口时在 OnClosed 里停掉（与 _badges/_progress 同一生命周期纪律）。
+        _recycleBinMonitor = new RecycleBinMonitor(_vm, Dispatcher);
         InitWidget();
         ApplyHideMode(SettingsService.Current.DockHideMode, persist: false);
         ApplyEdge(SettingsService.Current.DockEdge, persist: false);
@@ -459,6 +469,9 @@ public partial class DockWindow : AcrylicWindow
         _minTilesTimer.Tick += (_, _) => SyncMinTiles();
         _minTilesTimer.Start();
         SyncMinTiles();
+        // Aurora 首现弹入：OnSourceInitialized 在 Show() 的首次绘制之前，先落 +12 DIP 初值再启动
+        // 弹簧，首帧就是"面板在下方"的起点（不会闪一帧最终位置）。非 Aurora 主题内部直接返回。
+        PlayPanelEntrance();
     }
 
     // ---------- 左右停靠（实验） ----------
@@ -835,8 +848,10 @@ public partial class DockWindow : AcrylicWindow
     // ---------- 条件隐藏档（smart/fullscreen/maximized/edge/modifier/desktop） ----------
 
     /// <summary>
-    /// 条件档的每拍判定：这里<b>只做 Win32 取值与落地</b>（光标、前台、IsZoomed、修饰键），
-    /// "这些事实意味着该不该藏"全在 Core <see cref="DockHideModeDecider"/>（纯函数，单测穷举）。
+    /// 条件档的每拍判定：这里<b>只做 Win32 取值与落地</b>（光标、前台、IsZoomed、修饰键，
+    /// smart 档再加一轮 EnumWindows 遮挡采样——窗口矩形集合经 DockHideFacts.OccludingBounds
+    /// 喂给 Core，背景窗口遮挡也让位），"这些事实意味着该不该藏"全在 Core
+    /// <see cref="DockHideModeDecider"/>（纯函数，单测穷举）。
     /// 隐藏/还原复用自动隐藏的同一对原语（<see cref="HideToAutoHide"/>/<see cref="ShowFromAutoHide"/>），
     /// 于是 _autoHideHidden 的几何护栏（AssertWindowRect/PositionAsAppBar 不拽回）对两种来源一致生效。
     /// </summary>
@@ -848,8 +863,16 @@ public partial class DockWindow : AcrylicWindow
             return;
         }
 
-        var inside = cursor.X >= _screenRect.Left && cursor.X <= _screenRect.Right
-                     && cursor.Y >= _screenRect.Top && cursor.Y <= _screenRect.Bottom;
+        // "光标在 Dock 上"判的是**可见面板带**（居中的那块玻璃，round5 缺陷 3 的根因修口），
+        // 不再拿整条全宽窗口矩形：那是 AppBar 机制的全宽条带（含左右两段不可见留白与顶部余量），
+        // 最大化窗口下用户常在底缘一带（滚动条/状态栏/文件列表尾部）操作，光标几乎总落在
+        // 这条带里 → RevealOrHide 恒判 Visible → maximized 档永远不藏、连一条滑下日志都没有
+        // （真机 03:09-03:12 会话 3 分钟零滑下日志的实锤）。贴边唤出口径不变：藏下后用户贴着
+        // 屏幕底边（全宽，露出的 4px 缝是全宽的）仍能唤回，与自动隐藏同一手感。
+        var panel = VisiblePanelScreenRect();
+        var inside = panel is { } p
+                     && cursor.X >= p.Left && cursor.X <= p.Right
+                     && cursor.Y >= p.Top && cursor.Y <= p.Bottom;
         // 触底命中区与自动隐藏唤出同口径（留 2px 容差）：条件档藏下后用户贴边仍能唤回。
         var atEdge = inside || cursor.Y >= _screenRect.Bottom - AutoHideSliverPixels - 2;
 
@@ -869,9 +892,23 @@ public partial class DockWindow : AcrylicWindow
             }
         }
 
+        var mode = DockHideModes.KindOf(_hideMode);
+        var band = DockBandPhysical();
+
+        // 全量遮挡采样（alpha.29 残项清零，仅 smart 档）：EnumWindows 枚举可见顶层窗口，
+        // 与 Dock 面板带相交的合格窗口矩形作为 DockHideFacts.OccludingBounds 喂给 Core——
+        // 背景窗口压住 Dock 也让位（此前只看前台一扇，是代码注释自认的刻意近似）。
+        // 采样全程零 SEND 消息（OccludingWindowProbe），粗筛后多数窗口不进 DWM 查询；
+        // 其余档判定只看前台，不做这次扫描。
+        IReadOnlyList<PhysicalRect>? occluding = null;
+        if (mode == DockHideModeKind.Smart)
+        {
+            occluding = OccludingWindowProbe.CollectOverlappingBounds(band);
+        }
+
         var decision = DockHideModeDecider.Evaluate(new DockHideFacts(
-            DockHideModes.KindOf(_hideMode),
-            DockBandPhysical(),
+            mode,
+            band,
             _monitorRect,
             foreground,
             maximizedOnDockMonitor,
@@ -879,7 +916,8 @@ public partial class DockWindow : AcrylicWindow
             IsModifierHeld(SettingsService.Current.DockModifierKey),
             _edgeToggleVisible,
             inside,
-            atEdge));
+            atEdge,
+            occluding));
 
         if (decision == DockHideDecision.Hidden)
         {
@@ -901,6 +939,20 @@ public partial class DockWindow : AcrylicWindow
         var panelPx = Math.Min((int)Math.Round(VisiblePanelDip() * scale), _windowTarget.Height);
         return new PhysicalRect(_windowTarget.Left, _windowTarget.Bottom - panelPx,
                                 _windowTarget.Right, _windowTarget.Bottom);
+    }
+
+    /// <summary>
+    /// <b>可见玻璃面板</b>的屏幕物理矩形（<see cref="DockPanelRoot"/> 的实际渲染矩形，居中、
+    /// 真实面板宽）：条件档判"光标在 Dock 上"用。窗口矩形是 AppBar 机制的全宽条带，见
+    /// <see cref="TickConditionHide"/> 内注释（round5 缺陷 3）。面板没量出来（未完成一次布局 /
+    /// 窗口未定位）返回 null——调用方按"不在 Dock 上"处理，只损失一拍的唤出保持，无副作用。
+    /// </summary>
+    private (int Left, int Top, int Right, int Bottom)? VisiblePanelScreenRect()
+    {
+        if (DockPanelRoot.ActualWidth < 1 || DockPanelRoot.ActualHeight < 1) return null;
+        var tl = DockPanelRoot.PointToScreen(new Point(0, 0));
+        var br = DockPanelRoot.PointToScreen(new Point(DockPanelRoot.ActualWidth, DockPanelRoot.ActualHeight));
+        return ((int)tl.X, (int)tl.Y, (int)br.X, (int)br.Y);
     }
 
     /// <summary>临时显示修饰键此刻是否按住（左右键都算：用户不区分 L/R）。读异步键盘状态，无副作用。</summary>
@@ -983,6 +1035,7 @@ public partial class DockWindow : AcrylicWindow
     private void InitWidget()
     {
         _vm.ApplyWidgetEnabled(SettingsService.Current.DockWidgetEnabled);
+        _vm.ApplyLaunchpadEnabled(SettingsService.Current.DockShowLaunchpad);
         RefreshWidgetClock();
 
         _widgetTimer = new System.Windows.Threading.DispatcherTimer(
@@ -1064,6 +1117,10 @@ public partial class DockWindow : AcrylicWindow
         // 分隔符开关也是主题参数（macOS 有 / GNOME 与鸿蒙没有），"插在哪两块之间"由 Core 规则推导，
         // 渲染器里没有任何 if (theme == mac) —— 这就是"不同风格的 dock 完美还原原生显示方式"的落点。
         _vm.ApplySeparatorPolicy(theme.DockSeparatorsEnabled);
+        // Aurora 签名件随主题落地/切换重分派：面板描边的接地感与运行指示形态（内部按主题键存在性分派，
+        // 非 Aurora 主题自动回到 macOS 既有形态，切换零残留）。
+        ApplyPanelEdgeBrush();
+        ApplyIndicatorStyle();
         Surface.Refresh();
         ScheduleReposition();
     }
@@ -1128,6 +1185,75 @@ public partial class DockWindow : AcrylicWindow
         ScheduleIconRebind();
         // 图标宽高 + 遮罩 + 分隔符几何（线粗/高度/盒宽）随尺寸与主题重注入主题字典（冻结/数值，非逐帧路径）。
         ThemeManager.ApplyIconSize(icon, Application.Current);
+    }
+
+    // ---------- Aurora 签名件（wp-aurora-dock：接地描边 / 首现弹入 / 运行指示形态） ----------
+    // 三件都遵守同一条纪律：本窗口只消费主题数据，不写 if (theme == "Aurora")——
+    // 主题是否生效由"主题字典里有没有 Aurora 签名键"回答，未来第二套主题自带同键即自动继承。
+
+    /// <summary>Aurora 签名标记键：仅 Aurora.xaml / AuroraTokenDictionary 写它（存在 = Aurora 生效中）。</summary>
+    private const string AurSignatureKey = "AurEaseSpring";
+
+    private bool IsAuroraActive => TryFindResource(AurSignatureKey) is not null;
+
+    /// <summary>
+    /// 面板描边的「接地感」（Aurora 材质规格）：DockPanelRoot 的 1px 描边换竖向渐变
+    /// 上 #33FFFFFF（== MacDockBorder 暗值）→ 下 #0D000000，不加大面积投影（AppBar 条带已占满
+    /// 窗口，真投影画不下）。macOS 等其它主题维持 MacDockBorder 的引用——亮暗/accent 变更继续由
+    /// 主题字典即时重解析。渐变与强调色无关 → 画刷可冻结（XAML 窗口资源 AurDockEdgeBrush）。
+    /// </summary>
+    private void ApplyPanelEdgeBrush()
+    {
+        // SetResourceReference 会覆盖 XAML 里写死的引用，所以两个分支都显式指回当前该用的键。
+        DockPanelRoot.SetResourceReference(Border.BorderBrushProperty,
+            IsAuroraActive ? "AurDockEdgeBrush" : "MacDockBorder");
+    }
+
+    /// <summary>
+    /// Dock 首次出现的弹入（Aurora 动效规格，唯一新增动效轨道）：面板自 +12 DIP 下方以
+    /// KeySpline(0.34,1.56,0.64,1)（AurEaseSpring 文档口径）在 180ms 内弹到位——y 超 1 的控制点
+    /// 给出微过冲回弹。仅 Aurora 主题且底部停靠播一次；只动 RenderTransform，AppBar 窗口矩形、
+    /// 命中几何与逐帧放大轨道一概不碰。其它主题维持既有"瞬间出现"。
+    /// </summary>
+    private void PlayPanelEntrance()
+    {
+        if (_entrancePlayed || _closing) return;
+        _entrancePlayed = true;
+        if (!IsAuroraActive || DockEdge != "bottom") return;
+
+        const double startOffsetDip = 12.0;  // Aurora 规格：面板自 +12 DIP 下方弹入
+        const int durationMs = 180;          // AurEaseSpring 落点时长（tokenTable【6】）
+        PanelEnterShift.Y = startOffsetDip;
+        var anim = new DoubleAnimationUsingKeyFrames
+        {
+            Duration = new Duration(TimeSpan.FromMilliseconds(durationMs)),
+        };
+        // KeySpline 只校验 x∈[0,1]，y 允许超 1 —— (0.34,1.56,0.64,1) 即"过冲后回弹"的弹簧。
+        anim.KeyFrames.Add(new SplineDoubleKeyFrame(0, KeyTime.FromTimeSpan(TimeSpan.FromMilliseconds(durationMs)),
+            new KeySpline(0.34, 1.56, 0.64, 1)));
+        PanelEnterShift.BeginAnimation(TranslateTransform.YProperty, anim);
+    }
+
+    /// <summary>
+    /// 运行指示形态（设置项 DockIndicatorStyle）：dot（默认——macOS 圆点 / Aurora 圆点+辉光，样式属
+    /// 各主题字典）与 pill（KDE 药丸：触发器同圆点，几何用模板现成的 16×3 胶囊，Fill=ThemeAccent）。
+    /// pill 档以窗口字典覆写 ThemeIndicatorDot/ThemeIndicatorUnderline 两键（元素查找先窗口后应用字典），
+    /// dot 档移除覆写回落主题字典——圆点样式始终归主题所有，换主题/换 accent 都即时跟随。
+    /// </summary>
+    public void ApplyIndicatorStyle()
+    {
+        const string dotKey = "ThemeIndicatorDot";
+        const string underlineKey = "ThemeIndicatorUnderline";
+        if (SettingsService.Current.DockIndicatorStyle == "pill")
+        {
+            Resources[dotKey] = (Style)Resources["AurIndicatorDotOff"];
+            Resources[underlineKey] = (Style)Resources["AurIndicatorPill"];
+        }
+        else
+        {
+            Resources.Remove(dotKey);
+            Resources.Remove(underlineKey);
+        }
     }
 
     // ---------- 图标烘焙（v3 T6） ----------
@@ -1358,6 +1484,8 @@ public partial class DockWindow : AcrylicWindow
         _badges = null;
         _progress?.Dispose();
         _progress = null;
+        _recycleBinMonitor?.Dispose();
+        _recycleBinMonitor = null;
         _autoHideTimer?.Stop();
         _autoHideTimer = null;
         StopConditionTimer();

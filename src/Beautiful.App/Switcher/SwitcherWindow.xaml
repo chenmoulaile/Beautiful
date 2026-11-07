@@ -26,22 +26,8 @@
          字幕可见性、条目间距等不在模板里的，由 ApplyStyle() 直接赋值（无资源间接层，少一处易错点）。 -->
 
     <Window.Resources>
-        <!-- 卡底降级形态：没有抓屏模糊时自铺**实心**渐变（分层窗口上"没画到"= 看穿到桌面，绝不允许）。 -->
-        <LinearGradientBrush x:Key="CardFillSolid" StartPoint="0,0" EndPoint="0,1">
-            <GradientStop Color="#F62C2C2F" Offset="0"/>
-            <GradientStop Color="#FA1B1B1F" Offset="1"/>
-        </LinearGradientBrush>
-        <!-- 抓屏模糊之上的遮罩：半透明深色渐变，负责图标/字幕的文字对比度。 -->
-        <LinearGradientBrush x:Key="CardFillBlur" StartPoint="0,0" EndPoint="0,1">
-            <GradientStop Color="#8A232327" Offset="0"/>
-            <GradientStop Color="#9A19191C" Offset="1"/>
-        </LinearGradientBrush>
-        <!-- 顶部内高光：macOS 玻璃感的"light top edge"（与 FluentMenu 同一视觉语言） -->
-        <LinearGradientBrush x:Key="CardInnerGlow" StartPoint="0,0" EndPoint="0,1">
-            <GradientStop Color="#19FFFFFF" Offset="0"/>
-            <GradientStop Color="#06FFFFFF" Offset="0.42"/>
-            <GradientStop Color="#00FFFFFF" Offset="1"/>
-        </LinearGradientBrush>
+        <!-- 卡底/遮罩/内高光读 Aur* 弹层语义键（统一弹层底）：macOS 主题下是原就地硬编码的同值兜底，
+             Aurora 主题下亮色走亮弹层底。Scrim 的代码侧切换（ShowPanel/背板分支）语义不变。 -->
 
         <!-- 默认值 = macOS 样式（AppSettings.SwitcherStyle 默认值）；ApplyStyle 每次显示前覆盖 -->
         <sys:Double x:Key="SwitcherIconSize">56</sys:Double>
@@ -52,15 +38,15 @@
         <!-- SwitcherIconClip（图标遮罩几何）不写默认值：缺键 → DynamicResource 不解析 → Clip=null -->
     </Window.Resources>
 
-    <Border x:Name="Card" Background="{StaticResource CardFillSolid}" CornerRadius="18">
+    <Border x:Name="Card" Background="{DynamicResource AurPopupFillSolid}" CornerRadius="18">
         <Grid>
-            <!-- 叠放顺序即材质顺序：抓屏模糊（Card.Background）→ 深色遮罩 → 主题 tint → 内高光 → 内容。
-                 Scrim 只在有模糊时铺 CardFillBlur（实心底形态再叠一层深色只会闷），由代码切换。 -->
+            <!-- 叠放顺序即材质顺序：抓屏模糊（Card.Background）→ 遮罩 → 主题 tint → 内高光 → 内容。
+                 Scrim 只在有模糊时铺 AurPopupFillBlur（实心底形态再叠一层深色只会闷），由代码切换。 -->
             <Border x:Name="Scrim" IsHitTestVisible="False" Background="Transparent"/>
             <!-- 主题 tint 覆盖层：随 DynamicResource 即时体现主题色 -->
             <Border x:Name="TintLayer" IsHitTestVisible="False"
                     Background="{DynamicResource ThemeBackdropTint}"/>
-            <Border x:Name="GlowLayer" IsHitTestVisible="False" Background="{StaticResource CardInnerGlow}"/>
+            <Border x:Name="GlowLayer" IsHitTestVisible="False" Background="{DynamicResource AurInnerGlowBrush}"/>
 
             <StackPanel x:Name="Body" Margin="16,13,16,13">
                 <!-- App 图标行：每 App 一瓦片；高亮唯一来源 = 服务的 SelectedAppIndex → IsSelected，

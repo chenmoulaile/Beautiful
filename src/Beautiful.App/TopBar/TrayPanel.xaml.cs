@@ -142,7 +142,7 @@ public partial class TrayPanel : UserControl, IBackdropAware, IPopupShadow
     }
 
     /// <summary>
-    /// 拿到抓屏模糊 → 卡底铺该画刷并在其上压 <c>CardFillBlur</c>；拿不到 → 铺实心 <c>CardFillSolid</c> + 遮罩透明。
+    /// 拿到抓屏模糊 → 卡底铺该画刷并在其上压 <c>AurPopupFillBlur</c>；拿不到 → 铺实心 <c>AurPopupFillSolid</c> + 遮罩透明。
     /// 与控制中心/WiFi 面板完全同一段：降级链上没有任何一环会画成黑。
     /// </summary>
     public void OnBackdropReady(ScreenBackdrop? backdrop)
@@ -151,10 +151,10 @@ public partial class TrayPanel : UserControl, IBackdropAware, IPopupShadow
         if (blur is not null)
         {
             Card.Background = blur;
-            Scrim.Background = (Brush)Resources["CardFillBlur"];
+            Scrim.Background = (Brush)FindResource("AurPopupFillBlur");
             return;
         }
-        Card.Background = (Brush)Resources["CardFillSolid"];
+        Card.Background = (Brush)FindResource("AurPopupFillSolid");
         Scrim.Background = Brushes.Transparent;
     }
 

@@ -36,9 +36,14 @@ public sealed class DockViewModel
     /// <summary>语义块：运行窗口，与 <see cref="WindowTracker.Windows"/> 下标一一对应。</summary>
     private readonly List<DockItem> _windows = new();
 
-    // 后缀槽各一个固定实例：回收站 + 媒体胶囊（胶囊无会话时由模板把宽度收成 0）
-    private readonly DockItem _recycleBin = CreateRecycleBinItem();
+    // 后缀槽各一个固定实例：回收站 + 媒体胶囊（胶囊无会话时由模板把宽度收成 0）。
+    // 回收站例外：满/空状态翻转时整体换实例（见 UpdateRecycleBin），其余生命周期内引用固定，
+    // Reconcile 的引用相等比较不受影响（未翻转时零事件）。
+    private DockItem _recycleBin = CreateRecycleBinItem(full: false);
     private readonly DockItem _media = CreateMediaItem();
+
+    /// <summary>回收站当前是否满（初始"空" = 历史起步态；<see cref="RecycleBinMonitor"/> 轮询首拍即校正）。</summary>
+    private bool _recycleBinFull;
 
     /// <summary>Dock 小组件（时钟 + 天气）。Label = 时钟、Detail = 温度与天气描述。</summary>
     private DockItem _widget = CreateWidgetItem();
@@ -52,6 +57,9 @@ public sealed class DockViewModel
 
     /// <summary>启动台常驻格（alpha.22）：macOS Dock 第二格，同上。</summary>
     private readonly DockItem _launchpad = CreateLaunchpadItem();
+
+    /// <summary>启动台常驻格是否参与排布（设置项 DockShowLaunchpad，默认开 = alpha.22 以来的既有行为）。</summary>
+    private bool _launchpadEnabled = true;
 
     private readonly DockItem _appsSeparator = MakeSeparator(DockSeparatorRole.AppsBoundary);
     private readonly DockItem _trashSeparator = MakeSeparator(DockSeparatorRole.TrashBoundary);
@@ -286,13 +294,14 @@ public sealed class DockViewModel
         }
     }
 
-    private static DockItem CreateRecycleBinItem()
+    private static DockItem CreateRecycleBinItem(bool full)
         => new(Id: "shell:RecycleBinFolder",
                Label: "回收站",
                Icon: IconExtractor.GetIcon(RecycleBinIconSource), // 可能为 null → 视图回退 ♻
                Kind: DockItemKind.RecycleBin,
                LaunchPath: "shell:RecycleBinFolder",
-               IconSource: RecycleBinIconSource);
+               IconSource: RecycleBinIconSource,
+               TrashFull: full);   // 状态进记录：翻转时旧新实例值不等，DataContext 才会真的变更（见 DockItem.TrashFull）
 
     /// <summary>回收站图标的 shell 命名空间 id（启动路径是 shell: 形式，取图要用 ::{clsid} 形式）。</summary>
     private const string RecycleBinIconSource = "::{645FF040-5081-101B-9F08-00AA002F954E}";
@@ -358,6 +367,40 @@ public sealed class DockViewModel
         }
     }
 
+    /// <summary>
+    /// 回收站满/空落地（<see cref="RecycleBinMonitor"/> 轮询驱动，alpha.29 残项清零）：
+    /// 状态翻转时整体换回收站槽实例，走 Replace 事件——DockSurface 快路径只换 DataContext，
+    /// 图标绑定（IconBakedSourceConverter → MacIconCatalog.TryGet）重新求值即取到 trash_full/
+    /// trash_empty 新键位图，可视树不重建、不闪烁。条目未在 Items 时（理论不可达：回收站恒在
+    /// 语义序列）退回 Reconcile 重导。
+    /// <para>
+    /// 【round5 缺陷 2 的教训】旧实现换出的新实例与旧实例<b>值相等</b>（record 其余字段全同），
+    /// WPF 把等值的 DataContext 当"未变化"，绑定不重求值，图标永不翻——满/空状态如今随
+    /// <see cref="DockItem.TrashFull"/> 进记录，翻转 ⇒ 记录必不等 ⇒ 真变更（见该参数注释）。
+    /// </para>
+    /// </summary>
+    public void UpdateRecycleBin(bool full)
+    {
+        if (_recycleBinFull == full)
+        {
+            return;
+        }
+
+        // 状态必须先于实例替换：绑定重求值发生在 Replace 事件内部，晚改就换不出满桶图。
+        _recycleBinFull = full;
+        MacIconCatalog.TrashFull = full;
+        _recycleBin = CreateRecycleBinItem(full);
+        for (var i = 0; i < Items.Count; i++)
+        {
+            if (Items[i].Kind == DockItemKind.RecycleBin)
+            {
+                Items[i] = _recycleBin;
+                return;
+            }
+        }
+        Reconcile();
+    }
+
     /// <summary>开关小组件（设置页）：立即重排，不需要重启 Dock。</summary>
     public void ApplyWidgetEnabled(bool enabled)
     {
@@ -367,6 +410,18 @@ public sealed class DockViewModel
         }
 
         _widgetEnabled = enabled;
+        Reconcile();
+    }
+
+    /// <summary>开关启动台常驻格（设置页）：立即重排（最小差异写回，只动首部那一格），不需要重启 Dock。</summary>
+    public void ApplyLaunchpadEnabled(bool enabled)
+    {
+        if (_launchpadEnabled == enabled)
+        {
+            return;
+        }
+
+        _launchpadEnabled = enabled;
         Reconcile();
     }
 
@@ -535,9 +590,13 @@ public sealed class DockViewModel
         // ① 语义序列（无分隔符）
         var semantic = new List<DockItem>(_pinned.Count + _windows.Count + 4);
         var kinds = new List<DockItemKind>(semantic.Count);
-        // macOS Dock 首两格：访达 + 启动台（常驻功能格，与固定块之间不留分隔符——macOS 同款）
+        // macOS Dock 首两格：访达 + 启动台（常驻功能格，与固定块之间不留分隔符——macOS 同款）。
+        // 启动台格可被设置项 DockShowLaunchpad 关掉（访达格保留：行首语义格恒在）。
         semantic.Add(_finder); kinds.Add(_finder.Kind);
-        semantic.Add(_launchpad); kinds.Add(_launchpad.Kind);
+        if (_launchpadEnabled)
+        {
+            semantic.Add(_launchpad); kinds.Add(_launchpad.Kind);
+        }
         // 一格 = 一个应用（真 macOS Dock 语义）：固定项与运行窗口按 exe 基名合并。
         // 病根是跟踪器每窗一格：一个应用开三窗占三格，固定 + 运行又各占一格（两颗访达 / 两个 Chrome）。
         // 规则本身在 Core 的 DockAppGrouper / DockAppKey（有单测），这里只把结果映射回 DockItem，

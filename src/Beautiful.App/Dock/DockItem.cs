@@ -27,6 +27,14 @@ namespace Beautiful.App.Dock;
 /// 单独一个布尔而不改 <see cref="Kind"/>：Kind 决定右键菜单与点击语义，改成 Window 会让固定项
 /// 失去「取消固定/以管理员运行」并随窗口关闭而消失；运行指示只该多亮一颗点。
 /// </param>
+/// <param name="TrashFull">
+/// 回收站槽的满/空快照（round5 缺陷 2）：只有回收站槽写它，其余条目恒 false。
+/// 它不只是"状态可读"——本类型是 record（值相等），满/空翻转时旧新实例的其余字段全部相同
+/// （Icon 是同一份提取缓存的位图引用），没有这一字段两条记录就<b>相等</b>；DockSurface 的
+/// Replace 快路径给容器换 DataContext 时，WPF 对等值的新值不做失效处理，图标绑定不重求值，
+/// 垃圾桶图标就永远停在旧状态（真机取证：日志已翻转、屏幕上满桶不变，重启后首绘才正确）。
+/// 状态进记录 → 翻转时记录必然不等 → DataContext 真的变更 → 绑定重求值 → 图标跟着翻。
+/// </param>
 public record DockItem(
     string Id,
     string Label,
@@ -36,4 +44,5 @@ public record DockItem(
     IntPtr? WindowHandle = null,
     string? IconSource = null,
     string? Detail = null,
-    bool IsRunning = false);
+    bool IsRunning = false,
+    bool TrashFull = false);

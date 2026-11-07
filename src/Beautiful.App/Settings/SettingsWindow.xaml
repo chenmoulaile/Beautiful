@@ -534,8 +534,9 @@
 
                         <!-- 温度芯片（对标 MyDockFinder 温度显示）：自足设置卡——读写闭环在控件内
                              （勾选/改间隔 → App.SetThermalChip 落盘并即时重建/停掉轮询），
-                             宿主零事件代码；恢复默认的运行态对账经 ApplyTopBarEnabled → ApplyThermalChip 连带。 -->
-                        <settings:ThermalSettingsCard/>
+                             宿主零事件代码；恢复默认的运行态对账经 ApplyTopBarEnabled → ApplyThermalChip 连带，
+                             卡片勾选态经 ReapplyAll → ThermalCard.ReloadFromSettings() 回读（同台前调度卡约定）。 -->
+                        <settings:ThermalSettingsCard x:Name="ThermalCard"/>
 
                         <CheckBox x:Name="AutostartCheck" Content="开机自启"
                                   Margin="0,8,0,0" Checked="Autostart_Changed" Unchecked="Autostart_Changed"/>
@@ -611,8 +612,33 @@
                                     VerticalAlignment="Center" ValueChanged="ScreenCornerRadius_ValueChanged"/>
                             <TextBlock x:Name="ScreenCornerRadiusLabel" Style="{StaticResource ValueLabel}"/>
                         </StackPanel>
+
+                        <!-- 遮罩颜色（alpha.29 残项清零，r4 settingsContract 建议的预置色样下拉落地）：
+                             预设表与 settingsContract 同源（Core ScreenCornerPlan.PresetMaskColors），
+                             右侧 hex 框兜自定义（与启动器热键行同一"输入 + 应用"姿态）。 -->
+                        <StackPanel Orientation="Horizontal" Margin="0,8,0,0">
+                            <TextBlock Text="遮罩颜色" Style="{StaticResource RowLabel}" Width="104"/>
+                            <ComboBox x:Name="ScreenCornerMaskColorBox" Width="170" VerticalAlignment="Center"
+                                      SelectionChanged="ScreenCornerMaskColor_Changed"/>
+                            <TextBox x:Name="ScreenCornerMaskColorHexBox" Width="110" Height="26" VerticalContentAlignment="Center"
+                                     VerticalAlignment="Center" Margin="10,0,0,0"/>
+                            <Button Content="应用" Width="64" Margin="8,0,0,0" Click="ScreenCornerMaskColor_Apply"/>
+                        </StackPanel>
+
+                        <!-- 每屏排除（alpha.29 残项清零）：键 ScreenCornersMonitors（空=全部屏）。
+                             下拉单选即整表替换（现实诉求是"副屏不画"）；多屏列表可手改 settings.json。 -->
+                        <StackPanel Orientation="Horizontal" Margin="0,8,0,0">
+                            <TextBlock Text="排除屏幕" Style="{StaticResource RowLabel}" Width="104"/>
+                            <ComboBox x:Name="ScreenCornersExcludeBox" Width="300" VerticalAlignment="Center"
+                                      SelectionChanged="ScreenCornersExclude_Changed"/>
+                        </StackPanel>
+
                         <TextBlock Style="{StaticResource HintText}"
-                                   Text="每块显示器的四个角各盖一块置顶且点击穿透的黑色小遮罩，整块屏看上去就是 macOS 的圆角；前台有真全屏应用时该屏四角自动让位，半径按所在屏的缩放换算。默认关。"/>
+                                   Text="每块显示器的四个角各盖一块置顶且点击穿透的小遮罩，整块屏看上去就是 macOS 的圆角；前台有真全屏应用时该屏四角自动让位，半径按所在屏的缩放换算。默认关。"/>
+                        <TextBlock Style="{StaticResource HintText}"
+                                   Text="遮罩色走熄屏边色系的深色、不随主题翻色（浅色主题下圆角翻白会穿帮）；预设之外可填 #RRGGBB / #AARRGGBB 后点应用，非法值回落纯黑。"/>
+                        <TextBlock Style="{StaticResource HintText}"
+                                   Text="排除屏幕：被点名的显示器不画圆角遮罩（副屏/投影常见诉求）。下拉选择即整体替换排除名单；需要同时排除多块屏时手改 settings.json 的 ScreenCornersMonitors（键 = primary 或显示器序号，非法键自动丢弃）。"/>
                     </StackPanel>
                 </Border>
 
@@ -632,6 +658,18 @@
                         </StackPanel>
                         <TextBlock Style="{StaticResource HintText}"
                                    Text="触发组合键当前固定为 Alt + Tab。"/>
+
+                        <!-- 呼出热键（alpha.29 残项清零）：消息窗 RegisterHotKey 的"无状态打开面板"边沿，
+                             与 Alt+Tab 接管互不相干（不吞键、不参与会话）——脚本/远程输入被低级钩子放行后
+                             仍可靠它唤出自绘面板。接线照启动器热键行（TextBox + 应用）。 -->
+                        <StackPanel Orientation="Horizontal" Margin="0,14,0,0">
+                            <TextBlock Text="呼出热键" Style="{StaticResource RowLabel}" Width="72"/>
+                            <TextBox x:Name="SwitcherOpenHotkeyBox" Width="180" Height="26" VerticalContentAlignment="Center"
+                                     VerticalAlignment="Center"/>
+                            <Button Content="应用" Width="64" Margin="8,0,0,0" Click="SwitcherOpenHotkey_Apply"/>
+                        </StackPanel>
+                        <TextBlock Style="{StaticResource HintText}"
+                                   Text="直接呼出自绘切换面板（默认 Ctrl + `，即 ctrl+grave；再按一次收起）。它不吞键、不参与 Alt+Tab 会话，脚本/远程输入也能唤出；必须包含至少一个修饰键 + 可识别主键，非法值会自愈为 ctrl+grave 并留日志。"/>
 
                         <CheckBox x:Name="FullscreenPassthroughCheck" Content="前台为全屏应用时放行原生 Alt + Tab（游戏兜底）"
                                   Margin="0,14,0,0" Checked="Passthrough_Changed" Unchecked="Passthrough_Changed"/>
@@ -812,6 +850,18 @@
                                    Text="九档隐藏方式（对标 MyDockFinder）：智能隐藏在别的窗口盖住 Dock 时让位、移开即回；全屏/最大化档只认 Dock 所在屏的前台；双击边缘切换要双击 Dock 残留的边缘条带；仅桌面档在回桌面时才出现。自动隐藏档：光标离开 Dock 后延迟指定毫秒才滑下（0 = 离开即滑，默认 500ms——“悬停触发延迟”就是这一项），唤出方式决定滑下后鼠标怎么唤回——“触底停留”路过底边不弹，“边缘二次触发”要触底→离开→2 秒内再触底。"/>
                         <CheckBox x:Name="DockWidgetCheck" Content="在 Dock 行尾显示时钟 / 天气小组件"
                                   Margin="0,8,0,0" Checked="DockWidget_Changed" Unchecked="DockWidget_Changed"/>
+                        <CheckBox x:Name="DockLaunchpadCheck" Content="在 Dock 显示启动台"
+                                  Margin="0,8,0,0" Checked="DockLaunchpad_Changed" Unchecked="DockLaunchpad_Changed"/>
+                        <StackPanel Orientation="Horizontal" Margin="0,8,0,0">
+                            <TextBlock Text="运行指示" VerticalAlignment="Center"/>
+                            <ComboBox x:Name="DockIndicatorCombo" Width="200" Margin="10,0,0,0"
+                                      SelectionChanged="DockIndicator_Changed">
+                                <ComboBoxItem Content="圆点（macOS）" Tag="dot"/>
+                                <ComboBoxItem Content="药丸（KDE）" Tag="pill"/>
+                            </ComboBox>
+                            <TextBlock Text="运行中应用的窗口标记样式" Opacity="0.6" FontSize="11"
+                                       Margin="10,0,0,0" VerticalAlignment="Center"/>
+                        </StackPanel>
                         <CheckBox x:Name="CapsuleCheck" Content="在 Dock 显示媒体胶囊"
                                   Checked="Capsule_Changed" Unchecked="Capsule_Changed"/>
                         <CheckBox x:Name="HidePanelCheck" Content="媒体面板失焦自动收起"

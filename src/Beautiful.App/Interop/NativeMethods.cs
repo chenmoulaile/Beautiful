@@ -243,6 +243,7 @@ internal static partial class NativeMethods
     public const int VkF1 = 0x70;                                    // F1..F12 连续
     public const int VkOemMinus = 0xBD, VkOemPlus = 0xBB, VkOemComma = 0xBC, VkOemPeriod = 0xBE;
     public const int VkOem2 = 0xBF;          // VK_OEM_2 = 斜杠 "/"
+    public const int VkOem3 = 0xC0;          // VK_OEM_3 = 反引号 `（切换器呼出热键默认主键 Ctrl+`）
     public const int VkOem4 = 0xDB, VkOem5 = 0xDC, VkOem6 = 0xDD, VkOem7 = 0xDE, VkOem1 = 0xBA;
 
 

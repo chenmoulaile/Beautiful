@@ -19,20 +19,12 @@
          【Card 定宽 + 内部星号行】宿主按 Measure(inf,inf) 同步量尺寸来决定落位与是否翻转，
          定宽让结果行的换行在第一趟布局就定形（与 CalendarFlyout 同一教训）。 -->
     <UserControl.Resources>
-        <LinearGradientBrush x:Key="CardFillSolid" StartPoint="0,0" EndPoint="0,1">
-            <GradientStop Color="#E1343439" Offset="0"/>
-            <GradientStop Color="#D81C1C21" Offset="1"/>
-        </LinearGradientBrush>
-        <LinearGradientBrush x:Key="CardFillBlur" StartPoint="0,0" EndPoint="0,1">
-            <GradientStop Color="#781F1F24" Offset="0"/>
-            <GradientStop Color="#88131317" Offset="1"/>
-        </LinearGradientBrush>
         <DropShadowEffect x:Key="CardShadow" BlurRadius="36" ShadowDepth="10" Direction="270"
                           Color="#000000" Opacity="0.62"/>
 
-        <!-- 结果行：整行是命中区（点哪行启动哪行），选中态用 ThemeAccent 的一层低透明度底 + 左缘 2px 亮条。
-             透明度而不是实心：强调色要压在抓屏模糊之上，实心会把图标与名称糊成一片；
-             而且强调色来自 DynamicResource，外观层换色时这一条会自己跟着变。
+        <!-- 结果行：整行是命中区（点哪行启动哪行），选中态用强调色的软填充 + 底缘 1px 发丝边
+             （Aur* 选中行语义键：macOS 下是原 accent@0.92 的同值兜底，Aurora 下是低透明 accent 软填充，
+             压在抓屏模糊之上不会把图标与名称糊成一片；强调色来自 DynamicResource，换色自动跟随）。
              【不用 Effect/不加动画】本面板是瞬态表面，但行模板会被虚拟化重排：Effect 会把它推进
              离屏滤镜管线（本项目对 Dock 的逐帧路径已裁定禁止），这里也无需引入第二套材质。 -->
         <Style x:Key="RowStyle" TargetType="Border">
@@ -42,8 +34,9 @@
             <Setter Property="Padding" Value="14,0"/>
             <Style.Triggers>
                 <DataTrigger Binding="{Binding IsSelected}" Value="True">
-                    <Setter Property="Background" Value="{DynamicResource ThemeAccent}"/>
-                    <Setter Property="Opacity" Value="0.92"/>
+                    <Setter Property="Background" Value="{DynamicResource AurSelectionFill}"/>
+                    <Setter Property="BorderBrush" Value="{DynamicResource AurSelectionHairline}"/>
+                    <Setter Property="BorderThickness" Value="0,0,0,1"/>
                 </DataTrigger>
             </Style.Triggers>
         </Style>
@@ -68,20 +61,13 @@
 
     <Grid x:Name="Shell" Margin="22,20,22,26">
         <Border x:Name="Card" Width="700" CornerRadius="20" BorderThickness="1" BorderBrush="#40FFFFFF"
-                Background="{StaticResource CardFillSolid}" Effect="{StaticResource CardShadow}">
+                Background="{DynamicResource AurPopupFillSolid}" Effect="{StaticResource CardShadow}">
             <Grid>
                 <Border x:Name="Scrim" CornerRadius="19" IsHitTestVisible="False" Background="Transparent"/>
                 <Border x:Name="TintLayer" CornerRadius="19" IsHitTestVisible="False"
                         Background="{DynamicResource ThemeBackdropTint}"/>
-                <Border x:Name="InnerGlow" CornerRadius="19" IsHitTestVisible="False">
-                    <Border.Background>
-                        <LinearGradientBrush StartPoint="0,0" EndPoint="0,1">
-                            <GradientStop Color="#14FFFFFF" Offset="0"/>
-                            <GradientStop Color="#05FFFFFF" Offset="0.35"/>
-                            <GradientStop Color="#00FFFFFF" Offset="1"/>
-                        </LinearGradientBrush>
-                    </Border.Background>
-                </Border>
+                <Border x:Name="InnerGlow" CornerRadius="19" IsHitTestVisible="False"
+                        Background="{DynamicResource AurInnerGlowBrush}"/>
 
                 <StackPanel>
                     <!-- 搜索行：图标 + 输入框。键位提示放在结果区下方，避免与用户正在打的字抢位置。 -->

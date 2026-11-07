@@ -82,6 +82,39 @@ public sealed record ThemeDefinition(
         IconMaskRadiusRatio: 0.2,
         IconShadow: true);
 
+    /// <summary>
+    /// Aurora（极光）：Aurora 骨架 + Adwaita Depth 层压卡语义 + Plasma Flow 胶囊指示的最省路径。
+    /// 参数语义与 macOS 同构（图标原样平铺 + 圆点指示 + 分隔符 + 圆角方形遮罩烘焙），差异集中在：
+    /// 更松的菜单/弹层度量（MenuItemPaddingX 12、MenuItemHeight 24）、26 的面板圆角、
+    /// Inter 字体（App 侧 FontProbe.FamilyFor("Aurora") 解析，OFL 内嵌 → 系统已装 → Segoe 回退）
+    /// 与青绿签名色。AccentHex 是主题**签名**色：用户没显式选过强调色（仍是默认 blue）时
+    /// ThemeManager 按 Id 分支落到它，用户选过任何色都用户优先。
+    /// </summary>
+    public static ThemeDefinition Aurora() => new(
+        Id: "Aurora", DisplayName: "Aurora",
+        DockBackground: Argb("#B31B1D24"),
+        AcrylicTint: Argb("#B31B1D24"),
+        BlurEnabled: true,
+        PanelCornerRadius: 26,
+        IconCornerRadiusRatio: 0,
+        IconSize: 56,
+        ItemSpacing: 8,
+        MaxScale: 1.7,
+        IndicatorStyle: "dot",
+        AccentHex: "#2FD4B4",
+        FontFamily: "Inter",
+        DockRowInsetDip: 12,
+        DockPanelPaddingXDip: 12,
+        DockPanelPaddingYDip: 7,
+        ReflectionDefault: false,     // 现代 Dock 无倒影（用户显式打开仍生效）
+        DockSeparatorsEnabled: true,
+        DockSeparatorWidthDip: 1,
+        DockSeparatorHeightRatio: 0.55,
+        DockSeparatorSideInsetDip: 6,
+        IconMask: IconMaskStyle.RoundedRectangle,
+        IconMaskRadiusRatio: 0.2,
+        IconShadow: true);
+
     /// <summary>#RRGGBB / #AARRGGBB → Color（内置解析：System.Drawing.Common 的 ColorTranslator 不在 net8.0 基础包内）。</summary>
     private static Color Argb(string hex)
     {

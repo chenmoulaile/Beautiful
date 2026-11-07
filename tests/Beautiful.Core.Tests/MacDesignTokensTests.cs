@@ -29,10 +29,11 @@ public class MacDesignTokensTests
         => Assert.Equal(expected, AppearanceModes.IsDark(mode, systemUsesLight));
 
     [Fact]
-    public void 强调色板_十二色且亮暗成对()
+    public void 强调色板_十二色macOS板加Aurora签名色_亮暗成对()
     {
-        Assert.Equal(12, MacAccents.All.Count);
-        Assert.Equal(12, MacAccents.All.Select(a => a.Id).Distinct().Count());
+        Assert.Equal(13, MacAccents.All.Count);
+        Assert.Equal(13, MacAccents.All.Select(a => a.Id).Distinct().Count());
+        Assert.Equal("aurora", MacAccents.All[^1].Id);   // Aurora 签名色追加在队尾（12 色 macOS 板之后）
         var hex = new Regex("^#[0-9A-Fa-f]{6}$");
         foreach (var accent in MacAccents.All)
         {

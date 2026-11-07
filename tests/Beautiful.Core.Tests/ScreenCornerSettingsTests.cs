@@ -123,3 +123,66 @@ public class ScreenCornerSettingsTests
         Assert.True(parsed.ScreenCornersEnabled);
     }
 }
+
+// ---------- 每屏排除名单（alpha.29 残项清零，Core ScreenCornerMonitors） ----------
+
+public class ScreenCornerMonitorsSettingsTests
+{
+    [Fact]
+    public void 默认值_空名单_全部屏幕画圆角()
+        => Assert.Empty(new AppSettings().ScreenCornersMonitors);
+
+    [Theory]
+    [InlineData("primary", "primary")]
+    [InlineData(" PRIMARY ", "primary")]
+    [InlineData("2", "2")]
+    [InlineData(" 2.0 ", "2")]
+    [InlineData("auto", null)]
+    [InlineData("17", null)]     // 超出 16 台护栏
+    [InlineData("junk", null)]
+    [InlineData("", null)]
+    public void 单键规范化_primary与序号保留_非法丢弃(string raw, string? expected)
+    {
+        var key = Beautiful.Core.Layout.ScreenCornerMonitors.CanonicalKey(raw);
+        Assert.Equal(expected, key);
+    }
+
+    [Fact]
+    public void 列表规范化_去重保序_丢弃null与非法键()
+    {
+        var normalized = Beautiful.Core.Layout.ScreenCornerMonitors.Normalized(
+            ["primary", null!, "2", "2", "junk", "PRIMARY", "3"]);
+        Assert.Equal(new[] { "primary", "2", "3" }, normalized);
+    }
+
+    [Fact]
+    public void 空名单或全非法_收敛为空_不排除任何屏()
+    {
+        Assert.Empty(Beautiful.Core.Layout.ScreenCornerMonitors.Normalized(null));
+        Assert.Empty(Beautiful.Core.Layout.ScreenCornerMonitors.Normalized(["junk", "auto"]));
+        Assert.False(Beautiful.Core.Layout.ScreenCornerMonitors.IsExcluded([], 2, isPrimary: true));
+    }
+
+    [Fact]
+    public void 匹配_序号精确优先_primary仅当真是主屏()
+    {
+        var keys = Beautiful.Core.Layout.ScreenCornerMonitors.Normalized(["primary", "2"]);
+        Assert.True(Beautiful.Core.Layout.ScreenCornerMonitors.IsExcluded(keys, 2, isPrimary: false));
+        Assert.True(Beautiful.Core.Layout.ScreenCornerMonitors.IsExcluded(keys, 1, isPrimary: true));
+        Assert.False(Beautiful.Core.Layout.ScreenCornerMonitors.IsExcluded(keys, 1, isPrimary: false)); // 非主屏不沾 primary 键
+        Assert.False(Beautiful.Core.Layout.ScreenCornerMonitors.IsExcluded(keys, 3, isPrimary: false));
+        // 序号越界钳制：手改 JSON 写 99 不会抛（被钳回 16 的语义只在序列化键比对层；16 不在名单内不排除。
+        // primary 匹配与 DockMonitorProfiles 同一套：仅看 isPrimary 旗标，与序号是否越界无关）
+        Assert.False(Beautiful.Core.Layout.ScreenCornerMonitors.IsExcluded(keys, 99, isPrimary: false));
+    }
+
+    [Fact]
+    public void 排除名单JSON往返_键原样保留()
+    {
+        var json = System.Text.Json.JsonSerializer.Serialize(
+            new AppSettings { ScreenCornersMonitors = ["primary", "2"], ScreenCornersEnabled = true });
+        var parsed = System.Text.Json.JsonSerializer.Deserialize<AppSettings>(json);
+        Assert.NotNull(parsed);
+        Assert.Equal(new[] { "primary", "2" }, parsed!.ScreenCornersMonitors);
+    }
+}

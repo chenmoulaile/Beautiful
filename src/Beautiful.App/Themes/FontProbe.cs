@@ -22,14 +22,54 @@ public static class FontProbe
         "SF-Pro-Display-Bold.otf", "SF-Mono-Regular.otf",
     ];
 
+    // ---------- Inter（Aurora 主题，OFL 1.1 可合法再分发捆绑；≥3 字重要求，实放 7 枚静态实例） ----------
+    // WPF 不消费可变字体轴 → 只打包静态 OTF（含 InterDisplay-* 切割），不打包 InterVariable.ttf。
+    private static readonly string[] InterFontFiles =
+    [
+        "Inter-Regular.otf", "Inter-Medium.otf", "Inter-SemiBold.otf", "Inter-Bold.otf",
+        "InterDisplay-Medium.otf", "InterDisplay-SemiBold.otf", "InterDisplay-Bold.otf",
+    ];
+
+    /// <summary>内嵌命中时的回退链（pack URI 首选；"Inter Medium"/"Inter SemiBold" 是 GDI 静态 OTF
+    /// 可能分裂出的独立族名，组串带上即自动兜底；Segoe 垫底）。</summary>
+    private const string InterBundledFamily =
+        "pack://application:,,,/Assets/Fonts/Inter/#Inter, Inter Medium, Inter SemiBold, Inter Display, Segoe UI Variable, Segoe UI";
+
+    /// <summary>系统已装 Inter 时的回退链。</summary>
+    private const string InterSystemFamily =
+        "Inter, Inter Medium, Inter SemiBold, Inter Display, Segoe UI Variable, Segoe UI";
+
+    /// <summary>无 Inter（内嵌+系统都没有）时的回退链：Inter → Segoe UI Variable → SystemFonts。</summary>
+    private const string InterFallbackFamily = "Segoe UI Variable, Segoe UI";
+
     private static FontChoice? _current;
+    private static string? _auroraFamily;
 
     /// <summary>最终字体选择（首次访问时探测并记日志）。</summary>
     public static FontChoice Current => _current ??= Detect();
 
+    /// <summary>
+    /// 按主题解析正文字体族：Aurora → Inter 链（内嵌 pack URI → 系统已装 → Segoe 回退），
+    /// 其余主题 → 现链（<see cref="FontResolution.Resolve"/> 三态链不改语义）。
+    /// 探测一次缓存一次，命中来源写一条可 grep 的中文日志（沿用 FontResolution.LogLine 格式）。
+    /// </summary>
+    public static string FamilyFor(string themeId)
+    {
+        if (!string.Equals(themeId, "Aurora", StringComparison.OrdinalIgnoreCase))
+            return Current.Family;
+        if (_auroraFamily is not null) return _auroraFamily;
+        var bundled = HasBundledAssets(InterFontFiles, "Assets/Fonts/Inter/");
+        var installed = !bundled && HasSystemInter();
+        _auroraFamily = bundled ? InterBundledFamily
+            : installed ? InterSystemFamily
+            : InterFallbackFamily;
+        Logger.Info($"字体解析：Inter({(bundled ? "内嵌" : installed ? "系统" : "回退")}) 命中（Aurora 主题，内嵌资产={bundled}, 系统 Inter={installed}）");
+        return _auroraFamily;
+    }
+
     private static FontChoice Detect()
     {
-        var bundled = HasBundledAssets();
+        var bundled = HasBundledAssets(KnownFontFiles, "Assets/Fonts/");
         var installed = HasSystemSfPro();
         var choice = FontResolution.Resolve(bundled, installed);
         Logger.Info($"{FontResolution.LogLine(choice)}（内嵌资产={bundled}, 系统 SF Pro={installed}）");
@@ -37,15 +77,15 @@ public static class FontProbe
     }
 
     /// <summary>产物里是否带了至少一个期望字体文件（csproj 条件 Resource）。</summary>
-    private static bool HasBundledAssets()
+    private static bool HasBundledAssets(string[] files, string directory)
     {
-        foreach (var file in KnownFontFiles)
+        foreach (var file in files)
         {
             foreach (var uri in new[]
                      {
-                         new Uri($"Assets/Fonts/{file}", UriKind.Relative),
-                         new Uri($"/Assets/Fonts/{file}", UriKind.Relative),
-                         new Uri($"pack://application:,,,/Assets/Fonts/{file}"),
+                         new Uri($"{directory}{file}", UriKind.Relative),
+                         new Uri($"/{directory}{file}", UriKind.Relative),
+                         new Uri($"pack://application:,,,/{directory}{file}"),
                      })
             {
                 try
@@ -73,6 +113,22 @@ public static class FontProbe
         catch (Exception ex)
         {
             Logger.Warn($"系统字体枚举失败（按未安装 SF Pro 处理）: {ex.Message}");
+            return false;
+        }
+    }
+
+    /// <summary>系统字体集合里是否有 Inter（官方发布名即 "Inter"；GDI 静态实例可能带 "Inter " 前缀族名）。</summary>
+    private static bool HasSystemInter()
+    {
+        try
+        {
+            return Fonts.SystemFontFamilies.Any(f =>
+                string.Equals(f.Source, "Inter", StringComparison.OrdinalIgnoreCase) ||
+                f.Source.StartsWith("Inter ", StringComparison.OrdinalIgnoreCase));
+        }
+        catch (Exception ex)
+        {
+            Logger.Warn($"系统字体枚举失败（按未安装 Inter 处理）: {ex.Message}");
             return false;
         }
     }

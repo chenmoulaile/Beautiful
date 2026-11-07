@@ -36,6 +36,14 @@ internal static class MacIconCatalog
     /// <summary>图标主题覆盖位图在缓存里的键前缀（$ 开头与 Tahoe 键不可能撞）。</summary>
     private const string OverrideCachePrefix = "$ovr:";
 
+    /// <summary>
+    /// 回收站槽位当前是否满（alpha.29 残项清零）：<see cref="RecycleBinMonitor"/> 轮询写、
+    /// <see cref="KeysFor"/> 的废纸篓分支读。必须先改状态再替换条目实例——绑定重求值发生在
+    /// Replace 事件里，顺序反了就永远换不出满桶图。默认 false（空桶 = 历史行为，
+    /// 轮询首拍即校正）。图标主题覆盖不受它影响：用户显式指定的覆盖图永远优先于满/空自动切换。
+    /// </summary>
+    internal static bool TrashFull { get; set; }
+
     /// <summary>清空缓存（图标主题覆盖变更时由 IconThemeService 调用；烘焙缓存由 IconBakeContext.ClearCache 同链清）。</summary>
     public static void ClearCache() => Cache.Clear();
 
@@ -50,7 +58,9 @@ internal static class MacIconCatalog
         // 用户裁定：项目 DockBuiltinIcons 那两枚（笑脸 / 火箭）是手绘仿制品，不是真 macOS 图标，
         // 一律不用。访达与启动台同样走图标集，且用的是从真实 macOS 26 系统导出的
         // Finder.png / Apps.png（见 Assets/TahoeIcons/finder.png 与 pad.png）。
-        return FirstFor(SourceFor(item));
+        // 废纸篓的满/空随条目快照走（item.TrashFull，round5 缺陷 2）：键链不读全局静态，
+        // 就没有"先改静态再换实例"的顺序耦合——绑定无论何时重求值都拿到与条目一致的那张图。
+        return FirstFor(SourceFor(item), item.TrashFull);
     }
 
     /// <summary>
@@ -81,14 +91,15 @@ internal static class MacIconCatalog
         // 覆盖层与本表同键语义：启动台/切换器等面板同样先吃图标主题覆盖（与 TryGet 同一张脸）。
         if (TryOverride(IconThemeKey.CandidatesFor(DockItemKind.Pinned, text, null)) is { } overridden)
             return overridden;
-        return FirstFor(text);
+        return FirstFor(text, TrashFull);   // 面板路径没有条目快照：跟随全局满/空（废纸篓分支才会读它）
     }
 
-    /// <summary>候选键逐个试读（带缓存）；这是 <see cref="TryGet"/> 与 <see cref="TryGetFor"/> 的公共尾巴。</summary>
-    private static BitmapSource? FirstFor(string? source)
+    /// <summary>候选键逐个试读（带缓存）；这是 <see cref="TryGet"/> 与 <see cref="TryGetFor"/> 的公共尾巴。
+    /// <paramref name="trashFull"/> 只影响废纸篓键链（其余来源忽略）。</summary>
+    private static BitmapSource? FirstFor(string? source, bool trashFull)
     {
         if (string.IsNullOrWhiteSpace(source)) return null;
-        foreach (var key in KeysFor(source))
+        foreach (var key in KeysFor(source, trashFull))
         {
             if (Cache.TryGetValue(key, out var cached))
             {
@@ -129,7 +140,7 @@ internal static class MacIconCatalog
         return item.IconSource ?? item.LaunchPath;
     }
 
-    private static IEnumerable<string> KeysFor(string? source)
+    private static IEnumerable<string> KeysFor(string? source, bool trashFull)
     {
         if (string.IsNullOrWhiteSpace(source)) return Array.Empty<string>();
         var text = source.Trim();
@@ -141,7 +152,7 @@ internal static class MacIconCatalog
         if (text.Equals("builtin:launchpad", StringComparison.OrdinalIgnoreCase))
             return new[] { "pad", "app_store" };
         if (text.StartsWith("::{645FF040", StringComparison.OrdinalIgnoreCase))
-            return new[] { "trash_empty" };                   // 废纸篓
+            return RecycleBinSlot.IconKeyCandidates(trashFull);   // 废纸篓：按满/空给键（Core 候选链；状态随条目快照，round5 缺陷 2）
 
         var keys = new List<string>(MacIconNames.CandidateKeys(text));
         // 开始菜单导入的 .lnk 是显示名（"Visual Studio Code.lnk"）而不是 exe 基名，
@@ -151,7 +162,12 @@ internal static class MacIconCatalog
         if (displayKey is not null) keys.Add(displayKey);
         var lower = text.ToLowerInvariant();
         if (lower.Contains("file explorer") || lower.Contains("资源管理器")) keys.Add("explorer");
-        if (lower.Contains("recycle") || lower.Contains("回收站")) keys.Add("trash_empty");
+        if (lower.Contains("recycle") || lower.Contains("回收站"))
+        {
+            // 显示名含"回收站/recycle"的条目：同样跟随满/空（满态 full 缺图时由候选链后续键兜底）。
+            if (trashFull) keys.Add(RecycleBinSlot.IconKeyFull);
+            keys.Add(RecycleBinSlot.IconKeyEmpty);
+        }
         if (lower.Contains("启动台") || lower.Contains("launchpad")) keys.Add("pad");
         return keys;
     }

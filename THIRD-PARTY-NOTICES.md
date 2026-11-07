@@ -79,7 +79,17 @@ MIT 许可证原文（各项目的版权与许可声明以其仓库内 LICENSE �
 - **本项目现状**：当前发布中**未嵌入** HarmonyOS Sans 字体文件或 HarmonyOS Symbol 图标文件，界面通过字体名回退链引用系统已安装字体（未安装时回退默认字体），视觉效果不依赖华为字体资源。
 - **未来若嵌入**：须在发布物中附带华为官方资源页的授权声明，并遵守"随软件分发、不单独分发、不修改字体文件"的条款。
 
-## 8. 商标声明
+## 8. SIL Open Font License 1.1 字体资产
+
+| 资产 | 版本 | 版权 | 许可证 | 位置 |
+| --- | --- | --- | --- | --- |
+| [Inter](https://github.com/rsms/inter) | 4.1（2024-11-16 release） | © The Inter Project Authors | [SIL Open Font License 1.1](https://openfontlicense.org) | `src/Beautiful.App/Assets/Fonts/Inter/` |
+
+- **分发内容**：上述目录为 Inter 官方 release 包（`Inter-4.1.zip`）内 `extras/otf/` 的 **7 枚静态 OTF 实例**（Inter-Regular / Inter-Medium / Inter-SemiBold / Inter-Bold / InterDisplay-Medium / InterDisplay-SemiBold / InterDisplay-Bold）与官方 `LICENSE.txt`（随源码复制为 `LICENSE-Inter.txt`）。**未修改任何字形**，未打包可变字体（InterVariable.ttf）。
+- **许可义务**：SIL OFL 1.1 允许捆绑分发与软件内嵌使用，条件是保留版权与许可声明（本节 + 目录内 `LICENSE-Inter.txt` 即该声明）、不以字体文件本身为销售标的、不得用 Reserved Font Name 的字体名命名衍生修改版。本项目按"未修改、原样再分发"使用，不触发衍生版条款。
+- **运行时回退**：字体资产缺失时（如手工清理），应用回退 Segoe UI Variable / Segoe UI，功能完整可用（`Beautiful.App/Themes/FontProbe.cs` 的 `FamilyFor` 探测链）。
+
+## 9. 商标声明
 
 - **Apple 商标**：本项目**未使用** Apple 的商标、名称或徽标。界面中的 "macOS 风格" 仅为设计形态的描述性用语；顶栏 logo 为**自绘原创标记**（主题强调色圆底 + 字母 "B"，见 `TopBarWindow.MakeLogoButton`），不是 Apple 标志。macOS 是本片描述所涉第三方系统的名称，其商标归 Apple Inc. 所有。
 - **HarmonyOS / 鸿蒙**：名称与字体/图标资源版权归华为所有，本项目仅为设计 token 的描述性引用，未嵌入华为资源（见第 7 节）。

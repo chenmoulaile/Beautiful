@@ -135,8 +135,8 @@ public partial class ControlCenterPanel : UserControl, IBackdropAware, IPopupSha
     // ---------- 背板（与 FluentMenu 完全同一套两层材质） ----------
 
     /// <summary>
-    /// 拿到抓屏模糊 → 卡底铺该画刷并在其上压 <c>CardFillBlur</c> 深色遮罩；拿不到（抓屏失败 /
-    /// <c>BEAUTIFUL_NOBLUR=1</c> / 瞄准越界）→ 卡底铺实心 <c>CardFillSolid</c>、遮罩透明。
+    /// 拿到抓屏模糊 → 卡底铺该画刷并在其上压 <c>AurPopupFillBlur</c> 深色遮罩；拿不到（抓屏失败 /
+    /// <c>BEAUTIFUL_NOBLUR=1</c> / 瞄准越界）→ 卡底铺实心 <c>AurPopupFillSolid</c>、遮罩透明。
     /// 两条分支都铺满整张卡：宿主是分层窗口，"没画到"就是能看穿到桌面的洞。
     /// </summary>
     public void OnBackdropReady(ScreenBackdrop? backdrop)
@@ -145,10 +145,10 @@ public partial class ControlCenterPanel : UserControl, IBackdropAware, IPopupSha
         if (blur is not null)
         {
             Card.Background = blur;
-            Scrim.Background = (Brush)Resources["CardFillBlur"];
+            Scrim.Background = (Brush)FindResource("AurPopupFillBlur");
             return;
         }
-        Card.Background = (Brush)Resources["CardFillSolid"];
+        Card.Background = (Brush)FindResource("AurPopupFillSolid");
         Scrim.Background = Brushes.Transparent;
     }
 

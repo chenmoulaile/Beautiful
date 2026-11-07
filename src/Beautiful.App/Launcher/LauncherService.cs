@@ -125,26 +125,38 @@ public sealed class LauncherService : IDisposable
         => _index.Search(query, limit);
 
     /// <summary>
-    /// 结果行图标：macOS 图标集优先（macOS 化 r4，与 Dock 同一套键映射），没有对应图再走
-    /// v3 T6 的提取管线（请求 256px，LRU 缓存），不在这里按 26/32px 重新提一次。
-    /// 提取失败返回 null → 行画空框而不是编一个图标。
+    /// 结果行图标（alpha.29 残项清零后的三级兜底链）：<b>① macOS 图标集</b>（macOS 化 r4，与 Dock
+    /// 同一套键映射）→ <b>② 系统图标提取</b>（v3 T6 管线，请求实际显示尺寸，LRU 缓存）→
+    /// <b>③ GNOME 式首字母色块</b>（accent 底 + 白色首字母 + 圆角 tile，<c>LetterTileRenderer</c>）。
+    /// 任何应用都不允许空白格：MSIX 条目（IconPath 恒 null，见 <c>MsixIndexSource</c> 注释）以前
+    /// 走到 ② 的"无源可提"就返回 null，启动台画空框——Microsoft「Family」格空白的根因；现在终点
+    /// 收在 ③ 的色块上，画不出来（渲染异常）才返回 null 留空。
     /// </summary>
     public BitmapSource? IconOf(LauncherApp app, int size = IconExtractor.PreferredSize)
     {
         // 【size 参数】alpha.22 OOM 整改：调用方按"实际显示尺寸 × DPI"来要（启动台 ≈176、
         // 启动器列表 32），不再一刀切 256——位图内存按像素数平方下降，缓存键含尺寸不会串。
         // AppsFolder 条目（MSIX）的 LaunchPath 是 explorer.exe：拿它当图标源会让每个 UWP 应用都画成
-        // 资源管理器图标——那是"错图标"，比"没图标"更糟。这类条目只认 IconPath（包内 logo 路径，
-        // 读不到就是空框）。其余条目沿用"没有 IconPath 就用启动目标"的降级链。
+        // 资源管理器图标——那是"错图标"，比"没图标"更糟。其余条目沿用"没有 IconPath 就用启动目标"的降级链。
         var isAppsFolder = LauncherTarget.AppsFolderAumidOf(app.LaunchPath, app.Arguments) is not null;
-        // macOS 图标集的键源与 Dock 同一策略：普通条目按启动路径（.lnk 显示名走显示名表），
-        // AppsFolder 条目绝不拿 explorer.exe 当键源（否则全体 UWP 画成访达）。
-        var mac = MacIconCatalog.TryGetFor(isAppsFolder ? app.IconPath : app.LaunchPath);
+        // ① macOS 图标集的键源与 Dock 同一策略：普通条目按启动路径（.lnk 显示名走显示名表），
+        // AppsFolder 条目绝不拿 explorer.exe 当键源（否则全体 UWP 画成访达）——没有 IconPath 时
+        // 退而用**显示名**当键：别名表/显示名表按名命中（如"终端"→terminal.png），图标主题覆盖层
+        // 也按名可查（用户给某应用手选的图在启动台同样生效）；两表都没有时只是多一次不命中的
+        // 字典查找，零风险。
+        var mac = MacIconCatalog.TryGetFor(isAppsFolder
+            ? (string.IsNullOrWhiteSpace(app.IconPath) ? app.Name : app.IconPath)
+            : app.LaunchPath);
         if (mac is not null) return mac;
+        // ② 系统图标提取：AppsFolder 条目只认 IconPath（19041 投影给不出包内 logo，恒 null → 跳过），
+        //    绝不退回 explorer.exe。
         var source = isAppsFolder
             ? app.IconPath
             : string.IsNullOrWhiteSpace(app.IconPath) ? app.LaunchPath : app.IconPath;
-        return string.IsNullOrWhiteSpace(source) ? null : IconExtractor.GetIcon(source, size);
+        if (!string.IsNullOrWhiteSpace(source) && IconExtractor.GetIcon(source, size) is { } extracted)
+            return extracted;
+        // ③ 首字母色块（终点兜底）：accent 色由 ThemeManager 缓存（后台线程可读，见 AccentHex 注释）。
+        return Services.LetterTileRenderer.Render(app.Name, size, Themes.ThemeManager.AccentHex);
     }
 
     // ---------- 开合 ----------

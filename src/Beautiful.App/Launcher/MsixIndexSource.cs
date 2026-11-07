@@ -69,7 +69,8 @@ public static class MsixIndexSource
         try
         {
             // 19041 投影的 AppListEntry 只给 AppUserModelId + DisplayInfo(Description/DisplayName)：
-            // 没有 logo/exe 路径可取，图标因此只能留空（见下面 IconPath 的说明）。
+            // 没有 logo/exe 路径可取，IconPath 因此只能留 null（alpha.29 起 IconOf 对这类条目按
+            // **显示名**查图标集/覆盖表，查不到再画首字母色块兜底——不再出现空白格）。
             foreach (var entry in await package.GetAppListEntriesAsync())
             {
                 try

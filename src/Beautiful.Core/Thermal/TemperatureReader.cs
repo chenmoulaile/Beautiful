@@ -157,7 +157,11 @@ public static class TemperatureReader
 [System.Runtime.Versioning.SupportedOSPlatform("windows")]
 public static class TemperatureProbe
 {
-    /// <summary>LibreHardwareMonitor 发布传感器的 WMI 命名空间（设置里勾选"WMI 提供方"后可用）。</summary>
+    /// <summary>
+    /// LibreHardwareMonitor 发布传感器的 WMI 命名空间。注意版本：<b>v0.9.4 是最后一个发布本命名空间的官方版</b>
+    /// （其 WmiProvider 在 MainForm 里无条件创建，运行即在、无需任何配置；v0.9.5 起官方删除了 WMI 提供方），
+    /// 应用内引导数据源因此钉死 v0.9.4（<see cref="LibreHardwareMonitorTool"/>）。
+    /// </summary>
     public const string LibreHardwareMonitorNamespace = "root\\LibreHardwareMonitor";
 
     /// <summary>OpenHardwareMonitor（LibreHardwareMonitor 的前身）发布传感器的 WMI 命名空间。</summary>
@@ -179,10 +183,50 @@ public static class TemperatureProbe
     }
 
     /// <summary>
-    /// 读 LHM/OHM 传感器表并挑 CPU Package。两个命名空间同一 schema（后者是前者 fork 的源头）：
-    /// Sensor 类带 Name / SensorType / Parent / Value。
+    /// 一次探测同时回报读数与两级 WMI 命名空间可达性（设置卡"数据源状态"要区分
+    /// 「已连接但暂无 CPU 读数」与「没连上」，<see cref="ReadOnce"/> 的单一返回值不够用）。
+    /// 回退顺序与 <see cref="ReadOnce"/> 完全一致；可达性直接取自本次的传感器表查询结果，
+    /// 不额外多发 WMI 查询。
     /// </summary>
+    public sealed record ProbeOutcome(ThermalReading? Reading, bool LhmNamespaceReachable, bool OhmNamespaceReachable);
+
+    /// <summary>带可达性回执的 <see cref="ReadOnce"/>（App 轮询用它，一次探测喂饱读数与状态两处）。</summary>
+    public static ProbeOutcome ReadOnceDetailed()
+    {
+        var lhmSensors = TryReadSensorTable(LibreHardwareMonitorNamespace);
+        var lhmReachable = lhmSensors is not null;
+        if (lhmSensors is not null)
+        {
+            var celsius = TemperatureReader.PickCpuPackageCelsius(lhmSensors);
+            if (celsius is { } value) return new ProbeOutcome(new ThermalReading(value, ThermalSource.LibreHardwareMonitor), lhmReachable, false);
+        }
+
+        var ohmSensors = TryReadSensorTable(OpenHardwareMonitorNamespace);
+        var ohmReachable = ohmSensors is not null;
+        if (ohmSensors is not null)
+        {
+            var celsius = TemperatureReader.PickCpuPackageCelsius(ohmSensors);
+            if (celsius is { } value) return new ProbeOutcome(new ThermalReading(value, ThermalSource.OpenHardwareMonitor), lhmReachable, ohmReachable);
+        }
+
+        return new ProbeOutcome(ReadAcpiThermalZone(), lhmReachable, ohmReachable);
+    }
+
+    /// <summary>读 LHM/OHM 传感器表并挑 CPU Package（<see cref="TryReadSensorTable"/> 的薄壳 + 挑选）。</summary>
     private static ThermalReading? ReadFromSensorTable(string wmiNamespace, ThermalSource source)
+    {
+        var sensors = TryReadSensorTable(wmiNamespace);
+        if (sensors is null) return null;
+        var celsius = TemperatureReader.PickCpuPackageCelsius(sensors);
+        return celsius is null ? null : new ThermalReading(celsius.Value, source);
+    }
+
+    /// <summary>
+    /// 读一个 LHM/OHM 传感器表（两个命名空间同一 schema：Sensor 类带 Name / SensorType / Parent / Value）。
+    /// 返回值三分：<b>null = 命名空间不可达</b>（没装/没运行/没开 WMI 提供方/拒绝访问——"已获取未启动"态的依据）；
+    /// 非 null 列表（可空集）= 命名空间在，条目是拿到的温度传感器。
+    /// </summary>
+    internal static List<ThermalSensor>? TryReadSensorTable(string wmiNamespace)
     {
         try
         {
@@ -207,8 +251,7 @@ public static class TemperatureProbe
                 }
             }
 
-            var celsius = TemperatureReader.PickCpuPackageCelsius(sensors);
-            return celsius is null ? null : new ThermalReading(celsius.Value, source);
+            return sensors;
         }
         catch (Exception)
         {

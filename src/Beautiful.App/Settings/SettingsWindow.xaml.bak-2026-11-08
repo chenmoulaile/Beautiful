@@ -1,0 +1,925 @@
+<Window x:Class="Beautiful.App.Settings.SettingsWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:chrome="clr-namespace:System.Windows.Shell;assembly=PresentationFramework"
+        xmlns:settings="clr-namespace:Beautiful.App.Settings"
+        xmlns:stage="clr-namespace:Beautiful.App.StageManager"
+        Title="Beautiful 设置" Width="860" SizeToContent="Height"
+        MaxHeight="760" MinWidth="760"
+        WindowStartupLocation="CenterScreen" ResizeMode="CanMinimize"
+        WindowStyle="None"
+        AllowsTransparency="True" Background="Transparent"
+        ShowInTaskbar="True" Topmost="False" UseLayoutRounding="True"
+        TextOptions.TextFormattingMode="Display">
+    <!-- 自绘标题栏（macOS 风格）：系统 chrome 已退役——WindowStyle=None + WindowChrome 只保留
+         CaptionHeight 让顶部条带可拖，右上角系统按钮整组消失（UseAeroCaptionButtons=False），
+         改由左侧红/黄/绿三点 + 居中标题承担。
+         【必须分层（AllowsTransparency=True）】真机 Win11 26300 实测：WPF 非分层窗口（硬件与软件
+         模式都是）整机黑屏——窗口在、可激活、PrintWindow 抓出来纯黑，只有分层窗口（Dock/顶栏/
+         切换器同款路径）能出画面。分层会关 ClearType 次像素抗锯齿（逐像素 alpha 与子像素渲染互斥），
+         设置页文字密度最高、灰度抗锯齿会略"糊"，但"显示"优先于"次像素"；DWM 真阴影/圆角随之失去，
+         由下方根 Border 的 CornerRadius 自绘（代码后置的 DWM 圆角调用保留，分层窗口上被忽略）。
+         底色/文字色一律不覆盖：沿用 WPF 的 SystemColors，正文对比度与改造前完全一致。
+         非模态、非置顶（绿点可临时置顶，见 Zoom_Click）：不遮挡 Dock，可从托盘与顶栏"设置…"两处进入。 -->
+    <chrome:WindowChrome.WindowChrome>
+        <chrome:WindowChrome CaptionHeight="42" ResizeBorderThickness="0"
+                             GlassFrameThickness="0" CornerRadius="0"
+                             UseAeroCaptionButtons="False"/>
+    </chrome:WindowChrome.WindowChrome>
+    <Window.Resources>
+        <!-- 分组卡片：轻描边圆角容器 + 半透明底，贴合 macOS 系统设置的分区观感（不自定义配色，随系统主题） -->
+        <Style x:Key="SectionCard" TargetType="Border">
+            <Setter Property="Background" Value="#0FFFFFFF"/>
+            <Setter Property="BorderBrush" Value="#22808080"/>
+            <Setter Property="BorderThickness" Value="1"/>
+            <Setter Property="CornerRadius" Value="10"/>
+            <Setter Property="Padding" Value="16,12"/>
+            <Setter Property="Margin" Value="0,0,0,12"/>
+        </Style>
+        <Style x:Key="SectionTitle" TargetType="TextBlock">
+            <Setter Property="FontSize" Value="13"/>
+            <Setter Property="FontWeight" Value="SemiBold"/>
+            <Setter Property="Margin" Value="0,0,0,10"/>
+        </Style>
+        <Style x:Key="RowLabel" TargetType="TextBlock">
+            <Setter Property="VerticalAlignment" Value="Center"/>
+            <Setter Property="Margin" Value="0,0,12,0"/>
+        </Style>
+        <Style x:Key="HintText" TargetType="TextBlock">
+            <Setter Property="FontSize" Value="11"/>
+            <Setter Property="Opacity" Value="0.72"/>
+            <Setter Property="TextWrapping" Value="Wrap"/>
+            <Setter Property="Margin" Value="0,6,0,0"/>
+        </Style>
+        <Style x:Key="ValueLabel" TargetType="TextBlock">
+            <Setter Property="Width" Value="72"/>
+            <Setter Property="TextAlignment" Value="Right"/>
+            <Setter Property="VerticalAlignment" Value="Center"/>
+            <Setter Property="Margin" Value="14,0,0,0"/>
+        </Style>
+
+        <!-- 交通灯按钮：常态只有色点，悬停才浮出内部符号（macOS 原始交互）。
+             Tag="on" 是给绿点用的状态环——置顶是开/关而非一次性动作，没有可见状态就等于"这个按钮坏了吗"。
+             窗口失焦时三点一起退成灰：这既是 macOS 的观感，也顺带告诉用户"当前焦点不在这里"。 -->
+        <Style x:Key="TrafficDot" TargetType="Button">
+            <Setter Property="Width" Value="14"/>
+            <Setter Property="Height" Value="14"/>
+            <Setter Property="Margin" Value="0,0,8,0"/>
+            <Setter Property="Padding" Value="0"/>
+            <Setter Property="Background" Value="#FF5F57"/>
+            <Setter Property="SnapsToDevicePixels" Value="True"/>
+            <Setter Property="chrome:WindowChrome.IsHitTestVisibleInChrome" Value="True"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Button">
+                        <Grid Width="14" Height="14" Background="Transparent">
+                            <Ellipse x:Name="Dot" Fill="{TemplateBinding Background}"
+                                     Stroke="#26000000" StrokeThickness="0.5"/>
+                            <ContentPresenter x:Name="Glyph" Opacity="0"
+                                              HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                            <Ellipse x:Name="Ring" Width="20" Height="20" Opacity="0"
+                                     Stroke="#8028C840" StrokeThickness="1.5"/>
+                        </Grid>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="Glyph" Property="Opacity" Value="1"/>
+                            </Trigger>
+                            <Trigger Property="Tag" Value="on">
+                                <Setter TargetName="Ring" Property="Opacity" Value="1"/>
+                                <Setter TargetName="Glyph" Property="Opacity" Value="1"/>
+                            </Trigger>
+                            <DataTrigger Binding="{Binding IsActive, RelativeSource={RelativeSource AncestorType=Window}}" Value="False">
+                                <Setter TargetName="Dot" Property="Fill" Value="#FFB0B0B0"/>
+                                <Setter TargetName="Ring" Property="Stroke" Value="#66B0B0B0"/>
+                            </DataTrigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+        <!-- 符号描边：macOS 的符号是压在彩色底上的深色刻痕，不是白字。 -->
+        <Style x:Key="DotGlyph" TargetType="Path">
+            <Setter Property="Stroke" Value="#8A000000"/>
+            <Setter Property="StrokeThickness" Value="1.2"/>
+            <Setter Property="StrokeStartLineCap" Value="Round"/>
+            <Setter Property="StrokeEndLineCap" Value="Round"/>
+            <Setter Property="StrokeLineJoin" Value="Round"/>
+        </Style>
+
+        <!-- 正文控件的 macOS 化（用户指名"第二张图还是 windows 风格"）：WPF 默认按钮是
+             3D 方角灰块，一眼 Win32。macOS 系统设置的按钮是圆角 6、极浅灰填充、发丝描边、
+             悬停略深、按下更深——就用这四态，不发明第二套形状语言。
+             隐式样式只管"没写 Style 的按钮"（恢复默认/关闭/固定应用四钮），交通灯三点
+             有显式 TrafficDot，不受影响。 -->
+        <Style TargetType="Button">
+            <Setter Property="Height" Value="28"/>
+            <Setter Property="Padding" Value="14,0"/>
+            <Setter Property="FontSize" Value="12"/>
+            <Setter Property="Background" Value="#0F000000"/>
+            <Setter Property="BorderBrush" Value="#24000000"/>
+            <Setter Property="BorderThickness" Value="1"/>
+            <Setter Property="SnapsToDevicePixels" Value="True"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Button">
+                        <Border x:Name="Bd" Background="{TemplateBinding Background}"
+                                BorderBrush="{TemplateBinding BorderBrush}"
+                                BorderThickness="1" CornerRadius="6">
+                            <ContentPresenter Margin="{TemplateBinding Padding}"
+                                              HorizontalAlignment="Center" VerticalAlignment="Center"
+                                              RecognizesAccessKey="True"/>
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="Bd" Property="Background" Value="#1A000000"/>
+                            </Trigger>
+                            <Trigger Property="IsPressed" Value="True">
+                                <Setter TargetName="Bd" Property="Background" Value="#26000000"/>
+                            </Trigger>
+                            <Trigger Property="IsEnabled" Value="False">
+                                <Setter Property="Opacity" Value="0.45"/>
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+        <Style TargetType="ListBox">
+            <Setter Property="BorderBrush" Value="#24000000"/>
+            <Setter Property="BorderThickness" Value="1"/>
+            <Setter Property="Background" Value="Transparent"/>
+            <Setter Property="Padding" Value="4"/>
+            <Setter Property="FontSize" Value="12"/>
+        </Style>
+        <Style TargetType="ListBoxItem">
+            <Setter Property="Padding" Value="8,4"/>
+            <Setter Property="SnapsToDevicePixels" Value="True"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="ListBoxItem">
+                        <Border x:Name="Bd" Background="Transparent" CornerRadius="5" Padding="{TemplateBinding Padding}">
+                            <ContentPresenter/>
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="Bd" Property="Background" Value="#0F000000"/>
+                            </Trigger>
+                            <Trigger Property="IsSelected" Value="True">
+                                <Setter TargetName="Bd" Property="Background" Value="#20007AFF"/>
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+    </Window.Resources>
+
+    <!-- 分层窗口的圆角壳：根 Border 自绘 12px 圆角与整窗底色（SystemColors.Window，沿用原底色不覆盖）。
+         标题条半透明底带上圆角，四角就不会有方形色块越出圆壳。 -->
+    <Border CornerRadius="12"
+            Background="{DynamicResource {x:Static SystemColors.WindowBrushKey}}">
+        <Grid>
+            <Grid.RowDefinitions>
+                <RowDefinition Height="42"/>
+                <RowDefinition Height="*"/>
+                <RowDefinition Height="Auto"/>
+            </Grid.RowDefinitions>
+
+            <!-- ============ 自绘标题栏 ============ -->
+            <!-- 条带底色用中性灰叠加（8%），浅底上略深、深底上略亮，两种系统主题下都能读出一层"材质差"；
+                 分界靠 1px 发丝线，不靠色块边界——这是 macOS 工具栏与内容区的实际分法。 -->
+            <Border Grid.Row="0" Background="#14808080" CornerRadius="12,12,0,0"
+                    BorderBrush="#22808080" BorderThickness="0,0,0,1">
+            <Grid>
+                <TextBlock Text="Beautiful 设置" FontSize="13" FontWeight="SemiBold"
+                           HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                <StackPanel Orientation="Horizontal" HorizontalAlignment="Left"
+                            VerticalAlignment="Center" Margin="13,0,0,0">
+                    <Button x:Name="CloseDot" Style="{StaticResource TrafficDot}"
+                            Background="#FFFF5F57" ToolTip="关闭" Click="Close_Click">
+                        <Path Style="{StaticResource DotGlyph}" Data="M3,3 L11,11 M11,3 L3,11"/>
+                    </Button>
+                    <Button x:Name="MinDot" Style="{StaticResource TrafficDot}"
+                            Background="#FFFEBC2E" ToolTip="最小化" Click="Minimize_Click">
+                        <Path Style="{StaticResource DotGlyph}" Data="M3.5,7 L10.5,7"/>
+                    </Button>
+                    <Button x:Name="ZoomDot" Style="{StaticResource TrafficDot}"
+                            Background="#FF28C840" Margin="0" ToolTip="保持置顶" Click="Zoom_Click">
+                        <Path Style="{StaticResource DotGlyph}" Data="M3.5,8.5 L3.5,3.5 L8.5,3.5 M10.5,5.5 L10.5,10.5 L5.5,10.5"/>
+                    </Button>
+                </StackPanel>
+            </Grid>
+        </Border>
+
+        <Grid Grid.Row="1">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="188"/>
+                <ColumnDefinition Width="*"/>
+            </Grid.ColumnDefinitions>
+
+            <!-- macOS 系统设置式侧栏（v4 Phase 1 T7）：分组导航 + 右侧内容滚动。
+                 图标为自绘 Symbol（Assets/Symbols/Symbols.xaml），不依赖 Segoe Fluent Icons。 -->
+            <Border Grid.Column="0" Background="#0A808080" BorderBrush="#22808080" BorderThickness="0,0,1,0">
+                <ListBox x:Name="SectionNav" Margin="8,10,8,10" BorderThickness="0" Background="Transparent"
+                         SelectionChanged="SectionNav_SelectionChanged">
+                    <ListBoxItem Tag="AppearanceSection">
+                        <StackPanel Orientation="Horizontal">
+                            <Path Data="{DynamicResource SymbolAppearance}" Style="{StaticResource MacSymbol}" Margin="0,0,8,0"/>
+                            <TextBlock Text="外观" VerticalAlignment="Center"/>
+                        </StackPanel>
+                    </ListBoxItem>
+                    <ListBoxItem Tag="SystemSection">
+                        <StackPanel Orientation="Horizontal">
+                            <Path Data="{DynamicResource SymbolSystem}" Style="{StaticResource MacSymbol}" Margin="0,0,8,0"/>
+                            <TextBlock Text="系统" VerticalAlignment="Center"/>
+                        </StackPanel>
+                    </ListBoxItem>
+                    <ListBoxItem Tag="DisplaySection">
+                        <StackPanel Orientation="Horizontal">
+                            <Path Data="{DynamicResource SymbolDisplay}" Style="{StaticResource MacSymbol}" Margin="0,0,8,0"/>
+                            <TextBlock Text="显示器" VerticalAlignment="Center"/>
+                        </StackPanel>
+                    </ListBoxItem>
+                    <ListBoxItem Tag="SwitcherSection">
+                        <StackPanel Orientation="Horizontal">
+                            <Path Data="{DynamicResource SymbolSwitcher}" Style="{StaticResource MacSymbol}" Margin="0,0,8,0"/>
+                            <TextBlock Text="窗口切换器" VerticalAlignment="Center"/>
+                        </StackPanel>
+                    </ListBoxItem>
+                    <ListBoxItem Tag="StageManagerSection">
+                        <StackPanel Orientation="Horizontal">
+                            <Path Data="{DynamicResource SymbolStackFan}" Style="{StaticResource MacSymbol}" Margin="0,0,8,0"/>
+                            <TextBlock Text="台前调度" VerticalAlignment="Center"/>
+                        </StackPanel>
+                    </ListBoxItem>
+                    <ListBoxItem Tag="MediaSection">
+                        <StackPanel Orientation="Horizontal">
+                            <Path Data="{DynamicResource SymbolMedia}" Style="{StaticResource MacSymbol}" Margin="0,0,8,0"/>
+                            <TextBlock Text="媒体" VerticalAlignment="Center"/>
+                        </StackPanel>
+                    </ListBoxItem>
+                    <ListBoxItem Tag="LaunchpadSection">
+                        <StackPanel Orientation="Horizontal">
+                            <Path Data="{DynamicResource SymbolApps}" Style="{StaticResource MacSymbol}" Margin="0,0,8,0"/>
+                            <TextBlock Text="启动台与搜索" VerticalAlignment="Center"/>
+                        </StackPanel>
+                    </ListBoxItem>
+                    <ListBoxItem Tag="IconThemeSection">
+                        <StackPanel Orientation="Horizontal">
+                            <Path Data="{DynamicResource SymbolGallery}" Style="{StaticResource MacSymbol}" Margin="0,0,8,0"/>
+                            <TextBlock Text="图标主题" VerticalAlignment="Center"/>
+                        </StackPanel>
+                    </ListBoxItem>
+                    <ListBoxItem Tag="AnimationSection">
+                        <StackPanel Orientation="Horizontal">
+                            <Path Data="{DynamicResource SymbolPlay}" Style="{StaticResource MacSymbol}" Margin="0,0,8,0"/>
+                            <TextBlock Text="动画" VerticalAlignment="Center"/>
+                        </StackPanel>
+                    </ListBoxItem>
+                    <ListBoxItem Tag="HotCornerSection">
+                        <StackPanel Orientation="Horizontal">
+                            <Path Data="{DynamicResource SymbolArrows}" Style="{StaticResource MacSymbol}" Margin="0,0,8,0"/>
+                            <TextBlock Text="触发角" VerticalAlignment="Center"/>
+                        </StackPanel>
+                    </ListBoxItem>
+                    <ListBoxItem Tag="NativeSection">
+                        <StackPanel Orientation="Horizontal">
+                            <Path Data="{DynamicResource SymbolSystem}" Style="{StaticResource MacSymbol}" Margin="0,0,8,0"/>
+                            <TextBlock Text="底层增强" VerticalAlignment="Center"/>
+                        </StackPanel>
+                    </ListBoxItem>
+                    <ListBoxItem Tag="PinnedSection">
+                        <StackPanel Orientation="Horizontal">
+                            <Path Data="{DynamicResource SymbolPinned}" Style="{StaticResource MacSymbol}" Margin="0,0,8,0"/>
+                            <TextBlock Text="固定应用" VerticalAlignment="Center"/>
+                        </StackPanel>
+                    </ListBoxItem>
+                    <ListBoxItem Tag="AboutSection">
+                        <StackPanel Orientation="Horizontal">
+                            <Path Data="{DynamicResource SymbolInfo}" Style="{StaticResource MacSymbol}" Margin="0,0,8,0"/>
+                            <TextBlock Text="关于" VerticalAlignment="Center"/>
+                        </StackPanel>
+                    </ListBoxItem>
+                </ListBox>
+            </Border>
+
+            <ScrollViewer x:Name="ContentScroll" Grid.Column="1" VerticalScrollBarVisibility="Auto" Padding="20,14,24,0">
+            <StackPanel>
+
+                <!-- ============ 外观 ============ -->
+                <Border x:Name="AppearanceSection" Style="{StaticResource SectionCard}">
+                    <StackPanel>
+                        <TextBlock Text="外观" Style="{StaticResource SectionTitle}"/>
+
+                        <TextBlock Text="外观" FontWeight="Medium"/>
+                        <!-- v4（Phase 1 T4）：外观模式 = 深色/浅色/跟随系统；旧 Theme 值由 Normalized 收敛为 macos。 -->
+                        <StackPanel Orientation="Horizontal" Margin="0,8,0,0">
+                            <RadioButton x:Name="AppearanceDark" GroupName="Appearance" Content="深色"
+                                         Margin="0,0,24,0" Checked="Appearance_Checked"/>
+                            <RadioButton x:Name="AppearanceLight" GroupName="Appearance" Content="浅色"
+                                         Margin="0,0,24,0" Checked="Appearance_Checked"/>
+                            <RadioButton x:Name="AppearanceAuto" GroupName="Appearance" Content="跟随系统"
+                                         Checked="Appearance_Checked"/>
+                        </StackPanel>
+
+                        <StackPanel Orientation="Horizontal" Margin="0,12,0,0">
+                            <TextBlock Text="强调色" Style="{StaticResource RowLabel}" Width="72"/>
+                            <ComboBox x:Name="AccentColorBox" Width="300" VerticalAlignment="Center"
+                                      SelectedValuePath="Id" SelectionChanged="AccentColor_Changed">
+                                <ComboBox.ItemTemplate>
+                                    <DataTemplate>
+                                        <StackPanel Orientation="Horizontal">
+                                            <Ellipse Width="12" Height="12" Fill="{Binding Swatch}"
+                                                     VerticalAlignment="Center" Margin="0,0,6,0"/>
+                                            <TextBlock Text="{Binding Name}" VerticalAlignment="Center"/>
+                                        </StackPanel>
+                                    </DataTemplate>
+                                </ComboBox.ItemTemplate>
+                            </ComboBox>
+                        </StackPanel>
+
+                        <StackPanel Orientation="Horizontal" Margin="0,16,0,0">
+                            <TextBlock Text="图标大小" Style="{StaticResource RowLabel}" Width="72"/>
+                            <Slider x:Name="IconSizeSlider" Width="300" Minimum="32" Maximum="96"
+                                    SmallChange="1" LargeChange="4" IsSnapToTickEnabled="True" TickFrequency="1"
+                                    VerticalAlignment="Center" ValueChanged="IconSizeSlider_ValueChanged"/>
+                            <TextBlock x:Name="IconSizeLabel" Style="{StaticResource ValueLabel}"/>
+                        </StackPanel>
+
+                        <StackPanel Orientation="Horizontal" Margin="0,12,0,0">
+                            <TextBlock Text="距底边距" Style="{StaticResource RowLabel}" Width="72"/>
+                            <Slider x:Name="DockEdgeMarginSlider" Width="300" Minimum="0" Maximum="24"
+                                    SmallChange="1" LargeChange="4" IsSnapToTickEnabled="True" TickFrequency="1"
+                                    VerticalAlignment="Center" ValueChanged="DockEdgeMargin_ValueChanged"/>
+                            <TextBlock x:Name="DockEdgeMarginLabel" Style="{StaticResource ValueLabel}"/>
+                        </StackPanel>
+
+                        <StackPanel Orientation="Horizontal" Margin="0,12,0,0">
+                            <TextBlock Text="图标质感" Style="{StaticResource RowLabel}" Width="72"/>
+                            <!-- v3 T6：图标的“处理方式”。三者都建立在同一件事之上——先按 256px 取源、
+                                 再按当前 DPI 一次性烘到位图尺寸，所以逐帧路径永远是 1:1 搬运。
+                                 auto = 主题的遮罩/投影数据（macOS 圆角方块+投影、鸿蒙 squircle+投影、GNOME 平铺）；
+                                 mask = 强制启用遮罩+高光+投影；plain = 只缩放，形状交回 XAML 的 ThemeIconClip。 -->
+                            <ComboBox x:Name="IconTreatmentBox" Width="300" VerticalAlignment="Center"
+                                      SelectionChanged="IconTreatment_Changed">
+                                <ComboBoxItem Content="跟随主题（推荐）" Tag="auto"/>
+                                <ComboBoxItem Content="强制遮罩 + 投影" Tag="mask"/>
+                                <ComboBoxItem Content="原样（仅高清缩放）" Tag="plain"/>
+                            </ComboBox>
+                        </StackPanel>
+
+                        <StackPanel Orientation="Horizontal" Margin="0,12,0,0">
+                            <TextBlock Text="放大强度" Style="{StaticResource RowLabel}" Width="72"/>
+                            <Slider x:Name="MagnifySlider" Width="300" Minimum="1.0" Maximum="2.5"
+                                    SmallChange="0.1" LargeChange="0.3" IsSnapToTickEnabled="True" TickFrequency="0.1"
+                                    VerticalAlignment="Center" ValueChanged="MagnifySlider_ValueChanged"/>
+                            <TextBlock x:Name="MagnifyLabel" Style="{StaticResource ValueLabel}"/>
+                        </StackPanel>
+                        <TextBlock Style="{StaticResource HintText}" Margin="84,4,0,0"
+                                   Text="悬停放大仅在 macOS 主题下提供；切换到鸿蒙 / Linux 主题时该滑杆与倒影开关不可用。"/>
+
+                        <CheckBox x:Name="ReflectionCheck" Content="图标倒影" Margin="0,14,0,0"
+                                  Checked="Reflection_Changed" Unchecked="Reflection_Changed"/>
+                        <CheckBox x:Name="BounceCheck" Content="启动固定应用时播放弹跳动画"
+                                  Margin="0,8,0,0" Checked="Bounce_Changed" Unchecked="Bounce_Changed"/>
+                    </StackPanel>
+                </Border>
+
+                <!-- ============ 触发角（P5-T2） ============ -->
+                <Border x:Name="HotCornerSection" Style="{StaticResource SectionCard}">
+                    <StackPanel>
+                        <TextBlock Text="触发角" Style="{StaticResource SectionTitle}"/>
+                        <TextBlock Text="光标在屏幕角落驻留 300ms 触发；全屏应用时抑制。默认全部禁用。" Style="{StaticResource HintText}"/>
+                        <Grid Margin="0,10,0,0">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*"/>
+                                <ColumnDefinition Width="*"/>
+                            </Grid.ColumnDefinitions>
+                            <Grid.RowDefinitions>
+                                <RowDefinition Height="Auto"/>
+                                <RowDefinition Height="Auto"/>
+                            </Grid.RowDefinitions>
+                            <StackPanel Grid.Row="0" Grid.Column="0" Margin="0,0,8,8">
+                                <TextBlock Text="左上" FontSize="11" Opacity="0.72"/>
+                                <ComboBox x:Name="HotCornerTopLeftBox" Width="180" HorizontalAlignment="Left"
+                                          SelectionChanged="HotCorner_Changed">
+                                    <ComboBoxItem Content="禁用" Tag="disabled"/>
+                                    <ComboBoxItem Content="显示桌面" Tag="showdesktop"/>
+                                    <ComboBoxItem Content="锁定屏幕" Tag="lock"/>
+                                    <ComboBoxItem Content="睡眠" Tag="sleep"/>
+                                </ComboBox>
+                            </StackPanel>
+                            <StackPanel Grid.Row="0" Grid.Column="1" Margin="0,0,0,8">
+                                <TextBlock Text="右上" FontSize="11" Opacity="0.72"/>
+                                <ComboBox x:Name="HotCornerTopRightBox" Width="180" HorizontalAlignment="Left"
+                                          SelectionChanged="HotCorner_Changed">
+                                    <ComboBoxItem Content="禁用" Tag="disabled"/>
+                                    <ComboBoxItem Content="显示桌面" Tag="showdesktop"/>
+                                    <ComboBoxItem Content="锁定屏幕" Tag="lock"/>
+                                    <ComboBoxItem Content="睡眠" Tag="sleep"/>
+                                </ComboBox>
+                            </StackPanel>
+                            <StackPanel Grid.Row="1" Grid.Column="0" Margin="0,0,8,0">
+                                <TextBlock Text="左下" FontSize="11" Opacity="0.72"/>
+                                <ComboBox x:Name="HotCornerBottomLeftBox" Width="180" HorizontalAlignment="Left"
+                                          SelectionChanged="HotCorner_Changed">
+                                    <ComboBoxItem Content="禁用" Tag="disabled"/>
+                                    <ComboBoxItem Content="显示桌面" Tag="showdesktop"/>
+                                    <ComboBoxItem Content="锁定屏幕" Tag="lock"/>
+                                    <ComboBoxItem Content="睡眠" Tag="sleep"/>
+                                </ComboBox>
+                            </StackPanel>
+                            <StackPanel Grid.Row="1" Grid.Column="1">
+                                <TextBlock Text="右下" FontSize="11" Opacity="0.72"/>
+                                <ComboBox x:Name="HotCornerBottomRightBox" Width="180" HorizontalAlignment="Left"
+                                          SelectionChanged="HotCorner_Changed">
+                                    <ComboBoxItem Content="禁用" Tag="disabled"/>
+                                    <ComboBoxItem Content="显示桌面" Tag="showdesktop"/>
+                                    <ComboBoxItem Content="锁定屏幕" Tag="lock"/>
+                                    <ComboBoxItem Content="睡眠" Tag="sleep"/>
+                                </ComboBox>
+                            </StackPanel>
+                        </Grid>
+                        <TextBlock Style="{StaticResource HintText}"
+                                   Text="Launchpad / 屏保动作依赖 Phase 5 的 Launchpad 与屏保接线，本版不提供假选项；触发角只读光标位置，不装鼠标钩子。"/>
+                    </StackPanel>
+                </Border>
+
+                <!-- ============ 底层增强（Phase 2 native） ============ -->
+                <Border x:Name="NativeSection" Style="{StaticResource SectionCard}">
+                    <StackPanel>
+                        <TextBlock Text="底层增强" Style="{StaticResource SectionTitle}"/>
+                        <CheckBox x:Name="NativeModulesCheck" Content="启用底层增强模块（总开关）"
+                                  Checked="Native_Changed" Unchecked="Native_Changed"/>
+                        <CheckBox x:Name="NativeBlurCheck" Content="材质引擎（DirectComposition HostBackdrop 实时模糊）"
+                                  Margin="0,8,0,0" Checked="Native_Changed" Unchecked="Native_Changed"/>
+                        <CheckBox x:Name="NativeCaptureCheck" Content="捕获服务（WGC/DXGI 优先，GDI 兜底）"
+                                  Margin="0,8,0,0" Checked="Native_Changed" Unchecked="Native_Changed"/>
+                        <CheckBox x:Name="NativeSceneCheck" Content="场景渲染器（genie/打开动画的 D3D11 地基）"
+                                  Margin="0,8,0,0" Checked="Native_Changed" Unchecked="Native_Changed"/>
+                        <CheckBox x:Name="NativeTrayBridgeCheck" Content="TrayBridge 注入（仅 explorer，只读；Phase 2 仅演练）"
+                                  Margin="0,8,0,0" Checked="Native_Changed" Unchecked="Native_Changed"/>
+
+                        <StackPanel Orientation="Horizontal" Margin="0,12,0,0">
+                            <TextBlock Text="材质质量" Style="{StaticResource RowLabel}" Width="72"/>
+                            <ComboBox x:Name="MaterialQualityBox" Width="220" VerticalAlignment="Center"
+                                      SelectionChanged="MaterialQuality_Changed">
+                                <ComboBoxItem Content="auto（按探针结果降级）" Tag="auto"/>
+                                <ComboBoxItem Content="live（强制 native 背板）" Tag="live"/>
+                                <ComboBoxItem Content="static（强制静态 tint）" Tag="static"/>
+                            </ComboBox>
+                        </StackPanel>
+
+                        <TextBlock x:Name="NativeHealthText" Style="{StaticResource HintText}" TextWrapping="Wrap"/>
+                        <StackPanel Orientation="Horizontal" Margin="0,10,0,0">
+                            <Button x:Name="InjectDrillButton" Content="注入演练…" Width="96" Height="28" Click="InjectDrill_Click"/>
+                        </StackPanel>
+                        <TextBlock Style="{StaticResource HintText}"
+                                   Text="注入演练只允许所有者真机执行：把 Beautiful.TrayBridge.dll 注入 explorer.exe，等心跳后立即卸载并确认 explorer 存活。失败只记日志，不重试、不连坐主程序。Phase 2 尚未做托盘像素读取。"/>
+                    </StackPanel>
+                </Border>
+
+                <!-- ============ 系统 ============ -->
+                <Border x:Name="SystemSection" Style="{StaticResource SectionCard}">
+                    <StackPanel>
+                        <TextBlock Text="系统" Style="{StaticResource SectionTitle}"/>
+
+                        <TextBlock Text="原生任务栏" FontWeight="Medium"/>
+                        <StackPanel Orientation="Horizontal" Margin="0,8,0,0">
+                            <RadioButton x:Name="TaskbarHide" GroupName="Taskbar" Content="隐藏"
+                                         Margin="0,0,24,0" Checked="Taskbar_Checked"/>
+                            <RadioButton x:Name="TaskbarAutoHide" GroupName="Taskbar" Content="自动隐藏"
+                                         Margin="0,0,24,0" Checked="Taskbar_Checked"/>
+                            <RadioButton x:Name="TaskbarKeep" GroupName="Taskbar" Content="保留"
+                                         Checked="Taskbar_Checked"/>
+                        </StackPanel>
+                        <TextBlock x:Name="TaskbarHint" Style="{StaticResource HintText}"/>
+
+                        <CheckBox x:Name="TopBarCheck" Content="显示 macOS 风格顶部菜单栏"
+                                  Margin="0,16,0,0" Checked="TopBar_Changed" Unchecked="TopBar_Changed"/>
+
+                        <!-- 通知中心（Phase 4-T5）：默认开，点击时钟即 Big Sur 通知中心；关掉退回月历浮层。 -->
+                        <CheckBox x:Name="NotificationCenterCheck"
+                                  Content="点击时钟打开通知中心（关闭则显示月历浮层）"
+                                  Margin="0,8,0,0"
+                                  Checked="NotificationCenter_Changed" Unchecked="NotificationCenter_Changed"/>
+                        <CheckBox x:Name="NotificationBannerCheck" Content="新通知在右上角弹出横幅"
+                                  Margin="0,8,0,0"
+                                  Checked="NotificationBanner_Changed" Unchecked="NotificationBanner_Changed"/>
+
+                        <!-- 顶栏时钟形态（v3.1）：四个勾选各对应 AppSettings 的一个 bool，
+                             "组合出什么字符串、以什么节奏刷新"全部由 Core.TopBar.ClockFormat 推导（有单测），
+                             UI 里没有任何格式化分支。即时生效，无需重启：勾"显示秒数"会把时钟定时器改成
+                             对齐秒边界的每秒，取消则回到对齐分边界的每分钟（不做 100ms 轮询）。 -->
+                        <TextBlock Text="顶栏时钟" FontWeight="Medium" Margin="0,14,0,0"/>
+                        <WrapPanel Margin="0,6,0,0">
+                            <CheckBox x:Name="ClockSecondsCheck" Content="显示秒数" Margin="0,0,18,0"
+                                      Checked="Clock_Changed" Unchecked="Clock_Changed"/>
+                            <CheckBox x:Name="ClockDateCheck" Content="显示日期" Margin="0,0,18,0"
+                                      Checked="Clock_Changed" Unchecked="Clock_Changed"/>
+                            <CheckBox x:Name="ClockWeekdayCheck" Content="显示星期" Margin="0,0,18,0"
+                                      Checked="Clock_Changed" Unchecked="Clock_Changed"/>
+                            <CheckBox x:Name="Clock24Check" Content="24 小时制"
+                                      Checked="Clock_Changed" Unchecked="Clock_Changed"/>
+                        </WrapPanel>
+                        <!-- 实时样张：直接把 Core.TopBar.ClockFormat 折算出的模板渲染成当前时刻的样子，
+                             勾选即见结果，用户不必去顶栏找变化（与顶栏用的是同一个格式化函数，绝不会出现
+                             “设置里一个样、顶栏另一个样”）。 -->
+                        <StackPanel Orientation="Horizontal" Margin="0,8,0,0">
+                            <TextBlock Text="预览" Width="56" VerticalAlignment="Center" Opacity="0.85"/>
+                            <TextBlock x:Name="ClockSample" FontWeight="Medium" VerticalAlignment="Center"/>
+                        </StackPanel>
+                        <TextBlock Style="{StaticResource HintText}"
+                                   Text="时钟宽度变化只会向左扩张：右侧的音量/网络/电量等状态项钉在条带右缘不动。顶栏关闭时这几项不影响显示，打开顶栏即按当前勾选呈现。"/>
+
+                        <!-- 温度芯片（对标 MyDockFinder 温度显示）：自足设置卡——读写闭环在控件内
+                             （勾选/改间隔 → App.SetThermalChip 落盘并即时重建/停掉轮询），
+                             宿主零事件代码；恢复默认的运行态对账经 ApplyTopBarEnabled → ApplyThermalChip 连带。 -->
+                        <settings:ThermalSettingsCard/>
+
+                        <CheckBox x:Name="AutostartCheck" Content="开机自启"
+                                  Margin="0,8,0,0" Checked="Autostart_Changed" Unchecked="Autostart_Changed"/>
+
+                        <TextBlock Style="{StaticResource HintText}" Margin="0,12,0,0"
+                                   Text="提示：“隐藏”策略下原生托盘会随任务栏一并不可见。正常退出请先把策略切回“保留”，再经托盘“退出”；或直接结束 Beautiful 进程（详见 README 已知限制）。"/>
+                    </StackPanel>
+                </Border>
+
+                <!-- ============ 显示器（多屏 / 混合 DPI） ============ -->
+                <Border x:Name="DisplaySection" Style="{StaticResource SectionCard}">
+                    <StackPanel>
+                        <TextBlock Text="显示器" Style="{StaticResource SectionTitle}"/>
+
+                        <StackPanel Orientation="Horizontal">
+                            <TextBlock Text="Dock 所在显示器" Style="{StaticResource RowLabel}" Width="104"/>
+                            <ComboBox x:Name="DockMonitorBox" Width="300" VerticalAlignment="Center"
+                                      SelectionChanged="DockMonitor_Changed"/>
+                        </StackPanel>
+                        <StackPanel Orientation="Horizontal" Margin="0,8,0,0">
+                            <TextBlock Text="顶栏所在显示器" Style="{StaticResource RowLabel}" Width="104"/>
+                            <ComboBox x:Name="TopBarMonitorBox" Width="300" VerticalAlignment="Center"
+                                      SelectionChanged="TopBarMonitor_Changed"/>
+                        </StackPanel>
+
+                        <!-- 每显示器 Dock 覆盖配置（对标 MyDockFinder 多屏独立设置）：
+                             键 = 主屏/序号；三项覆盖为空都跟随全局，列表为空（单屏）行为与现状一致。 -->
+                        <StackPanel Orientation="Horizontal" Margin="0,14,0,0">
+                            <TextBlock Text="每屏覆盖配置" Style="{StaticResource RowLabel}" Width="104"/>
+                            <ComboBox x:Name="PerMonitorBox" Width="300" VerticalAlignment="Center"
+                                      SelectionChanged="PerMonitor_Changed"/>
+                        </StackPanel>
+                        <StackPanel Orientation="Horizontal" Margin="0,8,0,0">
+                            <TextBlock Text="此屏停靠边" Style="{StaticResource RowLabel}" Width="104"/>
+                            <ComboBox x:Name="PerMonitorEdgeBox" Width="120" VerticalAlignment="Center"
+                                      SelectionChanged="PerMonitorEdge_Changed">
+                                <ComboBoxItem Content="跟随全局" Tag=""/>
+                                <ComboBoxItem Content="底部" Tag="bottom"/>
+                                <ComboBoxItem Content="左侧" Tag="left"/>
+                                <ComboBoxItem Content="右侧" Tag="right"/>
+                            </ComboBox>
+                            <TextBlock Text="此屏自动隐藏" Margin="14,0,0,0" VerticalAlignment="Center"/>
+                            <ComboBox x:Name="PerMonitorAutoHideBox" Width="110" Margin="10,0,0,0"
+                                      VerticalAlignment="Center" SelectionChanged="PerMonitorAutoHide_Changed">
+                                <ComboBoxItem Content="跟随全局" Tag=""/>
+                                <ComboBoxItem Content="开" Tag="on"/>
+                                <ComboBoxItem Content="关" Tag="off"/>
+                            </ComboBox>
+                        </StackPanel>
+                        <StackPanel Orientation="Horizontal" Margin="0,8,0,0">
+                            <TextBlock Text="此屏图标尺寸" Style="{StaticResource RowLabel}" Width="104"/>
+                            <CheckBox x:Name="PerMonitorIconFollowCheck" Content="跟随全局" VerticalAlignment="Center"
+                                      Checked="PerMonitorIconFollow_Changed" Unchecked="PerMonitorIconFollow_Changed"/>
+                            <Slider x:Name="PerMonitorIconSizeSlider" Width="180" Minimum="32" Maximum="96"
+                                    SmallChange="1" LargeChange="8" IsSnapToTickEnabled="True" TickFrequency="1"
+                                    Margin="10,0,0,0" VerticalAlignment="Center"
+                                    ValueChanged="PerMonitorIconSize_ValueChanged"/>
+                            <TextBlock x:Name="PerMonitorIconSizeLabel" Margin="10,0,0,0"
+                                       VerticalAlignment="Center" Opacity="0.85"/>
+                        </StackPanel>
+                        <TextBlock Style="{StaticResource HintText}"
+                                   Text="覆盖配置按屏生效：Dock 落到该屏时用这一套（无覆盖的字段跟随全局，全部跟随的屏不会留下配置条目）。“显示器 N”与上面下拉的序号是同一个 N；Dock 落在哪块屏仍由“Dock 所在显示器”决定——Dock 是单实例条带，同一时刻只在一块屏上。"/>
+
+                        <TextBlock Style="{StaticResource HintText}"
+                                   Text="条带的贴边、宽度与缩放一律按所选显示器的真实分辨率和 DPI 计算：顶栏贴该屏上沿、Dock 贴该屏下沿（Dock 的停靠区只预留面板高，放大余量越界生长到桌面上、不占工作区）。“自动”取启动时光标所在的那块屏，选定后按住的屏就粘住，之后改图标大小/换主题不会因鼠标划过别的显示器而跳走。"/>
+
+                        <CheckBox x:Name="ScreenCornersCheck" Content="屏幕四角圆角（黑色遮罩，对标 macOS 圆角屏幕）"
+                                  Margin="0,14,0,0" Checked="ScreenCorners_Changed" Unchecked="ScreenCorners_Changed"/>
+                        <StackPanel Orientation="Horizontal" Margin="0,8,0,0">
+                            <TextBlock Text="圆角半径" Style="{StaticResource RowLabel}" Width="104"/>
+                            <Slider x:Name="ScreenCornerRadiusSlider" Width="220" Minimum="4" Maximum="48"
+                                    SmallChange="1" LargeChange="4" IsSnapToTickEnabled="True" TickFrequency="1"
+                                    VerticalAlignment="Center" ValueChanged="ScreenCornerRadius_ValueChanged"/>
+                            <TextBlock x:Name="ScreenCornerRadiusLabel" Style="{StaticResource ValueLabel}"/>
+                        </StackPanel>
+
+                        <!-- 遮罩颜色（alpha.29 残项清零，r4 settingsContract 建议的预置色样下拉落地）：
+                             预设表与 settingsContract 同源（Core ScreenCornerPlan.PresetMaskColors），
+                             右侧 hex 框兜自定义（与启动器热键行同一"输入 + 应用"姿态）。 -->
+                        <StackPanel Orientation="Horizontal" Margin="0,8,0,0">
+                            <TextBlock Text="遮罩颜色" Style="{StaticResource RowLabel}" Width="104"/>
+                            <ComboBox x:Name="ScreenCornerMaskColorBox" Width="170" VerticalAlignment="Center"
+                                      SelectionChanged="ScreenCornerMaskColor_Changed"/>
+                            <TextBox x:Name="ScreenCornerMaskColorHexBox" Width="110" Height="26" VerticalContentAlignment="Center"
+                                     VerticalAlignment="Center" Margin="10,0,0,0"/>
+                            <Button Content="应用" Width="64" Margin="8,0,0,0" Click="ScreenCornerMaskColor_Apply"/>
+                        </StackPanel>
+
+                        <!-- 每屏排除（alpha.29 残项清零）：键 ScreenCornersMonitors（空=全部屏）。
+                             下拉单选即整表替换（现实诉求是"副屏不画"）；多屏列表可手改 settings.json。 -->
+                        <StackPanel Orientation="Horizontal" Margin="0,8,0,0">
+                            <TextBlock Text="排除屏幕" Style="{StaticResource RowLabel}" Width="104"/>
+                            <ComboBox x:Name="ScreenCornersExcludeBox" Width="300" VerticalAlignment="Center"
+                                      SelectionChanged="ScreenCornersExclude_Changed"/>
+                        </StackPanel>
+
+                        <TextBlock Style="{StaticResource HintText}"
+                                   Text="每块显示器的四个角各盖一块置顶且点击穿透的小遮罩，整块屏看上去就是 macOS 的圆角；前台有真全屏应用时该屏四角自动让位，半径按所在屏的缩放换算。默认关。"/>
+                        <TextBlock Style="{StaticResource HintText}"
+                                   Text="遮罩色走熄屏边色系的深色、不随主题翻色（浅色主题下圆角翻白会穿帮）；预设之外可填 #RRGGBB / #AARRGGBB 后点应用，非法值回落纯黑。"/>
+                        <TextBlock Style="{StaticResource HintText}"
+                                   Text="排除屏幕：被点名的显示器不画圆角遮罩（副屏/投影常见诉求）。下拉选择即整体替换排除名单；需要同时排除多块屏时手改 settings.json 的 ScreenCornersMonitors（键 = primary 或显示器序号，非法键自动丢弃）。"/>
+                    </StackPanel>
+                </Border>
+
+                <!-- ============ 窗口切换器 ============ -->
+                <Border x:Name="SwitcherSection" Style="{StaticResource SectionCard}">
+                    <StackPanel>
+                        <TextBlock Text="窗口切换器" Style="{StaticResource SectionTitle}"/>
+
+                        <CheckBox x:Name="SwitcherCheck" Content="接管 Alt + Tab（自绘切换面板）"
+                                  Checked="Switcher_Changed" Unchecked="Switcher_Changed"/>
+
+                        <TextBlock Text="样式" FontWeight="Medium" Margin="0,14,0,0"/>
+                        <StackPanel Orientation="Horizontal" Margin="0,8,0,0">
+                            <!-- v4：只保留 macOS 卡片（旧配置的 linux/harmonyos 由 Normalized 自愈）。 -->
+                            <RadioButton x:Name="StyleMacOs" GroupName="SwitcherStyle" Content="macOS（唯一）"
+                                         Checked="SwitcherStyle_Checked"/>
+                        </StackPanel>
+                        <TextBlock Style="{StaticResource HintText}"
+                                   Text="触发组合键当前固定为 Alt + Tab。"/>
+
+                        <!-- 呼出热键（alpha.29 残项清零）：消息窗 RegisterHotKey 的"无状态打开面板"边沿，
+                             与 Alt+Tab 接管互不相干（不吞键、不参与会话）——脚本/远程输入被低级钩子放行后
+                             仍可靠它唤出自绘面板。接线照启动器热键行（TextBox + 应用）。 -->
+                        <StackPanel Orientation="Horizontal" Margin="0,14,0,0">
+                            <TextBlock Text="呼出热键" Style="{StaticResource RowLabel}" Width="72"/>
+                            <TextBox x:Name="SwitcherOpenHotkeyBox" Width="180" Height="26" VerticalContentAlignment="Center"
+                                     VerticalAlignment="Center"/>
+                            <Button Content="应用" Width="64" Margin="8,0,0,0" Click="SwitcherOpenHotkey_Apply"/>
+                        </StackPanel>
+                        <TextBlock Style="{StaticResource HintText}"
+                                   Text="直接呼出自绘切换面板（默认 Ctrl + `，即 ctrl+grave；再按一次收起）。它不吞键、不参与 Alt+Tab 会话，脚本/远程输入也能唤出；必须包含至少一个修饰键 + 可识别主键，非法值会自愈为 ctrl+grave 并留日志。"/>
+
+                        <CheckBox x:Name="FullscreenPassthroughCheck" Content="前台为全屏应用时放行原生 Alt + Tab（游戏兜底）"
+                                  Margin="0,14,0,0" Checked="Passthrough_Changed" Unchecked="Passthrough_Changed"/>
+
+                        <TextBlock Style="{StaticResource HintText}"
+                                   Text="应急停用：按下 Win + Alt + K 立即放弃接管、回到系统原生 Alt + Tab（仅影响运行态，不会改动上面的开关）。"/>
+                    </StackPanel>
+                </Border>
+
+                <!-- ============ 台前调度（Stage Manager）：自足开关卡——勾选即写 StageManagerEnabled
+                     并经 App.ApplyStageManager() 立即生效，宿主零事件代码；唯一接线是"恢复默认"
+                     末尾调 StageManagerCard.ReloadFromSettings() 刷新勾选态（见 code-behind ReapplyAll）。 ============ -->
+                <Border x:Name="StageManagerSection" Style="{StaticResource SectionCard}">
+                    <StackPanel>
+                        <TextBlock Text="台前调度" Style="{StaticResource SectionTitle}"/>
+                        <stage:StageManagerSettingsCard x:Name="StageManagerCard"/>
+                    </StackPanel>
+                </Border>
+
+                <!-- ============ 启动台与搜索（v4 T7 接线：此前只有配置、没有设置界面） ============ -->
+                <Border x:Name="LaunchpadSection" Style="{StaticResource SectionCard}">
+                    <StackPanel>
+                        <TextBlock Text="启动台与搜索" Style="{StaticResource SectionTitle}"/>
+
+                        <CheckBox x:Name="LauncherEnabledCheck" Content="启用启动器（Spotlight 式搜索，Ctrl+Alt+Space）"
+                                  Checked="Launcher_Changed" Unchecked="Launcher_Changed"/>
+                        <StackPanel Orientation="Horizontal" Margin="0,12,0,0">
+                            <TextBlock Text="热键" Style="{StaticResource RowLabel}" Width="72"/>
+                            <TextBox x:Name="LauncherHotkeyBox" Width="180" Height="26" VerticalContentAlignment="Center"
+                                     VerticalAlignment="Center"/>
+                            <Button Content="应用" Width="64" Margin="8,0,0,0" Click="LauncherHotkey_Apply"/>
+                        </StackPanel>
+                        <TextBlock Style="{StaticResource HintText}"
+                                   Text="热键必须包含至少一个修饰键 + 非空格主键；Ctrl+Space / Win+Space / Alt+Space 会被拒绝（它们是系统输入法/布局/窗口菜单的既有绑定）。非法值会自愈为 ctrl+alt+space 并留日志。"/>
+                        <TextBlock Style="{StaticResource HintText}"
+                                   Text="Launchpad 网格、搜索、触发角属于 Phase 5；本页只接线已有的启动器热键与开关，不提前放空控件。"/>
+                        <TextBlock Style="{StaticResource HintText}"
+                                   Text="F4 打开全屏启动台（7×5 网格/搜索/翻页），复用启动器索引；启动器关闭时 F4 不注册。"/>
+                    </StackPanel>
+                </Border>
+
+                <!-- ============ 图标主题编辑器：覆盖表独立存 config/icon-theme.json（不占 settings.json），
+                     由 IconThemeService 自管（懒加载/损坏自愈/尽力落盘）；控件订阅 IconThemeService.Changed
+                     自刷新，宿主唯一接线是构造期 Attach(_dockVm) 注入 Dock 数据源（见 code-behind）。 ============ -->
+                <Border x:Name="IconThemeSection" Style="{StaticResource SectionCard}">
+                    <StackPanel>
+                        <TextBlock Text="图标主题" Style="{StaticResource SectionTitle}"/>
+                        <settings:IconThemeEditorControl x:Name="IconThemeEditor"/>
+                    </StackPanel>
+                </Border>
+
+                <!-- ============ 动画 ============ -->
+                <Border x:Name="AnimationSection" Style="{StaticResource SectionCard}">
+                    <StackPanel>
+                        <TextBlock Text="动画" Style="{StaticResource SectionTitle}"/>
+
+                        <CheckBox x:Name="MinimizeAnimationCheck" Content="最小化 / 最大化 macOS 式动画"
+                                  Checked="MinimizeAnimation_Changed" Unchecked="MinimizeAnimation_Changed"/>
+                        <TextBlock Style="{StaticResource HintText}"
+                                   Text="动画器在启动时装配，本项修改后重启 Beautiful 生效（不做假即时）。"/>
+                        <CheckBox x:Name="AnimSuppressSystemAnimCheck"
+                                  Content="动画期间关闭系统「缩向任务栏」动画（避免两条动画打架）"
+                                  Margin="0,8,0,0"
+                                  Checked="AnimSuppressSystemAnim_Changed" Unchecked="AnimSuppressSystemAnim_Changed"/>
+                        <TextBlock Style="{StaticResource HintText}"
+                                   Text="只在本次运行内临时接管 SPI_SETANIMATION，退出时还原成原来的值；重启生效。关掉后系统动画与 genie 会同时播放。"/>
+                        <StackPanel Orientation="Horizontal" Margin="0,12,0,0">
+                            <TextBlock Text="效果" Style="{StaticResource RowLabel}" Width="72"/>
+                            <ComboBox x:Name="MinimizeEffectBox" Width="220" VerticalAlignment="Center"
+                                      SelectionChanged="MinimizeEffect_Changed">
+                                <ComboBoxItem Content="genie（灯罩网格）" Tag="genie"/>
+                                <ComboBoxItem Content="zoom（缩放淡出）" Tag="zoom"/>
+                                <ComboBoxItem Content="suck（吸吮）" Tag="suck"/>
+                            </ComboBox>
+                        </StackPanel>
+                        <StackPanel Orientation="Horizontal" Margin="0,10,0,0">
+                            <TextBlock Text="速度" Style="{StaticResource RowLabel}" Width="72"/>
+                            <Slider x:Name="AnimationSpeedSlider" Width="220" Minimum="0.5" Maximum="2.0"
+                                    SmallChange="0.1" LargeChange="0.3" IsSnapToTickEnabled="True" TickFrequency="0.1"
+                                    VerticalAlignment="Center" ValueChanged="AnimationSpeed_Changed"/>
+                            <TextBlock x:Name="AnimationSpeedLabel" Style="{StaticResource ValueLabel}"/>
+                        </StackPanel>
+                        <StackPanel Orientation="Horizontal" Margin="0,10,0,0">
+                            <TextBlock Text="排除进程" Style="{StaticResource RowLabel}" Width="72"/>
+                            <TextBox x:Name="MinimizeExcludesBox" Width="300" Height="26" VerticalContentAlignment="Center"
+                                     VerticalAlignment="Center" LostFocus="MinimizeExcludes_Changed"/>
+                        </StackPanel>
+                        <TextBlock Style="{StaticResource HintText}"
+                                   Text="排除进程用逗号或分号分隔（如 chrome;obs64），按进程名忽略 .exe 与大小写；留空 = 不排除。速度 0.5-2.0 倍，越慢越接近 macOS Shift 慢放。"/>
+                        <CheckBox x:Name="FullscreenAvoidanceCheck" Content="全屏应用时隐藏菜单栏与 Dock"
+                                  Margin="0,10,0,0" Checked="FullscreenAvoidance_Changed" Unchecked="FullscreenAvoidance_Changed"/>
+                        <TextBlock Style="{StaticResource HintText}"
+                                   Text="真全屏（盖住整块屏）才让位；最大化窗口不触发。判定在 Core FullscreenAvoidance，1s 轮询只读前台几何。"/>
+
+                        <StackPanel Orientation="Horizontal" Margin="0,14,0,0">
+                            <TextBlock Text="genie 引擎" Style="{StaticResource RowLabel}" Width="84"/>
+                            <ComboBox x:Name="GenieEngineBox" Width="220" VerticalAlignment="Center"
+                                      SelectionChanged="GenieEngine_Changed">
+                                <ComboBoxItem Content="mesh（真网格，推荐）" Tag="mesh"/>
+                                <ComboBoxItem Content="strips（条带回退）" Tag="strips"/>
+                            </ComboBox>
+                        </StackPanel>
+                        <TextBlock Style="{StaticResource HintText}"
+                                   Text="mesh 走 WPF 3D 纹理网格，在缺少硬件加速的环境可能画不出来；strips 是任何环境都能画的保底形态。下一次最小化/还原生效。"/>
+                    </StackPanel>
+                </Border>
+
+                <!-- ============ 媒体 ============ -->
+                <Border x:Name="MediaSection" Style="{StaticResource SectionCard}">
+                    <StackPanel>
+                        <TextBlock Text="媒体" Style="{StaticResource SectionTitle}"/>
+
+                        <StackPanel Orientation="Horizontal" Margin="0,8,0,0">
+                            <TextBlock Text="Dock 停靠边（实验）" VerticalAlignment="Center"/>
+                            <ComboBox x:Name="DockEdgeCombo" Width="120" Margin="10,0,0,0"
+                                      SelectionChanged="DockEdge_Changed">
+                                <ComboBoxItem Content="底部"/>
+                                <ComboBoxItem Content="左侧"/>
+                                <ComboBoxItem Content="右侧"/>
+                            </ComboBox>
+                            <TextBlock Text="左右停靠没有放大与倒影，且不占用工作区"
+                                       Opacity="0.6" FontSize="11" Margin="10,0,0,0"
+                                       VerticalAlignment="Center"/>
+                        </StackPanel>
+                        <CheckBox x:Name="WindowOpenAnimCheck"
+                                  Content="新窗口淡入（实验：跨进程不保证生效）"
+                                  Margin="0,8,0,0"
+                                  Checked="WindowOpenAnim_Changed" Unchecked="WindowOpenAnim_Changed"/>
+                        <CheckBox x:Name="WindowCloseAnimCheck"
+                                  Content="窗口关闭动画（默认关：macOS 关窗没有动画）"
+                                  Margin="0,8,0,0"
+                                  Checked="WindowCloseAnim_Changed" Unchecked="WindowCloseAnim_Changed"/>
+                        <StackPanel Orientation="Horizontal" Margin="0,8,0,0">
+                            <TextBlock Text="Dock 隐藏方式" VerticalAlignment="Center"/>
+                            <ComboBox x:Name="DockHideCombo" Width="230" Margin="10,0,0,0"
+                                      SelectionChanged="DockHide_Changed">
+                                <ComboBoxItem Content="总是显示" Tag="off"/>
+                                <ComboBoxItem Content="自动隐藏（触边显示，延迟可调）" Tag="auto"/>
+                                <ComboBoxItem Content="智能隐藏（窗口遮挡才让位）" Tag="smart"/>
+                                <ComboBoxItem Content="全屏应用时隐藏" Tag="fullscreen"/>
+                                <ComboBoxItem Content="窗口最大化时隐藏" Tag="maximized"/>
+                                <ComboBoxItem Content="双击边缘切换" Tag="edge"/>
+                                <ComboBoxItem Content="按住修饰键临时显示" Tag="modifier"/>
+                                <ComboBoxItem Content="仅桌面时显示" Tag="desktop"/>
+                                <ComboBoxItem Content="半透明（离开时 45%）" Tag="dim"/>
+                            </ComboBox>
+                            <TextBlock x:Name="DockModifierLabel" Text="修饰键" VerticalAlignment="Center"
+                                       Margin="14,0,0,0"/>
+                            <ComboBox x:Name="DockModifierBox" Width="92" Margin="10,0,0,0"
+                                      VerticalAlignment="Center" SelectionChanged="DockModifier_Changed">
+                                <ComboBoxItem Content="Ctrl" Tag="ctrl"/>
+                                <ComboBoxItem Content="Alt" Tag="alt"/>
+                                <ComboBoxItem Content="Shift" Tag="shift"/>
+                                <ComboBoxItem Content="Win" Tag="win"/>
+                            </ComboBox>
+                        </StackPanel>
+                        <StackPanel Orientation="Horizontal" Margin="0,8,0,0">
+                            <TextBlock Text="唤出方式" VerticalAlignment="Center"/>
+                            <ComboBox x:Name="DockRevealCombo" Width="200" Margin="10,0,0,0"
+                                      SelectionChanged="DockReveal_Changed">
+                                <ComboBoxItem Content="触底立即唤出" Tag="touch"/>
+                                <ComboBoxItem Content="触底停留唤出（防误触）" Tag="dwell"/>
+                                <ComboBoxItem Content="边缘二次触发" Tag="double"/>
+                            </ComboBox>
+                            <TextBlock Text="仅自动隐藏模式生效" Opacity="0.6" FontSize="11"
+                                       Margin="10,0,0,0" VerticalAlignment="Center"/>
+                        </StackPanel>
+                        <StackPanel Orientation="Horizontal" Margin="0,8,0,0">
+                            <TextBlock Text="触发延迟" VerticalAlignment="Center"/>
+                            <Slider x:Name="DockAutoHideDelaySlider" Width="200" Minimum="0" Maximum="5000"
+                                    SmallChange="100" LargeChange="500" IsSnapToTickEnabled="True" TickFrequency="100"
+                                    Margin="10,0,0,0" VerticalAlignment="Center"
+                                    ValueChanged="DockAutoHideDelay_ValueChanged"/>
+                            <TextBlock x:Name="DockAutoHideDelayLabel" Margin="10,0,0,0"
+                                       VerticalAlignment="Center" Opacity="0.85"/>
+                        </StackPanel>
+                        <TextBlock Style="{StaticResource HintText}"
+                                   Text="九档隐藏方式（对标 MyDockFinder）：智能隐藏在别的窗口盖住 Dock 时让位、移开即回；全屏/最大化档只认 Dock 所在屏的前台；双击边缘切换要双击 Dock 残留的边缘条带；仅桌面档在回桌面时才出现。自动隐藏档：光标离开 Dock 后延迟指定毫秒才滑下（0 = 离开即滑，默认 500ms——“悬停触发延迟”就是这一项），唤出方式决定滑下后鼠标怎么唤回——“触底停留”路过底边不弹，“边缘二次触发”要触底→离开→2 秒内再触底。"/>
+                        <CheckBox x:Name="DockWidgetCheck" Content="在 Dock 行尾显示时钟 / 天气小组件"
+                                  Margin="0,8,0,0" Checked="DockWidget_Changed" Unchecked="DockWidget_Changed"/>
+                        <CheckBox x:Name="DockLaunchpadCheck" Content="在 Dock 显示启动台"
+                                  Margin="0,8,0,0" Checked="DockLaunchpad_Changed" Unchecked="DockLaunchpad_Changed"/>
+                        <StackPanel Orientation="Horizontal" Margin="0,8,0,0">
+                            <TextBlock Text="运行指示" VerticalAlignment="Center"/>
+                            <ComboBox x:Name="DockIndicatorCombo" Width="200" Margin="10,0,0,0"
+                                      SelectionChanged="DockIndicator_Changed">
+                                <ComboBoxItem Content="圆点（macOS）" Tag="dot"/>
+                                <ComboBoxItem Content="药丸（KDE）" Tag="pill"/>
+                            </ComboBox>
+                            <TextBlock Text="运行中应用的窗口标记样式" Opacity="0.6" FontSize="11"
+                                       Margin="10,0,0,0" VerticalAlignment="Center"/>
+                        </StackPanel>
+                        <CheckBox x:Name="CapsuleCheck" Content="在 Dock 显示媒体胶囊"
+                                  Checked="Capsule_Changed" Unchecked="Capsule_Changed"/>
+                        <CheckBox x:Name="HidePanelCheck" Content="媒体面板失焦自动收起"
+                                  Margin="0,8,0,0" Checked="HidePanel_Changed" Unchecked="HidePanel_Changed"/>
+                        <CheckBox x:Name="PreviewCheck" Content="悬停应用图标时显示窗口缩略图预览"
+                                  Margin="0,8,0,0" Checked="Preview_Changed" Unchecked="Preview_Changed"/>
+                        <!-- 音量 HUD（Phase 4-T7）：开着会接管媒体键并取代系统音量浮层 -->
+                        <CheckBox x:Name="VolumeOsdCheck" Content="按音量键时显示 macOS 音量 HUD（接管媒体键）"
+                                  Margin="0,8,0,0" Checked="VolumeOsd_Changed" Unchecked="VolumeOsd_Changed"/>
+                        <!-- 诚实标注（Task 16 评审 Important#1 / Task 15 复核）：预览卡片本身实测正常，
+                             但实时画面由 DWM 合成——无桌面合成环境（如禁壁纸的 VM）缩略图区呈深色底。 -->
+                        <TextBlock Style="{StaticResource HintText}"
+                                   Text="预览卡片与定位已实测生效；实时窗口画面由 DWM 桌面合成提供，在无桌面合成环境（如禁用壁纸的虚拟机）缩略图区会呈深色底，需真机 Win11 复验画面内容。"/>
+                    </StackPanel>
+                </Border>
+
+                <!-- ============ 固定应用 ============ -->
+                <Border x:Name="PinnedSection" Style="{StaticResource SectionCard}">
+                    <StackPanel>
+                        <TextBlock Text="固定应用" Style="{StaticResource SectionTitle}"/>
+                        <ListBox x:Name="PinnedList" Height="120"
+                                 ItemsSource="{Binding PinnedApps}"
+                                 ScrollViewer.HorizontalScrollBarVisibility="Auto"/>
+                        <StackPanel Orientation="Horizontal" Margin="0,8,0,0">
+                            <Button Content="添加" Width="64" Margin="0,0,8,0" Click="AddPinned_Click"/>
+                            <Button Content="移除" Width="64" Margin="0,0,8,0" Click="RemovePinned_Click"/>
+                            <Button Content="上移" Width="64" Margin="0,0,8,0" Click="MoveUpPinned_Click"/>
+                            <Button Content="下移" Width="64" Click="MoveDownPinned_Click"/>
+                        </StackPanel>
+                    </StackPanel>
+                </Border>
+
+                <TextBlock Style="{StaticResource HintText}"
+                           Text="Dock 停靠边（顶部 / 左右侧）暂不在此提供：当前 Dock 为底部 AppBar 条带，改边涉及边向布局与顶栏冲突处理，作为后续能力。"/>
+
+                <!-- ============ 关于 ============ -->
+                <Border x:Name="AboutSection" Style="{StaticResource SectionCard}">
+                    <StackPanel>
+                        <TextBlock Text="关于" Style="{StaticResource SectionTitle}"/>
+                        <TextBlock x:Name="AboutVersionText" FontWeight="Medium"/>
+                        <TextBlock x:Name="AboutFontText" Style="{StaticResource HintText}"/>
+                        <TextBlock x:Name="AboutConfigText" Style="{StaticResource HintText}" TextWrapping="Wrap"/>
+                        <TextBlock Style="{StaticResource HintText}"
+                                   Text="视觉基准：macOS Big Sur (11) ~ Monterey (12)。本版本为 v4.0-alpha（Phase 1），真机目视项标 UNVERIFIED，详见 README。"/>
+                    </StackPanel>
+                </Border>
+            </StackPanel>
+            </ScrollViewer>
+        </Grid>
+
+        <!-- 底部动作条：恢复默认（左）+ 版本与配置目录（中）+ 关闭（右）。全部改动即时生效，无需“应用”。 -->
+        <Grid Grid.Row="2" Margin="20,10,20,16">
+            <Button Content="恢复默认" Width="96" Height="28" HorizontalAlignment="Left" Click="Reset_Click"/>
+            <!-- 版本号与配置目录：README 里"日志在 exe 旁边"这句话对用户没用，因为他找不到 exe 在哪。
+                 就地给出一条能复制的路径，出问题时报障不用再猜。 -->
+            <TextBlock x:Name="VersionLine" HorizontalAlignment="Center" VerticalAlignment="Center"
+                       FontSize="11" Opacity="0.66" TextTrimming="CharacterEllipsis"/>
+            <Button Content="关闭" Width="88" Height="28" HorizontalAlignment="Right" IsCancel="True" Click="Close_Click"/>
+        </Grid>
+        </Grid>
+    </Border>
+</Window>

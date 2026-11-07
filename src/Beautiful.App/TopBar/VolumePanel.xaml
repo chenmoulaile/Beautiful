@@ -9,11 +9,8 @@
          原来那里直接开 sndvol.exe（系统混音器），整块 UI 都是 Windows 的。
          材质与控制中心/WiFi 面板同一套：抓屏模糊 + 深色遮罩，拿不到模糊铺实心卡底。 -->
     <UserControl.Resources>
-        <LinearGradientBrush x:Key="CardFillBlur" StartPoint="0,0" EndPoint="0,1">
-            <GradientStop Color="#CC1A1A1A" Offset="0"/>
-            <GradientStop Color="#D9141414" Offset="1"/>
-        </LinearGradientBrush>
-        <SolidColorBrush x:Key="CardFillSolid" Color="#F01F1F1F"/>
+        <!-- 卡底/遮罩/内高光读 Aur* 弹层语义键（统一弹层底）：macOS 主题下是原就地硬编码的同值兜底，
+             Aurora 主题下亮色走亮弹层底。 -->
         <DropShadowEffect x:Key="CardShadow" BlurRadius="32" ShadowDepth="9" Direction="270"
                           Color="#B0000000" Opacity="0.85" RenderingBias="Performance"/>
 
@@ -43,20 +40,13 @@
 
     <Grid x:Name="Shell" Margin="20,18,20,24">
         <Border x:Name="Card" Width="312" CornerRadius="12" BorderThickness="1" BorderBrush="#2AFFFFFF"
-                Background="{StaticResource CardFillSolid}" Effect="{StaticResource CardShadow}">
+                Background="{DynamicResource AurPopupFillSolid}" Effect="{StaticResource CardShadow}">
             <Grid>
                 <Border x:Name="Scrim" CornerRadius="11" IsHitTestVisible="False" Background="Transparent"/>
                 <Border x:Name="TintLayer" CornerRadius="11" IsHitTestVisible="False"
                         Background="{DynamicResource ThemeBackdropTint}"/>
-                <Border x:Name="InnerGlow" CornerRadius="11" IsHitTestVisible="False">
-                    <Border.Background>
-                        <LinearGradientBrush StartPoint="0,0" EndPoint="0,1">
-                            <GradientStop Color="#14FFFFFF" Offset="0"/>
-                            <GradientStop Color="#05FFFFFF" Offset="0.35"/>
-                            <GradientStop Color="#00FFFFFF" Offset="1"/>
-                        </LinearGradientBrush>
-                    </Border.Background>
-                </Border>
+                <Border x:Name="InnerGlow" CornerRadius="11" IsHitTestVisible="False"
+                        Background="{DynamicResource AurInnerGlowBrush}"/>
 
                 <StackPanel Margin="13,11,13,9">
                     <Grid Margin="0,0,0,2">

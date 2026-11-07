@@ -1,9 +1,11 @@
 using System.Windows;
 using System.Windows.Media;
+using System.Windows.Media.Effects;
 using Beautiful.Core.Design;
 using Color = System.Windows.Media.Color;                 // UseWindowsForms 隐式 using 消歧
 using ColorConverter = System.Windows.Media.ColorConverter;
 using FontFamily = System.Windows.Media.FontFamily;
+using Point = System.Windows.Point;
 
 namespace Beautiful.App.Themes;
 
@@ -21,7 +23,8 @@ namespace Beautiful.App.Themes;
 /// </summary>
 public static class MacTokenDictionary
 {
-    public static void Apply(ResourceDictionary dict, MacTokens t, string accentHex, string? textFontFamily = null)
+    public static void Apply(ResourceDictionary dict, MacTokens t, string accentHex, string? textFontFamily = null,
+                             double panelCornerRadius = 18)
     {
         var fontText = string.IsNullOrWhiteSpace(textFontFamily) ? t.FontText : textFontFamily;
 
@@ -62,7 +65,9 @@ public static class MacTokenDictionary
         dict["MacDockItemSpacing"] = t.DockItemSpacing;
         dict["MacDockEdgeMargin"] = t.DockEdgeMargin;
         dict["MacDockPanelRadiusRatio"] = t.DockPanelRadiusRatio;
-        dict["MacPopupCornerRadius"] = t.PopupCornerRadius;
+        // CornerRadius（而非 boxed double）：XAML 侧 CornerRadius="{DynamicResource MacPopupCornerRadius}"
+        // 直接取值，DynamicResource 不走 TypeConverter，double 会赋不上（CalendarFlyout 卡底圆角消费点）。
+        dict["MacPopupCornerRadius"] = new CornerRadius(t.PopupCornerRadius);
         dict["MacMenuItemHeight"] = t.MenuItemHeight;
         dict["MacWindowCornerRadius"] = t.WindowCornerRadius;
         dict["MacControlCornerRadius"] = t.ControlCornerRadius;
@@ -88,7 +93,64 @@ public static class MacTokenDictionary
         dict["ThemeDockSeparatorFill"] = Brush(t.DockSeparator);
         dict["ThemeBackdropTint"] = Brush(t.BackdropTint);
         dict["ThemeFontFamily"] = new FontFamily(fontText);
-        dict["ThemePanelCornerRadius"] = new CornerRadius(18);
+        // 面板圆角由 ThemeManager 按主题传入（macOS 维持既有 18 —— record 25 与字典 18 的存量矛盾按
+        // "不回归"原则保留现状；Aurora 注入其 PanelCornerRadius=26）。
+        dict["ThemePanelCornerRadius"] = new CornerRadius(panelCornerRadius);
+
+        // ---------- Aur* 弹层语义键（macOS 兜底值） ----------
+        // FluentMenu/控制中心/托盘/网络/音量/启动器/切换器/QuickLook 等共享面板已改读 Aur* 键
+        // （弹层底统一替换表）；macOS 主题下这些键不能悬空（DynamicResource 悬空 → 黑杠/透明洞）。
+        // 这里写与各面板原就地硬编码同值的深色玻璃，macOS 视觉零回归；Aurora 由
+        // AuroraTokenDictionary 按自身 token 覆写（亮色走亮弹层底）。
+        dict["AurPopupFillSolid"] = VerticalGradient("#F82C2C2F", "#FB1F1F23");
+        dict["AurPopupFillBlur"] = VerticalGradient("#8A232327", "#9919191C");
+        dict["AurInnerGlowBrush"] = InnerGlow();
+        dict["AurCardFill"] = Brush("#14FFFFFF");
+        dict["AurCardFillHover"] = Brush("#14FFFFFF");
+        dict["AurCardBorder"] = Brush("#1FFFFFFF");
+        dict["AurCardFillOn"] = Brush("#3FFFFFFF");
+        dict["AurSelectionFill"] = AlphaBrush(accentHex, 0xEB);   // 原选中行 = accent + Opacity 0.92（≈ alpha EB）
+        dict["AurSelectionHairline"] = Brush(accentHex);
+        dict["AurAccentText"] = Brush("#FFFFFFFF");               // on-accent 文字（横幅徽标；macOS 原本就是写死白）
+        dict["AurElevation3"] = new DropShadowEffect              // QuickLook 卡层阴影（沿用原影板规格）
+        {
+            BlurRadius = 22,
+            ShadowDepth = 4,
+            Direction = 270,
+            Color = (Color)ColorConverter.ConvertFromString("#000000"),
+            Opacity = 0.28,
+        };
+    }
+
+    /// <summary>竖向双停渐变（macOS Aur* 兜底值用）。</summary>
+    private static LinearGradientBrush VerticalGradient(string topHex, string bottomHex)
+    {
+        var brush = new LinearGradientBrush { StartPoint = new Point(0, 0), EndPoint = new Point(0, 1) };
+        brush.GradientStops.Add(new GradientStop((Color)ColorConverter.ConvertFromString(topHex), 0.0));
+        brush.GradientStops.Add(new GradientStop((Color)ColorConverter.ConvertFromString(bottomHex), 1.0));
+        brush.Freeze();
+        return brush;
+    }
+
+    /// <summary>弹层顶部内高光（macOS 各面板原 InnerGlow 的主流形态）。</summary>
+    private static LinearGradientBrush InnerGlow()
+    {
+        var brush = new LinearGradientBrush { StartPoint = new Point(0, 0), EndPoint = new Point(0, 1) };
+        brush.GradientStops.Add(new GradientStop(Color.FromArgb(0x14, 0xFF, 0xFF, 0xFF), 0.0));
+        brush.GradientStops.Add(new GradientStop(Color.FromArgb(0x05, 0xFF, 0xFF, 0xFF), 0.35));
+        brush.GradientStops.Add(new GradientStop(Color.FromArgb(0x00, 0xFF, 0xFF, 0xFF), 1.0));
+        brush.Freeze();
+        return brush;
+    }
+
+    /// <summary>强调色降透明画刷（macOS 选中行软填充兜底用）。</summary>
+    private static SolidColorBrush AlphaBrush(string hex, byte alpha)
+    {
+        var color = (Color)ColorConverter.ConvertFromString(hex);
+        color.A = alpha;
+        var brush = new SolidColorBrush(color);
+        brush.Freeze();
+        return brush;
     }
 
     /// <summary>#RRGGBB / #AARRGGBB → 冻结画刷；token 写错时回退透明（绝不因一个颜色字符串崩启动）。</summary>

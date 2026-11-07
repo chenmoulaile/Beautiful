@@ -61,8 +61,12 @@ public static class SettingsService
         }
     }
 
-    /// <summary>设置主题标识 → 主题定义（v2 macOS-only：已收敛为 macOS，兜底同 macOS）。。</summary>
-    public static ThemeDefinition ThemeDefinitionOf(AppSettings s) => ThemeDefinition.MacOs();
+    /// <summary>设置主题标识 → 主题定义（macOS / Aurora 两条线；未知值兜底 macOS，与 Normalized 白名单一致）。</summary>
+    public static ThemeDefinition ThemeDefinitionOf(AppSettings s) => s.Theme switch
+    {
+        "aurora" => ThemeDefinition.Aurora(),
+        _ => ThemeDefinition.MacOs()
+    };
 
     /// <summary>设置策略标识 → TaskbarPolicy（未知值兜底 hide，与默认一致）。</summary>
     public static TaskbarPolicy PolicyOf(AppSettings s) => s.TaskbarPolicy switch

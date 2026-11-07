@@ -65,6 +65,67 @@ public sealed class SwitcherService : IDisposable
     /// </summary>
     public bool KeepHookForLauncher { get; set; }
 
+    /// <summary>
+    /// 呼出热键服务（alpha.29 残项清零）：消息窗 RegisterHotKey 的"无状态打开面板"边沿，与
+    /// 低级键盘钩子零接触（不吞键、不碰状态位）——脚本/远程输入被钩子放行后仍能靠它唤出面板。
+    /// 生命周期挂在服务上（<see cref="Teardown"/> 统一释放）；装配/摘除由 <see cref="ApplyOpenHotkey"/>。
+    /// </summary>
+    public SwitcherHotkeyService? OpenHotkey { get; private set; }
+
+    /// <summary>
+    /// 上一次打开是否"无会话"（呼出热键 / --switcher 打开，<see cref="OpenForHotkey"/>）。
+    /// 面板在 Opened 里读它：无会话的显示没有"按着 Alt"的键盘语义，看门狗不得按触发键松开来收面板。
+    /// </summary>
+    public bool LastOpenWasSessionless { get; private set; }
+
+    /// <summary>OpenForHotkey → OnOpenRequested 的传递旗标：两条路径共用 <see cref="OnOpenRequested"/>，
+    /// 在它开头按 pending 值落 <see cref="LastOpenWasSessionless"/>（opened 事件发布前就位）。</summary>
+    private bool _openViaHotkeyPending;
+
+    /// <summary>
+    /// 装/摘呼出热键（幂等）。与面板装配同源：<paramref name="enabled"/> = SwitcherEnabled——
+    /// 接管关着时面板本就不装配，热键也一并摘除，不给用户一个"按了没反应"的死键。
+    /// </summary>
+    public void ApplyOpenHotkey(bool enabled)
+    {
+        EnsureUiThread();
+        if (_disposed) return;
+        if (!enabled)
+        {
+            if (OpenHotkey is null) return;
+            OpenHotkey.Dispose();
+            OpenHotkey = null;
+            Logger.Info("切换器：呼出热键已摘除（接管开关关闭，面板一并收起）");
+            return;
+        }
+        if (OpenHotkey is null)
+        {
+            var hotkey = new SwitcherHotkeyService();
+            hotkey.Pressed += OnOpenHotkeyPressed;
+            OpenHotkey = hotkey;
+        }
+        OpenHotkey.Reconfigure();
+    }
+
+    /// <summary>呼出热键按下：开/收两相（Toggle）。</summary>
+    private void OnOpenHotkeyPressed() => OpenForHotkey();
+
+    /// <summary>
+    /// 呼出热键 / --switcher 的面板开关：<b>无键盘会话</b>（面板不夺焦点、钩子不进入会话态，
+    /// 见 <see cref="LastOpenWasSessionless"/>）——鼠标点击/悬停选择提交，再按呼出热键收起，
+    /// 看门狗 60s 绝对超时兜底。列表为空时 <see cref="OnOpenRequested"/> 不发 Opened，面板自然不显示。
+    /// </summary>
+    public void OpenForHotkey()
+    {
+        EnsureUiThread();
+        if (_disposed) return;
+        if (IsOpen) { Cancel(); return; }
+        _openViaHotkeyPending = true;   // OnOpenRequested 开头读走（两条打开路径共用它，见字段注释）
+        OnOpenRequested();
+        if (IsOpen)
+            Logger.Info("切换器：面板经呼出热键打开（无键盘会话：鼠标点选提交，再按热键或等 60s 收起）");
+    }
+
 
     /// <summary>当前分组快照（仅在 <see cref="Opened"/> 之后保证新鲜；面板打开期间不重排，避免高亮跳动）。</summary>
     public IReadOnlyList<SwitcherApp> Apps => _apps;
@@ -208,6 +269,7 @@ public sealed class SwitcherService : IDisposable
         _foregroundSubscription?.Dispose();
         _foregroundSubscription = null;
         Cancel();            // 会话若在进行中：关掉状态，不留悬空高亮
+        if (OpenHotkey is { } hotkey) { hotkey.Dispose(); OpenHotkey = null; }   // 呼出热键：注销 + 拆消息窗
         Hook.Dispose();      // 卸钩 + 断事件
         _tracked.Clear();
         _apps.Clear();
@@ -356,6 +418,9 @@ public sealed class SwitcherService : IDisposable
     private void OnOpenRequested()
     {
         if (_disposed) return;
+        // 无会话旗标在这里统一落定（两条打开路径共用本方法）：呼出热键 pending=true，钩子路径 false。
+        LastOpenWasSessionless = _openViaHotkeyPending;
+        _openViaHotkeyPending = false;
         _apps.Clear();
         _apps.AddRange(WindowListMerger.GroupByApp(BuildEntries()));
         // 全最小化的应用沉底：Alt+Tab 的首要目的是把"看得见的窗口"提到前面

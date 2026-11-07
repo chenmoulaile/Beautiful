@@ -87,6 +87,25 @@ Name: "desktopicon"; Description: "Create a desktop shortcut"; GroupDescription:
 Source: "{#SourceDir}\*"; DestDir: "{app}"; Excludes: "logs\*,config\*,cache\*"; \
   Flags: ignoreversion recursesubdirs
 
+[InstallDelete]
+; round5 真机缺陷 1（安装目录启动链）的根因修口：覆盖安装时，旧布局（self-contained）残留在
+; {app} 的 .NET 宿主/运行时文件必须先删。apphost 按"先 app-local 后系统"的顺序解析 fxr，
+; 残留的 hostfxr.dll 抢先于系统 fxr 被加载（COREHOST_TRACE 实拍 'Resolved fxr [app]\hostfxr.dll'），
+; 与新 runtimeconfig/deps.json 不配套 → 弹 "You must install or update .NET to run this
+; application." 且进程挂死、--exit 等一切参数无效。真机取证：移走该文件后应用立即正常启动。
+; [InstallDelete] 先于 [Files] 执行：自包含新产物随后会把同名文件原样拷回（hostfxr/hostpolicy/
+; coreclr 本就是 self-contained 产物的组成部分），framework-dependent 新产物则从此走系统 fxr——
+; 两种布局都安全。logs/config/cache 是用户数据，归 [UninstallDelete]，此处绝不触碰。
+Type: files; Name: "{app}\hostfxr.dll"
+Type: files; Name: "{app}\hostpolicy.dll"
+Type: files; Name: "{app}\nethost.dll"
+Type: files; Name: "{app}\coreclr.dll"
+Type: files; Name: "{app}\clrjit.dll"
+Type: files; Name: "{app}\clrcompression.dll"
+Type: files; Name: "{app}\mscordaccore.dll"
+Type: files; Name: "{app}\mscordbi.dll"
+Type: files; Name: "{app}\mscorrc.dll"
+
 [Icons]
 Name: "{group}\{#AppName}"; Filename: "{app}\{#AppExe}"; WorkingDir: "{app}"
 Name: "{group}\{#AppName} uninstall"; Filename: "{uninstallexe}"

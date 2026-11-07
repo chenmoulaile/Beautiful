@@ -133,6 +133,31 @@ public static class MonitorGeometry
     }
 
     /// <summary>
+    /// 某个显示器句柄（<see cref="Surfaces"/> / <see cref="TryMonitorForWindow"/> 的产物）的
+    /// 两块矩形与该屏缩放。台前调度每屏一条舞台条用：条的归属屏在创建时定死，之后每次落位
+    /// 按<strong>句柄</strong>重取几何——分辨率/任务栏变化在下一拍自然跟上，不依赖窗口当前矩形。
+    /// 取不到（拔屏瞬间）返回 null，调用方跳过本次定位、保持上次几何。
+    /// </summary>
+    public static MonitorArea? AreaForMonitor(IntPtr monitor)
+        => TryInfo(monitor, out var info)
+            ? new MonitorArea(ToCore(in info.rcMonitor), ToCore(in info.rcWork), ScaleOf(monitor, IntPtr.Zero))
+            : null;
+
+    /// <summary>
+    /// 某窗口所在显示器的句柄（<c>MonitorFromWindow(MONITOR_DEFAULTTONEAREST)</c> 直查）。
+    /// 台前调度的窗口→屏归属映射用它；<b>最小化窗口不要查这里</b>（矩形在 -32000，会被判到
+    /// 最近的屏——通常主屏），调用方须沿用窗口非最小化时缓存的归属（StageManagerService）。
+    /// 窗口无效时返回 false。
+    /// </summary>
+    public static bool TryMonitorForWindow(IntPtr hwnd, out IntPtr monitor)
+    {
+        monitor = hwnd != IntPtr.Zero && NativeMethods.IsWindow(hwnd)
+            ? NativeMethods.MonitorFromWindow(hwnd, NativeMethods.MonitorDefaultToNearest)
+            : IntPtr.Zero;
+        return monitor != IntPtr.Zero;
+    }
+
+    /// <summary>
     /// 列出可选显示器（设置面板下拉）：auto、primary，之后是枚举到的每一块屏及其真实分辨率与原点。
     /// 序号按<strong>本次枚举</strong>的次序（EnumDisplayMonitors 的顺序由显示驱动决定），
     /// 所以标签里必须带上分辨率/原点，用户才能确认"显示器 2"是哪一块。

@@ -7,16 +7,12 @@
 
     <!-- 顶栏网络图标点开的自家 WiFi 面板（用户要求："单独做一个 wifi 栏…不要使 windows 的东西"）。
          材质与控制中心完全同一套：Shell.Margin 给自绘投影留位 → Card 圆角 + 亮边 + 投影，
-         玻璃感来自宿主的抓屏模糊（IBackdropAware），拿不到模糊时铺 CardFillSolid 实心卡底。
+         玻璃感来自宿主的抓屏模糊（IBackdropAware），拿不到模糊时铺 AurPopupFillSolid 实心卡底。
          列表行由代码构建（与控制中心的分段同一做法）：行的可用/置灰/连接中状态多，
          写在 DataTemplate 的触发器里比写在代码里更难读。 -->
     <UserControl.Resources>
-        <!-- 有模糊时压在模糊之上的半透明深色遮罩：保证白字在任何壁纸上都有对比度 -->
-        <LinearGradientBrush x:Key="CardFillBlur" StartPoint="0,0" EndPoint="0,1">
-            <GradientStop Color="#CC1A1A1A" Offset="0"/>
-            <GradientStop Color="#D9141414" Offset="1"/>
-        </LinearGradientBrush>
-        <SolidColorBrush x:Key="CardFillSolid" Color="#F01F1F1F"/>
+        <!-- 卡底/遮罩/内高光读 Aur* 弹层语义键（统一弹层底）：macOS 主题下是原就地硬编码的同值兜底，
+             Aurora 主题下亮色走亮弹层底。 -->
         <DropShadowEffect x:Key="CardShadow" BlurRadius="32" ShadowDepth="9" Direction="270"
                           Color="#B0000000" Opacity="0.85" RenderingBias="Performance"/>
 
@@ -49,20 +45,13 @@
 
     <Grid x:Name="Shell" Margin="20,18,20,24">
         <Border x:Name="Card" Width="330" CornerRadius="12" BorderThickness="1" BorderBrush="#2AFFFFFF"
-                Background="{StaticResource CardFillSolid}" Effect="{StaticResource CardShadow}">
+                Background="{DynamicResource AurPopupFillSolid}" Effect="{StaticResource CardShadow}">
             <Grid>
                 <Border x:Name="Scrim" CornerRadius="11" IsHitTestVisible="False" Background="Transparent"/>
                 <Border x:Name="TintLayer" CornerRadius="11" IsHitTestVisible="False"
                         Background="{DynamicResource ThemeBackdropTint}"/>
-                <Border x:Name="InnerGlow" CornerRadius="11" IsHitTestVisible="False">
-                    <Border.Background>
-                        <LinearGradientBrush StartPoint="0,0" EndPoint="0,1">
-                            <GradientStop Color="#14FFFFFF" Offset="0"/>
-                            <GradientStop Color="#05FFFFFF" Offset="0.35"/>
-                            <GradientStop Color="#00FFFFFF" Offset="1"/>
-                        </LinearGradientBrush>
-                    </Border.Background>
-                </Border>
+                <Border x:Name="InnerGlow" CornerRadius="11" IsHitTestVisible="False"
+                        Background="{DynamicResource AurInnerGlowBrush}"/>
 
                 <StackPanel Margin="13,11,13,9">
                     <!-- 标题行：左"Wi‑Fi"，右当前连接名（或不可用原因，取不到就写"未连接"，不编） -->

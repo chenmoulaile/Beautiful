@@ -78,6 +78,10 @@ public sealed partial class SwitcherWindow : Window
     private int _watchdogTicks;
 
     private Phase _phase = Phase.Hidden;
+    // 本次显示是否"无键盘会话"（呼出热键 / --switcher 打开，服务 LastOpenWasSessionless）：
+    // 没有"Alt 还按着"的语义，看门狗不得按触发键松开来收面板（否则热键打开的面板 150ms 即被收走，
+    // 鼠标点选根本来不及）；60s 绝对超时与所有关闭路径的兜底仍然生效。
+    private bool _sessionless;
     private double _baseIconSize = 56;   // 样式给的图标尺寸（缩小适配前先记下）
     private double _panelRadius = 18;
     private Thickness _bodyPadding = new(16, 13, 16, 13);
@@ -123,6 +127,7 @@ public sealed partial class SwitcherWindow : Window
                 return;
             }
             BuildTiles(apps);
+            _sessionless = _service.LastOpenWasSessionless;   // 呼出热键打开：看门狗跳过触发键检查（见字段注释）
             ApplyStyle();
             _visitedApps.Clear();
             _expandedApp = -1;
@@ -317,7 +322,9 @@ public sealed partial class SwitcherWindow : Window
         _baseIconSize = 56; _panelRadius = 18; _itemGap = 4; _verticalBias = 0.42;
         _captionVisible = true;
         _bodyPadding = new Thickness(16, 13, 16, 13);
-        accent = HexBrush("#0A84FF", accent);
+        // 激活卡描边随主题强调色（ThemeAccent，DynamicResource 字典里的运行时画刷），
+        // 不再写死 #0A84FF：用户换强调色/换主题后瓦片选中边即时跟随（HexBrush 留作取不到时的兜底）。
+        accent = TryFindResource("ThemeAccent") as Brush ?? HexBrush("#0A84FF", accent);
         Resources["SwitcherTilePadding"] = new Thickness(7);
         Resources["SwitcherTileRadius"] = new CornerRadius(14);
         Resources.Remove("SwitcherIconClip"); // macOS 图标原样，不遮罩
@@ -339,7 +346,7 @@ public sealed partial class SwitcherWindow : Window
         // 先把卡底落成**实心**渐变：背板抓屏晚于此处，ShowPanel 抓到背板后再由 ApplyCardFill
         // 换成模糊画刷。默认值必须是"什么都不依赖"的实心底，这样任何一条降级路径
         // （抓屏失败 / 环境开关关闭）都不会出现未绘制的透明洞。
-        Card.Background = (Brush)Resources["CardFillSolid"];
+        Card.Background = (Brush)FindResource("AurPopupFillSolid");
         Scrim.Background = Brushes.Transparent;
     }
 
@@ -385,6 +392,7 @@ public sealed partial class SwitcherWindow : Window
     {
         StopWatchdog();
         _phase = Phase.Hidden;
+        _sessionless = false;   // 无会话显示随面板关闭复位（下次打开由服务重新告知）
         _expandedApp = -1;
         _windowCursor = 0;
         _subSteps = 0;
@@ -427,17 +435,17 @@ public sealed partial class SwitcherWindow : Window
     /// 既不重抓屏也不重新缩放（这就是捕获区带余量的意义）。
     /// 任何一条分支都必须把整张卡铺满：本窗口是分层窗口，"没画到"= 真透明 = 直接看穿到桌面，
     /// 那正是 v2 真机上"面板矩形里露背景"的故障形态。背板不可用（抓屏失败 / <c>BEAUTIFUL_NOBLUR=1</c>
-    /// / 瞄准越界）时一律回落实心渐变 <c>CardFillSolid</c>。
+    /// / 瞄准越界）时一律回落实心渐变 <c>AurPopupFillSolid</c>。
     /// </para>
     /// </summary>
     private void ApplyCardFill(in PhysicalRect panelPx)
     {
         Brush? blur = _backdrop is { } b && b.Aim(panelPx) ? b.Brush : null;
-        Card.Background = blur ?? (Brush)Resources["CardFillSolid"];
-        // Scrim 铺的是**深色遮罩**而不是模糊画刷本身（与 FluentMenu.OnBackdropReady 同一两层材质）：
+        Card.Background = blur ?? (Brush)FindResource("AurPopupFillSolid");
+        // Scrim 铺的是**遮罩**而不是模糊画刷本身（与 FluentMenu.OnBackdropReady 同一两层材质）：
         // 直接把模糊赋给 Scrim 等于没有任何东西压暗它，卡浮在亮窗口上就被冲成浅灰、白字幕失去对比度。
-        // 实心底分支保持透明——CardFillSolid 本身已是深色，再压一层只会闷。
-        Scrim.Background = blur is not null ? (Brush)Resources["CardFillBlur"] : Brushes.Transparent;
+        // 实心底分支保持透明——AurPopupFillSolid 本身已是较实的底，再压一层只会闷。
+        Scrim.Background = blur is not null ? (Brush)FindResource("AurPopupFillBlur") : Brushes.Transparent;
     }
 
     /// <summary>
@@ -561,6 +569,7 @@ public sealed partial class SwitcherWindow : Window
             HidePanel();
             return;
         }
+        if (_sessionless) return;   // 呼出热键打开：没有触发键语义（见 _sessionless 注释），只受 60s 绝对超时约束
         if (TriggerKeyDown()) return;
         Logger.Info("切换面板：触发键已松开但会话未提交（按键漏收），隐藏且不切换");
         HidePanel();

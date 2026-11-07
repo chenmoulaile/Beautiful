@@ -33,6 +33,23 @@ public sealed record AppSettings
     public bool DockWidgetEnabled { get; init; } = true;
 
     /// <summary>
+    /// Dock 是否显示启动台常驻格（alpha.22 起常驻于行首第二格，本项给想收干净的用户一行退路；
+    /// 默认开 = 既有行为不变）。关掉后启动台格从行首消失（访达格保留），启动台仍可从
+    /// Spotlight/热键/顶栏入口触达。
+    /// </summary>
+    public bool DockShowLaunchpad { get; init; } = true;
+
+    /// <summary>
+    /// Dock 运行指示样式：<c>dot</c>（默认，macOS 圆点 / Aurora 圆点+辉光，样式属各主题字典）/
+    /// <c>pill</c>（KDE 药丸：图标下方居中 16×3 胶囊，触发器与圆点同款）。分派在
+    /// DockWindow.ApplyIndicatorStyle：药丸档以窗口级样式覆写两枚指示键，切回 dot 即还原主题样式。
+    /// </summary>
+    public string DockIndicatorStyle { get; init; } = "dot";
+
+    /// <summary>合法运行指示样式标识（小写）。</summary>
+    public static IReadOnlyList<string> KnownDockIndicatorStyles { get; } = ["dot", "pill"];
+
+    /// <summary>
     /// Dock 自动隐藏（P3-T5 的隐藏模式之一）。开启后光标不在 Dock 上超过 500ms 就滑到屏幕下沿
     /// 只留 4px，光标触底立即滑回。
     /// <para>
@@ -166,6 +183,16 @@ public sealed record AppSettings
     /// <summary>切换器触发键组合（小写规范形，如 "alt+tab" / "ctrl+alt+tab"）。</summary>
     public string SwitcherHotkey { get; init; } = "alt+tab";
 
+    /// <summary>
+    /// 切换器<b>呼出</b>热键（alpha.29 残项清零，默认 <c>ctrl+grave</c> = Ctrl + `）：
+    /// 走消息窗 RegisterHotKey 的"无状态打开面板"边沿，只发 OpenRequested、不参与会话/吞键——
+    /// 低级键盘钩子对注入键（脚本/远程输入）一律放行且不碰状态位（AltTabHook ⓪/① 的既有裁定），
+    /// 所以"接受脚本/远程/钩子被摘场景"没有可靠的 Alt+Tab 呼出口，这条热键就是那个出口。
+    /// 系统 Alt+Tab 完全不受它影响（RegisterHotKey 不吞 Tab，也与触发组合无关）。
+    /// 规范化与自愈走 <see cref="Launcher.LauncherHotkey"/>（必须带修饰键 + 可识别主键，含 grave）。
+    /// </summary>
+    public string SwitcherOpenHotkey { get; init; } = Launcher.LauncherHotkey.DefaultSwitcherOpen;
+
     /// <summary>Dock 基准图标尺寸（32..96，加载时钳制）。</summary>
     public int DockIconSize { get; init; } = 56;
 
@@ -272,6 +299,13 @@ public sealed record AppSettings
     public bool StageManagerEnabled { get; init; }
 
     /// <summary>
+    /// 台前调度条的收合/展开<b>滑动动画</b>（wp-macos-parity r6，默认开）。时长与缓动走主题动效
+    /// token（<c>MacDockSlideMs</c> / <c>MacEaseOut</c>）；关掉回到瞬时两态——给低端机与不喜欢
+    /// 动效的用户留一行配置的退路，不需要回滚整个功能。
+    /// </summary>
+    public bool StageManagerSlideAnimation { get; init; } = true;
+
+    /// <summary>
     /// 顶栏是否显示"托盘图标区"入口（v3.2）：点开可看到通知区域里被收起的第三方应用图标，
     /// 点击/右键会转发回图标自己的窗口。关掉只是少一颗按钮，不影响系统托盘本身。
     /// </summary>
@@ -354,14 +388,23 @@ public sealed record AppSettings
     public string ScreenCornerMaskColor { get; init; } = Layout.ScreenCornerPlan.DefaultMaskColor;
 
     /// <summary>
+    /// 屏幕圆角的<b>每屏排除名单</b>（alpha.29 残项清零）：列入的显示器不画四角遮罩，
+    /// <b>空 = 全部屏幕都画</b>（默认，单屏机器行为与无此项完全一致）。键的口径、规范化与匹配
+    /// 全在 Core <see cref="Layout.ScreenCornerMonitors"/>（primary / 1..16 序号，与每显示器 Dock
+    /// 覆盖配置同一套键）；设置页提供单屏排除下拉，多屏列表可手改 settings.json（逐条规范化、
+    /// 非法键丢弃、去重保序）。典型用途：副屏/投影/电视上不要"屏幕圆角"。
+    /// </summary>
+    public IReadOnlyList<string> ScreenCornersMonitors { get; init; } = [];
+
+    /// <summary>
     /// 图标处理方式（v3 T6）："auto"（跟随主题：macOS 圆角方块+投影 / 鸿蒙 squircle+投影 / GNOME 平铺）、
     /// "mask"（强制遮罩+高光+投影）、"plain"（只做 2× 超采样降到当前 DPI 的像素尺寸，不烧形状与投影，
     /// 形状属主交回 XAML 的 ThemeIconClip）。取值解释集中在 <see cref="Imaging.IconTreatment"/>。
     /// </summary>
     public string IconTreatment { get; init; } = "auto";
 
-    /// <summary>合法主题标识（小写）。v4 只保留 macOS。</summary>
-    public static IReadOnlyList<string> KnownThemes { get; } = ["macos"];
+    /// <summary>合法主题标识（小写）。v4：macOS + Aurora（极光）。</summary>
+    public static IReadOnlyList<string> KnownThemes { get; } = ["macos", "aurora"];
 
     /// <summary>合法任务栏策略标识（小写）。</summary>
     public static IReadOnlyList<string> KnownTaskbarPolicies { get; } = ["hide", "autohide", "keep"];
@@ -456,6 +499,10 @@ public sealed record AppSettings
         SwitcherStyle = Canonical(SwitcherStyle, "macos", KnownSwitcherStyles),
         DockPosition = Canonical(DockPosition, "bottom", KnownDockPositions),
         SwitcherHotkey = HotkeyOrDefault(SwitcherHotkey, "alt+tab"),
+        // 呼出热键与启动器热键同一套硬约束（至少一个修饰键 + 可识别主键；含 grave=反引号），
+        // 非法值自愈为各自的默认（CanonicalizeWithFallback：呼出热键的默认是 ctrl+grave 而非启动器的
+        // ctrl+alt+space）——它同样是一颗全局注册的键，形式错误的组合绝不允许落进配置。
+        SwitcherOpenHotkey = Launcher.LauncherHotkey.CanonicalizeWithFallback(SwitcherOpenHotkey, Launcher.LauncherHotkey.DefaultSwitcherOpen),
         LauncherHotkey = Launcher.LauncherHotkey.Canonicalize(LauncherHotkey),
         DockIconSize = Math.Clamp(DockIconSize, MinDockIconSize, MaxDockIconSize),
         DockEdgeMargin = Math.Clamp(DockEdgeMargin, MinDockEdgeMargin, MaxDockEdgeMargin),
@@ -466,9 +513,11 @@ public sealed record AppSettings
         DockAutoHideReveal = Canonical(DockAutoHideReveal, "touch", KnownDockAutoHideReveals),
         DockHideMode = Canonical(DockHideMode, "off", KnownDockHideModes),
         DockModifierKey = Canonical(DockModifierKey, "ctrl", KnownDockModifierKeys),
+        DockIndicatorStyle = Canonical(DockIndicatorStyle, "dot", KnownDockIndicatorStyles),
         DockMonitorProfiles = Dock.DockMonitorProfileList.Normalized(DockMonitorProfiles),
         ScreenCornerRadius = Math.Clamp(ScreenCornerRadius, MinScreenCornerRadius, MaxScreenCornerRadius),
         ScreenCornerMaskColor = Layout.ScreenCornerPlan.CanonicalMaskColor(ScreenCornerMaskColor),
+        ScreenCornersMonitors = Layout.ScreenCornerMonitors.Normalized(ScreenCornersMonitors),
         IconTreatment = Canonical(IconTreatment, "auto", KnownIconTreatments),
         GenieEngine = Canonical(GenieEngine, "mesh", KnownGenieEngines),
         MinimizeEffect = Canonical(MinimizeEffect, "genie", KnownMinimizeEffects),

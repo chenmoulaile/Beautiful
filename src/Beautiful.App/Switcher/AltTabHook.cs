@@ -191,8 +191,10 @@ public sealed class AltTabHook : IDisposable
     /// <summary>
     /// 主键名 → 虚拟键码；认不出返回 0（调用方据此不注册）。字母/数字/F1-F12 按码位算，
     /// 其余按键名给常量（与 <see cref="LauncherHotkey.KeyNames"/> 一一对应，多一条都不留）。
+    /// <c>internal</c>：切换器呼出热键（<see cref="SwitcherHotkeyService"/>）的注册走同一张表，
+    /// 两个消费者各管一段语义，键码映射不复制第二份。
     /// </summary>
-    private static int VirtualKeyOf(string key) => key switch
+    internal static int VirtualKeyOf(string key) => key switch
     {
         "space" => NativeMethods.VkSpace,
         "enter" => NativeMethods.VkReturn,
@@ -217,6 +219,7 @@ public sealed class AltTabHook : IDisposable
         "quote" => NativeMethods.VkOem7,
         "leftbracket" => NativeMethods.VkOem4,
         "rightbracket" => NativeMethods.VkOem6,
+        "grave" => NativeMethods.VkOem3,   // 反引号 `：切换器呼出热键的默认主键（Ctrl+`）
         _ => key.Length switch
         {
             1 when key[0] is >= 'a' and <= 'z' => 'A' + (key[0] - 'a'),

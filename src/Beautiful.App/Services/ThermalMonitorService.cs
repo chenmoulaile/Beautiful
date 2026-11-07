@@ -49,6 +49,26 @@ public sealed class ThermalMonitorService : IDisposable
     /// <summary>最近一次成功读数（含来源）；从未成功或数据源消失时为 null。</summary>
     public ThermalReading? Latest { get; private set; }
 
+    /// <summary>最近一拍维持的数据源状态快照（未 Start 时为构造初值；设置卡有 ChipChanged 推送时的快速来源）。</summary>
+    private ThermalSourceStatus _status = ThermalSourceStatus.Resolve(null, lhmToolInstalled: false, lhmNamespaceReachable: false);
+
+    /// <summary>数据源状态查询接口：返回轮询最近一拍维持的四态快照（不发起 WMI 查询；要新鲜数据用 <see cref="ProbeSourceStatus"/>）。</summary>
+    public ThermalSourceStatus GetSourceStatus() => _status;
+
+    /// <summary>
+    /// 数据源状态一次性探测（设置卡打开 / 动作完成后要新鲜数据时用；<b>有 WMI 查询，调后台线程</b>）：
+    /// 服务在不在跑都可直接调——走同一条 <see cref="TemperatureProbe.ReadOnceDetailed"/> 探测链，
+    /// 状态四态由 Core 纯函数 <see cref="ThermalSourceStatus.Resolve"/> 收敛。
+    /// </summary>
+    public static ThermalSourceStatus ProbeSourceStatus()
+    {
+        var outcome = TemperatureProbe.ReadOnceDetailed();
+        return ThermalSourceStatus.Resolve(
+            outcome.Reading,
+            LibreHardwareMonitorTool.IsInstalled(LibreHardwareMonitorTool.DefaultPaths),
+            outcome.LhmNamespaceReachable);
+    }
+
     public ThermalMonitorService(int intervalSeconds, Dispatcher dispatcher)
     {
         _intervalSeconds = intervalSeconds;
@@ -95,7 +115,13 @@ public sealed class ThermalMonitorService : IDisposable
         if (_disposed || Interlocked.CompareExchange(ref _reading, 1, 0) != 0) return;
         try
         {
-            var reading = TemperatureProbe.ReadOnce();
+            // 同一条探测链（ReadOnce 的带可达性回执版）：读数喂芯片，可达性 + 安装态喂状态四态。
+            var outcome = TemperatureProbe.ReadOnceDetailed();
+            var reading = outcome.Reading;
+            _status = ThermalSourceStatus.Resolve(
+                reading,
+                LibreHardwareMonitorTool.IsInstalled(LibreHardwareMonitorTool.DefaultPaths),
+                outcome.LhmNamespaceReachable);
             if (_disposed) return;
             var hadData = Latest is not null;
             Latest = reading;

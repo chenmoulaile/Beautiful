@@ -114,4 +114,38 @@ public static class StageGrouper
             result.Add(groups[i]);
         return result;
     }
+
+    /// <summary>
+    /// 按"窗口所属显示器"把 MRU 快照拆成每屏一份（wp-macos-parity r6：每屏一条舞台条的数据面）。
+    /// <para>
+    /// 【归属口径】调用方提供 窗口句柄 → 显示器句柄 的映射（App 侧用 <c>MonitorFromWindow</c> 取，
+    /// 最小化窗口沿用其**最后一次非最小化**的归属——最小化窗口的矩形在 (-32000,-32000)，
+    /// 直查会被判到主屏，串屏）。映射缺失或值为 Zero 的窗口<b>不出现在任何一份里</b>：
+    /// 死窗/读不到矩形的窗口宁可这一拍不显示，也不猜一块屏（与几何层"取不到就跳过"同一纪律）。
+    /// 各份列表保持输入的 MRU 相对顺序（稳定划分）；句柄去重与 <see cref="Build"/> 同口径。
+    /// 每屏的分组再对各自子列走 <see cref="Build"/>（前台组是否置顶由调用方传入
+    /// "前台就在这一屏" 与否决定）。
+    /// </para>
+    /// </summary>
+    public static Dictionary<IntPtr, List<StageWindow>> SplitByMonitor(
+        IEnumerable<StageWindow> mruWindows, IReadOnlyDictionary<IntPtr, IntPtr> monitorOf)
+    {
+        ArgumentNullException.ThrowIfNull(mruWindows);
+        ArgumentNullException.ThrowIfNull(monitorOf);
+
+        var result = new Dictionary<IntPtr, List<StageWindow>>();
+        var seen = new HashSet<IntPtr>();
+        foreach (var w in mruWindows)
+        {
+            if (!seen.Add(w.Handle)) continue;   // 句柄去重（防御重报）
+            if (!monitorOf.TryGetValue(w.Handle, out var monitor) || monitor == IntPtr.Zero) continue;
+            if (!result.TryGetValue(monitor, out var list))
+            {
+                list = new List<StageWindow>();
+                result[monitor] = list;
+            }
+            list.Add(w);
+        }
+        return result;
+    }
 }

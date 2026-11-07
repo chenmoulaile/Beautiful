@@ -118,6 +118,13 @@ public enum DockHideDecision
 /// <param name="EdgeToggleVisible">双击边缘档的切换状态（App 侧保存，双击一次翻转一次）。</param>
 /// <param name="CursorInsideDock">光标在 Dock 窗口矩形内。</param>
 /// <param name="CursorAtEdge">光标在触底命中区（与自动隐藏唤出同一口径，留 2px 容差）。</param>
+/// <param name="OccludingBounds">
+/// 智能隐藏的**全量遮挡样本**（alpha.29 升级）：App 侧 EnumWindows 采到的、
+/// 已通过资格过滤（可见/未最小化/未 cloaked/非自家进程/非 shell 桌面/非工具窗）的
+/// 顶层窗口可见矩形集合。矩形为 DWM 扩展边框口径（与 <see cref="ForegroundWindow.Bounds"/> 同源）。
+/// null 或空 = 枚举不可用/无遮挡窗口，此时智能档退回只看前台的历史判据；判据本体在
+/// <see cref="DockHideModeDecider.OccluderOverlapsDock"/>（纯几何，单测穷举）。
+/// </param>
 public readonly record struct DockHideFacts(
     DockHideModeKind Mode,
     PhysicalRect DockBand,
@@ -128,7 +135,8 @@ public readonly record struct DockHideFacts(
     bool ModifierHeld,
     bool EdgeToggleVisible,
     bool CursorInsideDock,
-    bool CursorAtEdge)
+    bool CursorAtEdge,
+    IReadOnlyList<PhysicalRect>? OccludingBounds = null)
 {
     /// <summary>给定模式构造一份"什么都没发生"的事实（单测起步值）。</summary>
     public static DockHideFacts ForMode(DockHideModeKind mode) => new(
@@ -138,7 +146,8 @@ public readonly record struct DockHideFacts(
         ModifierHeld: false,
         EdgeToggleVisible: false,
         CursorInsideDock: false,
-        CursorAtEdge: false);
+        CursorAtEdge: false,
+        OccludingBounds: null);
 }
 
 /// <summary>
@@ -192,12 +201,32 @@ public static class DockHideModeDecider
             : DockHideDecision.Hidden;
 
     /// <summary>
-    /// 智能隐藏的遮挡判据：前台窗口（最顶上、用户正对着的那个）是合格窗口且与 Dock 可见面板带相交。
-    /// 以**前台**为遮挡样本是刻意的近似——被 Dock 挡住的诉求来自"它在用面前这扇窗时 Dock 多余"，
-    /// 非前台的背景窗口重叠交给触边唤回兜底；要枚举全部顶层窗口的每 80ms 扫描不属于这一档。
+    /// 智能隐藏的遮挡判据：<b>任意一扇合格窗口</b>与 Dock 可见面板带相交——前台窗口（最顶上、
+    /// 用户正对着的那个）依旧算数，App 侧 EnumWindows 采来的全量可见顶层窗口集合
+    /// （<see cref="DockHideFacts.OccludingBounds"/>）同样算数。
+    /// <para>
+    /// 【为什么保留前台判据】遮挡集合由 App 侧在 smart 档每拍枚举；枚举本身可能整体失败
+    /// （句柄风暴/异常路径返回空集），null/空集合时只看前台 = alpha.28 的历史判据，
+    /// 行为只会"变准"，不会"变坏"。两边同时命中也只判一次藏（OR 语义，不是计数）。
+    /// 取值侧的资格过滤（可见/未最小化/未 cloaked/非自家进程/非 shell 桌面/非工具窗）在 App 侧
+    /// 完成，这里只做纯几何（<see cref="RectsOverlap"/>，边界相触不算）。
+    /// </para>
     /// </summary>
     public static bool WindowOverlapsDock(in DockHideFacts f)
-        => f.Foreground is { IsEligible: true } w && RectsOverlap(w.Bounds, f.DockBand);
+        => (f.Foreground is { IsEligible: true } w && RectsOverlap(w.Bounds, f.DockBand))
+           || OccluderOverlapsDock(f);
+
+    /// <summary>
+    /// 全量遮挡样本判据：集合里任一矩形与 Dock 面板带相交即为"该让位"。
+    /// 集合为 null（枚举不可用，退回前台判据）或空（无合格窗口）恒为否。
+    /// </summary>
+    public static bool OccluderOverlapsDock(in DockHideFacts f)
+    {
+        if (f.OccludingBounds is null) return false;
+        foreach (var bounds in f.OccludingBounds)
+            if (RectsOverlap(bounds, f.DockBand)) return true;
+        return false;
+    }
 
     /// <summary>全屏档：前台窗口把 Dock 所在屏整个盖住（复用全屏避让的同一条几何，最大化不会误触发）。</summary>
     public static bool ForegroundCoversMonitor(in DockHideFacts f)

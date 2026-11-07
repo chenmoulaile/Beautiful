@@ -53,4 +53,11 @@
         <Setter Property="Fill" Value="{DynamicResource ThemeAccent}"/>
         <Setter Property="Visibility" Value="Collapsed"/>
     </Style>
+
+    <!-- Aurora 共享键的 macOS 回退（DockWindow.xaml 的条目 hover 瓦片与顶缘发丝线 Border 是两个主题
+         共用的 XAML，键必须在每个主题字典都存在——悬空教训见上方 ThemeIndicatorUnderline 注释）。
+         hover 瓦片 = 既有硬编码 #22FFFFFF 原值（macOS 视觉零回归）；发丝线 = 全透明（极光签名件
+         只在 Aurora 主题画，运行时由 AuroraTokenDictionary 按强调色重算覆写）。 -->
+    <SolidColorBrush x:Key="AurHoverTile" Color="#22FFFFFF"/>
+    <SolidColorBrush x:Key="AurHairlineBrush" Color="#00FFFFFF"/>
 </ResourceDictionary>

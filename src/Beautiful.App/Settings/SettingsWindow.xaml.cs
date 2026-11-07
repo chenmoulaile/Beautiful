@@ -23,6 +23,8 @@ using ListBoxItem = System.Windows.Controls.ListBoxItem;
 using RadioButton = System.Windows.Controls.RadioButton;                           // 同上（主题/策略/样式三组分段按钮的按 Tag 反查）
 using ComboBoxItem = System.Windows.Controls.ComboBoxItem;                        // 同上（图标处理方式三项）
 using SelectionChangedEventArgs = System.Windows.Controls.SelectionChangedEventArgs; // 同上
+using StackPanel = System.Windows.Controls.StackPanel;                            // 同上（遮罩颜色下拉色样容器）
+using TextBlock = System.Windows.Controls.TextBlock;                              // 同上（遮罩颜色下拉项文字）
 using MessageBox = System.Windows.MessageBox;
 using OpenFileDialog = Microsoft.Win32.OpenFileDialog;
 
@@ -150,6 +152,7 @@ public partial class SettingsWindow : Window
         Clock24Check.IsChecked = s.ClockUse24Hour;
         UpdateClockSample();
         SwitcherCheck.IsChecked = s.SwitcherEnabled;
+        SwitcherOpenHotkeyBox.Text = s.SwitcherOpenHotkey;   // 呼出热键（alpha.29）：规范化串回显
         FullscreenPassthroughCheck.IsChecked = s.FullscreenPassthrough;
         // 倒影是三态设置：用户没显式动过（null）时显示**当前主题默认**（现代 macOS/GNOME/鸿蒙都无倒影），
         // 勾/去勾一次就写入显式值，此后切主题不再冲掉用户的选择（AppSettings.ReflectionEnabledFor）。
@@ -157,6 +160,8 @@ public partial class SettingsWindow : Window
         BounceCheck.IsChecked = s.BounceEnabled;
         CapsuleCheck.IsChecked = s.ShowMediaCapsule;
         DockWidgetCheck.IsChecked = s.DockWidgetEnabled;
+        DockLaunchpadCheck.IsChecked = s.DockShowLaunchpad;
+        SelectByTag(DockIndicatorCombo, s.DockIndicatorStyle, "dot");
         // Dock 隐藏模式（9 档）与 modifier 档的临时显示修饰键：按 Tag 选中，未知值由 Normalized 收敛
         SelectByTag(DockHideCombo, s.DockHideMode, "off");
         SelectByTag(DockModifierBox, s.DockModifierKey, "ctrl");
@@ -165,6 +170,8 @@ public partial class SettingsWindow : Window
         DockAutoHideDelaySlider.Value = s.DockAutoHideDelayMs;   // ValueChanged 只刷标签（_loading 屏蔽应用）
         ScreenCornersCheck.IsChecked = s.ScreenCornersEnabled;
         ScreenCornerRadiusSlider.Value = s.ScreenCornerRadius;   // 同上
+        LoadScreenCornerColorOptions();    // 遮罩颜色（alpha.29）：预设下拉 + hex 应用框
+        LoadScreenCornerExcludeOptions();  // 每屏排除（alpha.29）：单选即整表替换
         WindowOpenAnimCheck.IsChecked = s.WindowOpenAnimation;
         WindowCloseAnimCheck.IsChecked = s.WindowCloseAnimation;
         DockEdgeCombo.SelectedIndex = s.DockEdge switch { "left" => 1, "right" => 2, _ => 0 };
@@ -791,6 +798,17 @@ public partial class SettingsWindow : Window
         App.ApplySwitcherHotkey(SettingsService.Current.SwitcherHotkey, on);
     }
 
+    /// <summary>呼出热键"应用"（alpha.29 残项清零）：规范化（Core 与加载侧同一套规则）→ 落盘 +
+    /// 消息窗热键重注册 → 规范串回显（"Ctrl+`"会被写成 ctrl+grave，与启动器热键行同一姿态）。</summary>
+    private void SwitcherOpenHotkey_Apply(object sender, RoutedEventArgs e)
+    {
+        if (_loading) return;
+        var canonical = Beautiful.Core.Launcher.LauncherHotkey.CanonicalizeWithFallback(
+            SwitcherOpenHotkeyBox.Text, Beautiful.Core.Launcher.LauncherHotkey.DefaultSwitcherOpen);
+        App.ApplySwitcherOpenHotkey(canonical);
+        SwitcherOpenHotkeyBox.Text = SettingsService.Current.SwitcherOpenHotkey;
+    }
+
     // ---------- 媒体 ----------
 
     /// <summary>Dock 停靠边（实验）：底部走标准 AppBar；左右走竖排面板。</summary>
@@ -891,6 +909,111 @@ public partial class SettingsWindow : Window
         ScheduleSave();
     }
 
+    // ---------- 屏幕圆角：遮罩颜色 + 每屏排除（alpha.29 残项清零） ----------
+
+    /// <summary>遮罩颜色下拉项（含预设色样；预设表与 settingsContract 同源 Core PresetMaskColors）。</summary>
+    private static ComboBoxItem MakeMaskColorItem(string name, string hex)
+    {
+        // Orientation 全限定：UseWindowsForms 的隐式全局 using 带入 System.Windows.Forms.Orientation，
+        // 裸写会 CS0104（本文件其余控件别名同一条纪律）。
+        var panel = new StackPanel { Orientation = System.Windows.Controls.Orientation.Horizontal, VerticalAlignment = VerticalAlignment.Center };
+        try
+        {
+            var swatch = new System.Windows.Shapes.Rectangle
+            {
+                Width = 14, Height = 14, RadiusX = 3, RadiusY = 3,
+                Fill = AccentBrush(hex),
+                Stroke = AccentBrush("#33888888"),
+                VerticalAlignment = VerticalAlignment.Center,
+            };
+            panel.Children.Add(swatch);
+        }
+        catch { /* 色样画不出来只少一块色块，下拉本身照常工作 */ }
+        panel.Children.Add(new TextBlock { Text = name, Margin = new Thickness(8, 0, 0, 0), VerticalAlignment = VerticalAlignment.Center });
+        return new ComboBoxItem { Content = panel, Tag = hex };
+    }
+
+    private void LoadScreenCornerColorOptions()
+    {
+        var current = SettingsService.Current.ScreenCornerMaskColor;
+        ScreenCornerMaskColorBox.Items.Clear();
+        foreach (var (name, hex) in Beautiful.Core.Layout.ScreenCornerPlan.PresetMaskColors)
+            ScreenCornerMaskColorBox.Items.Add(MakeMaskColorItem(name, hex));
+        ScreenCornerMaskColorBox.Items.Add(MakeMaskColorItem("自定义（用右侧输入框）", current));
+        SelectMaskColorItem(current);
+        ScreenCornerMaskColorHexBox.Text = current;   // Canonical 后的原文（#AARRGGBB）
+    }
+
+    private void SelectMaskColorItem(string canonicalHex)
+    {
+        foreach (ComboBoxItem item in ScreenCornerMaskColorBox.Items)
+            if ((item.Tag as string)?.Equals(canonicalHex, StringComparison.OrdinalIgnoreCase) == true)
+            {
+                ScreenCornerMaskColorBox.SelectedItem = item;
+                return;
+            }
+        ScreenCornerMaskColorBox.SelectedIndex = -1;   // 自定义值：不选中预设项
+    }
+
+    private void ScreenCornerMaskColor_Changed(object sender, SelectionChangedEventArgs e)
+    {
+        if (_loading || ScreenCornerMaskColorBox.SelectedItem is not ComboBoxItem { Tag: string hex }) return;
+        ApplyScreenCornerMaskColor(hex);
+    }
+
+    private void ScreenCornerMaskColor_Apply(object sender, RoutedEventArgs e)
+        => ApplyScreenCornerMaskColor(ScreenCornerMaskColorHexBox.Text);
+
+    /// <summary>遮罩色统一出口：Core 规范化（非法回落纯黑）→ 落盘 → 立即对账（改色即换刷，无需重启）。</summary>
+    private void ApplyScreenCornerMaskColor(string? rawHex)
+    {
+        var canonical = Beautiful.Core.Layout.ScreenCornerPlan.CanonicalMaskColor(rawHex);
+        ScreenCornerMaskColorHexBox.Text = canonical;
+        if (canonical.Equals(SettingsService.Current.ScreenCornerMaskColor, StringComparison.OrdinalIgnoreCase))
+        {
+            SelectMaskColorItem(canonical);   // 无变化也要把下拉对齐（自定义框输入了预设值时）
+            return;
+        }
+        SettingsService.UpdateAndSave(SettingsService.Current with { ScreenCornerMaskColor = canonical });
+        SelectMaskColorItem(canonical);
+        App.ApplyScreenCorners();
+    }
+
+    /// <summary>每屏排除下拉的选项：不排除 / 主屏 / 各序号屏（标签带真实分辨率，与 Dock 多屏下拉同源）。</summary>
+    public sealed record ScreenCornerExcludeOption(string Value, string Label);
+
+    private void LoadScreenCornerExcludeOptions()
+    {
+        var items = new List<ScreenCornerExcludeOption> { new("", "不排除（全部屏幕画圆角）") };
+        foreach (var option in MonitorGeometry.Options())
+            if (option.Value != "auto") items.Add(new ScreenCornerExcludeOption(option.Value, $"排除：{option.Label}"));
+        // 多屏名单的回显占位：只能整体替换，此处选择不动作（见 Changed 处理器）
+        items.Add(new("__custom__", "（多屏排除列表，见 settings.json）"));
+        ScreenCornersExcludeBox.DisplayMemberPath = nameof(ScreenCornerExcludeOption.Label);
+        ScreenCornersExcludeBox.SelectedValuePath = nameof(ScreenCornerExcludeOption.Value);
+        ScreenCornersExcludeBox.ItemsSource = items;
+        var list = SettingsService.Current.ScreenCornersMonitors;
+        ScreenCornersExcludeBox.SelectedValue = list.Count switch
+        {
+            0 => "",
+            1 => list[0],
+            _ => "__custom__",
+        };
+    }
+
+    private void ScreenCornersExclude_Changed(object sender, SelectionChangedEventArgs e)
+    {
+        if (_loading || ScreenCornersExcludeBox.ItemsSource is null) return;
+        var value = ScreenCornersExcludeBox.SelectedValue as string ?? "";
+        if (value == "__custom__") return;   // 回显占位：多屏名单只从 JSON 改，下拉不提供编辑
+        IReadOnlyList<string> list = value.Length > 0 ? [value] : [];
+        var current = SettingsService.Current.ScreenCornersMonitors;
+        if (current.Count == list.Count && (list.Count == 0 || current[0] == list[0])) return; // 重复事件不回写
+        SettingsService.UpdateAndSave(SettingsService.Current with { ScreenCornersMonitors = list });
+        App.ApplyScreenCorners();
+        Logger.Info($"屏幕圆角：排除名单已更新（{(list.Count == 0 ? "无，全部屏幕画圆角" : $"仅排除 {list[0]}")}）");
+    }
+
     /// <summary>Dock 小组件开关（Phase 7-T3）：立即重排行尾，不需要重启 Dock。</summary>
     private void DockWidget_Changed(object sender, RoutedEventArgs e)
     {
@@ -898,6 +1021,22 @@ public partial class SettingsWindow : Window
         var on = DockWidgetCheck.IsChecked == true;
         SettingsService.UpdateAndSave(SettingsService.Current with { DockWidgetEnabled = on });
         App.ApplyDockWidget(on);
+    }
+
+    private void DockLaunchpad_Changed(object sender, RoutedEventArgs e)
+    {
+        if (_loading) return;
+        var on = DockLaunchpadCheck.IsChecked == true;
+        SettingsService.UpdateAndSave(SettingsService.Current with { DockShowLaunchpad = on });
+        App.ApplyDockLaunchpad(on);
+    }
+
+    private void DockIndicator_Changed(object sender, SelectionChangedEventArgs e)
+    {
+        if (_loading) return;
+        var value = TagOf(DockIndicatorCombo.SelectedItem) ?? "dot";
+        SettingsService.UpdateAndSave(SettingsService.Current with { DockIndicatorStyle = value });
+        App.ApplyDockIndicatorStyle();
     }
 
     private void Capsule_Changed(object sender, RoutedEventArgs e)
@@ -969,6 +1108,14 @@ public partial class SettingsWindow : Window
         if (s.SwitcherEnabled)
             App.ApplySwitcherHotkey(s.SwitcherHotkey, s.FullscreenPassthrough);
         App.ApplyDockLayout();
+        // alpha.29 两键的运行态重放（接线补齐）：恢复默认把 DockShowLaunchpad/DockWidgetEnabled
+        // 拉回 true（默认），但勾选态回填发生在 LoadState（_loading 屏蔽回写）、
+        // RefreshLayoutFromSettings 只刷参数不重建条目集合——不显式重放的话，运行中的 Dock
+        // 会停在"启动台格/小组件缺席"的旧形态。ApplyDockLaunchpad 内部 Reconcile 最小差异重排，
+        // 幂等；指示样式由上面的 ThemeManager.Apply → DockWindow.OnThemeChanged →
+        // ApplyIndicatorStyle 连带重放（ThemeManager.Apply 每次都触发 ThemeChanged），无需单独调。
+        App.ApplyDockLaunchpad(s.DockShowLaunchpad);
+        App.ApplyDockWidget(s.DockWidgetEnabled);
         App.ApplyScreenCorners();   // 恢复默认后圆角遮罩回到"关"：对账即撤除全部遮罩窗
         App.ApplyDockAutoHideOptions();   // 恢复默认后唤出方式回到 touch
         _mediaVm.CapsuleVisible = s.ShowMediaCapsule;
@@ -978,6 +1125,7 @@ public partial class SettingsWindow : Window
         // 台前调度卡自足（勾选即写即生效），但它只在 Loaded 时回读一次：
         // 恢复默认把 StageManagerEnabled 重置为 false 后，这里显式刷新勾选态，避免 UI 与实际不一致。
         StageManagerCard.ReloadFromSettings();
+        ThermalCard.ReloadFromSettings();   // 温度卡同理：恢复默认把 ThermalChipEnabled/间隔拉回默认，勾选态回读
     }
 
     // ---------- 固定应用 ----------

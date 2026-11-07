@@ -9,20 +9,13 @@
     <!-- 顶栏"系统托盘图标区"（用户要求：像 Windows 自己的隐藏图标区那样，my dock finder 也做这个）。
          【材质与 WiFi 面板/控制中心完全同一套】Shell.Margin 那一圈是给自绘投影留位（宿主按 IPopupShadow
          把它从锚点偏移里扣掉），Card 圆角 + 亮边 + 投影，玻璃感来自宿主的抓屏模糊（IBackdropAware），
-         拿不到模糊时铺 CardFillSolid 实心卡底 —— 分层窗口上"没画到"就是能看穿到桌面的洞。
+         拿不到模糊时铺 AurPopupFillSolid 实心卡底 —— 分层窗口上"没画到"就是能看穿到桌面的洞。
          资源块的值与 ControlCenterPanel.xaml 同源，不另发明一套观感。
          【图标格全部由代码构建】每格的"有图/无图/能不能点/为什么不能点"都不同，写进 DataTemplate 的
          触发器比写在代码里更难读（同 WiFi 面板列表行的取舍）。 -->
     <UserControl.Resources>
-        <!-- 有模糊时压在模糊之上的半透明深色遮罩：保证白字在任何壁纸上都有对比度 -->
-        <LinearGradientBrush x:Key="CardFillBlur" StartPoint="0,0" EndPoint="0,1">
-            <GradientStop Color="#8A232327" Offset="0"/>
-            <GradientStop Color="#9919191C" Offset="1"/>
-        </LinearGradientBrush>
-        <LinearGradientBrush x:Key="CardFillSolid" StartPoint="0,0" EndPoint="0,1">
-            <GradientStop Color="#F82C2C2F" Offset="0"/>
-            <GradientStop Color="#FB1F1F23" Offset="1"/>
-        </LinearGradientBrush>
+        <!-- 卡底/遮罩/内高光读 Aur* 弹层语义键（统一弹层底，与控制中心同源）：macOS 主题下是
+             原就地硬编码的同值兜底，Aurora 主题下亮色走亮弹层底。 -->
         <DropShadowEffect x:Key="CardShadow" BlurRadius="32" ShadowDepth="9" Direction="270"
                           Color="#000000" Opacity="0.6"/>
 
@@ -81,20 +74,13 @@
 
     <Grid x:Name="Shell" Margin="20,18,20,24">
         <Border x:Name="Card" Width="330" CornerRadius="12" BorderThickness="1" BorderBrush="#2AFFFFFF"
-                Background="{StaticResource CardFillSolid}" Effect="{StaticResource CardShadow}">
+                Background="{DynamicResource AurPopupFillSolid}" Effect="{StaticResource CardShadow}">
             <Grid>
                 <Border x:Name="Scrim" CornerRadius="11" IsHitTestVisible="False" Background="Transparent"/>
                 <Border x:Name="TintLayer" CornerRadius="11" IsHitTestVisible="False"
                         Background="{DynamicResource ThemeBackdropTint}"/>
-                <Border x:Name="InnerGlow" CornerRadius="11" IsHitTestVisible="False">
-                    <Border.Background>
-                        <LinearGradientBrush StartPoint="0,0" EndPoint="0,1">
-                            <GradientStop Color="#14FFFFFF" Offset="0"/>
-                            <GradientStop Color="#05FFFFFF" Offset="0.35"/>
-                            <GradientStop Color="#00FFFFFF" Offset="1"/>
-                        </LinearGradientBrush>
-                    </Border.Background>
-                </Border>
+                <Border x:Name="InnerGlow" CornerRadius="11" IsHitTestVisible="False"
+                        Background="{DynamicResource AurInnerGlowBrush}"/>
 
                 <StackPanel Margin="13,11,13,9">
                     <!-- 真实托盘像素（P4-T8 截屏路线，实验）：系统托盘可见时把它的像素原样贴在这里。

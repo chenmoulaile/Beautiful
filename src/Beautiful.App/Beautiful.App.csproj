@@ -18,6 +18,11 @@
     <Resource Include="Assets\Fonts\*.otf" />
     <Resource Include="Assets\Fonts\*.ttf" />
   </ItemGroup>
+  <!-- Inter（Aurora 主题，OFL 1.1 可合法再分发）：静态 OTF 实例在 Assets/Fonts/Inter/ 子目录
+       （SDK 通配非递归，必须单列）。存在才编入、缺失跳过——公开仓库携带入库，CI 与本机一致。 -->
+  <ItemGroup Condition="Exists('Assets\Fonts\Inter')">
+    <Resource Include="Assets\Fonts\Inter\*.otf" />
+  </ItemGroup>
   <!-- macOS Tahoe 26 图标集（现 110 张 PNG，256×256 与 1024×1024 混装）：整张 canvas 直接画，
        内容只占画布约 84% 是 macOS 官方比例，按 ink 裁切会毁掉观感；1024 原版由 MacIconCatalog
        加载端统一缩到 256。通配声明：新增 PNG 落目录重编译即编入。文件存在才编进资源，

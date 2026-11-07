@@ -9,7 +9,7 @@
          卡底取 ThemeDockBackground（半透明深色）：背板胜出时透出系统模糊（质感），
          无模糊降级路径宿主已铺不透明 tint 兜底 → 叠在其上仍可读、绝不露黑。
          生命周期短暂（点击打开、失焦即关）→ 构造期取当前主题即可，无需订阅 ThemeChanged。 -->
-    <Border Background="{DynamicResource ThemeDockBackground}" CornerRadius="10"
+    <Border Background="{DynamicResource ThemeDockBackground}" CornerRadius="{DynamicResource MacPopupCornerRadius}"
             Padding="12,10,12,12" Width="248">
         <StackPanel>
             <!-- 头部：‹ 月份 › -->

@@ -16,24 +16,20 @@
          【为什么必须是分层窗口】真机取证（Finder/QuickLookWindow.xaml 头注释）：这台真机
          （Win11 26300）上 WPF 非分层窗口整机黑屏，只有分层窗口（Dock/顶栏/切换器同款路径）
          能出画面——圆角因此由根 Border 的 CornerRadius 自绘（与切换面板同法），不依赖 DWM 圆角。
-         【实况缩略图为什么不在本窗口上】分层窗口（WS_EX_LAYERED）上 DWM 缩略图不合成
-         （ThumbnailPreview 头注释的硬条件），所以实时画面落在独立玻璃弹层
-         （StageThumbHostWindow，owner=本窗口，浮在缩略图列正上方）。卡片的 ThumbArea
-         只是占位底色：弹层玻璃透出它，DWM 正常合成时实况画面覆盖它，两种结局都无黑框。
-         【样式自包含】卡片渐变/内高光/占位底色都在本文件 Window.Resources 里，不依赖宿主主题
-         键（ThemeAccent / ThemeFontFamily 除外——它们是全局主题键，与 Dock/切换器同一取色口径）。 -->
+         【卡片画面为什么走静帧链】分层窗口（WS_EX_LAYERED）上 DWM 缩略图不合成
+         （ThumbnailPreview 头注释的硬条件），r6 曾改走独立玻璃弹层；round5 真机验收实拍该通道
+         在 26300 上注册全 0 却不合成像素（缩略矩形纯黑）——卡片画面遂改走 StageFramePump
+         静帧链（PrintWindow 抓帧 → 行模型 Frame）：ThumbArea 里现在是 WPF Image，抓到帧画帧、
+         没抓到露占位底色，绝不黑框（取证与取舍见 StageBarWindow.xaml.cs 头注释）。
+         【样式自包含】卡片渐变/占位底色在本文件 Window.Resources 里；内高光改读 AurInnerGlowBrush
+         （Aur* 弹层语义键，随主题/亮暗换色；两份主题 token 字典都写它，不悬空）。
+         ThemeAccent / ThemeFontFamily 同为全局主题键，与 Dock/切换器同一取色口径。 -->
 
     <Window.Resources>
         <!-- 卡底：与切换面板同一视觉语言的实心渐变（分层窗口上"没画到"= 看穿到桌面，绝不允许）。 -->
         <LinearGradientBrush x:Key="StageCardFill" StartPoint="0,0" EndPoint="0,1">
             <GradientStop Color="#F62C2C2F" Offset="0"/>
             <GradientStop Color="#FA1B1B1F" Offset="1"/>
-        </LinearGradientBrush>
-        <!-- 顶部内高光：macOS 玻璃感的 "light top edge"（与 FluentMenu / 切换面板同一视觉语言） -->
-        <LinearGradientBrush x:Key="StageInnerGlow" StartPoint="0,0" EndPoint="0,1">
-            <GradientStop Color="#19FFFFFF" Offset="0"/>
-            <GradientStop Color="#06FFFFFF" Offset="0.42"/>
-            <GradientStop Color="#00FFFFFF" Offset="1"/>
         </LinearGradientBrush>
         <!-- 缩略图预留区底色：DWM 实况画面之下的一层（注册失败/不合成时的"空位"观感） -->
         <SolidColorBrush x:Key="StageThumbBackdrop" Color="#FF101013"/>
@@ -44,7 +40,7 @@
         <Grid>
             <!-- 叠放顺序即材质顺序：卡底渐变 → 主题 tint → 内高光 → 卡片列表 -->
             <Border IsHitTestVisible="False" Background="{DynamicResource ThemeBackdropTint}"/>
-            <Border IsHitTestVisible="False" Background="{StaticResource StageInnerGlow}"/>
+            <Border IsHitTestVisible="False" Background="{DynamicResource AurInnerGlowBrush}"/>
 
             <!-- 卡片列：每"应用组"一张卡。数量上限 = StageGrouper.DefaultMaxGroups，
                  且按显示器工作区高度再夹一道（超出按 MRU 丢弃，下拍对账自然回来）。 -->
@@ -79,10 +75,13 @@
                                                VerticalAlignment="Center"
                                                Foreground="{DynamicResource ThemeTextPrimary}"/>
                                 </StackPanel>
-                                <!-- 实况缩略图预留区：矩形交给 DWM 合成（StageThumbStrip），
-                                     里面不排 WPF 内容（层叠规则见文件头注释） -->
+                                <!-- 缩略画面区：StageFramePump 抓到的源窗口静帧（round5 缺陷 4 后
+                                     DWM 实况弹层退役）；没抓到帧时 Source 为 null，露占位底色 -->
                                 <Border x:Name="ThumbArea" Height="100" Margin="7,0,7,7" CornerRadius="4"
-                                        Background="{StaticResource StageThumbBackdrop}"/>
+                                        Background="{StaticResource StageThumbBackdrop}">
+                                    <Image Source="{Binding Frame}" Stretch="Uniform" Margin="3"
+                                           HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                                </Border>
                             </StackPanel>
                         </Border>
                         <DataTemplate.Triggers>

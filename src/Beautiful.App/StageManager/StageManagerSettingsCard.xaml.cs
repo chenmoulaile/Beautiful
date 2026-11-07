@@ -7,7 +7,7 @@ using UserControl = System.Windows.Controls.UserControl;
 namespace Beautiful.App.StageManager;
 
 /// <summary>
-/// 台前调度设置卡（wp-macos-parity r5）：设置窗口宿主里的自足开关行。
+/// 台前调度设置卡（wp-macos-parity r6）：设置窗口宿主里的自足开关行。
 /// <para>
 /// 【接线契约（settingsContract）】宿主只需把本控件插进内容区（建议放在"窗口切换器"分组
 /// 之后），不需要注册事件、不需要资源合并——样式全部内含，取色走全局主题键。
@@ -15,6 +15,11 @@ namespace Beautiful.App.StageManager;
 /// <c>StageManagerEnabled</c> → <c>App.ApplyStageManager()</c> 立即生效（开 = 启动跟踪 +
 /// 显出贴边小条；关 = 撤窗 + 停跟踪，无残留）。回读：Loaded 时从
 /// <c>SettingsService.Current.StageManagerEnabled</c> 同步勾选态（防抖标志避免回写）。
+/// </para>
+/// <para>
+/// 【滑动动画开关（r6）】第二行勾选写 <c>StageManagerSlideAnimation</c>：只落盘，
+/// 不调 ApplyStageManager——动画与否在下一次展开/收起时生效（条的生命周期与它无关，
+/// 重启跟踪反而会白撤一遍窗口）。回读同走 ReloadFromSettings。
 /// </para>
 /// </summary>
 public partial class StageManagerSettingsCard : UserControl
@@ -34,7 +39,11 @@ public partial class StageManagerSettingsCard : UserControl
     public void ReloadFromSettings()
     {
         _suppress = true;
-        try { EnabledCheck.IsChecked = SettingsService.Current.StageManagerEnabled; }
+        try
+        {
+            EnabledCheck.IsChecked = SettingsService.Current.StageManagerEnabled;
+            SlideCheck.IsChecked = SettingsService.Current.StageManagerSlideAnimation;
+        }
         finally { _suppress = false; }
     }
 
@@ -46,5 +55,14 @@ public partial class StageManagerSettingsCard : UserControl
         SettingsService.UpdateAndSave(SettingsService.Current with { StageManagerEnabled = enabled });
         App.ApplyStageManager();
         Logger.Info($"台前调度：设置页开关 → {(enabled ? "开" : "关")}");
+    }
+
+    /// <summary>滑动动画开关：写设置即生效（下一次展开/收起起按新值；无需重启跟踪）。</summary>
+    private void OnSlideToggleChanged(object sender, RoutedEventArgs e)
+    {
+        if (_suppress) return;
+        var animate = SlideCheck.IsChecked == true;
+        SettingsService.UpdateAndSave(SettingsService.Current with { StageManagerSlideAnimation = animate });
+        Logger.Info($"台前调度：滑动动画 → {(animate ? "开" : "关（瞬时两态）")}");
     }
 }

@@ -18,9 +18,12 @@
     </UserControl.Resources>
 
     <StackPanel>
-        <CheckBox x:Name="EnabledCheck" Content="台前调度（左侧舞台条）"
+        <CheckBox x:Name="EnabledCheck" Content="台前调度（每屏一条舞台条）"
                   Checked="OnToggleChanged" Unchecked="OnToggleChanged"/>
+        <CheckBox x:Name="SlideCheck" Content="展开/收起使用滑动动画（时长与缓动跟随主题动效）"
+                  Margin="0,6,0,0"
+                  Checked="OnSlideToggleChanged" Unchecked="OnSlideToggleChanged"/>
         <TextBlock Style="{StaticResource StageHintText}" Margin="0,5,0,0"
-                   Text="对标 macOS 台前调度：屏幕左缘常驻一条收起的舞台条，鼠标靠近展开。卡片显示各应用最近窗口的实况缩略图（DWM 合成，不抓帧），点击即切到该窗口，最小化的窗口自动还原；当前前台应用的卡片带强调色描边。鼠标离开或切换成功后自动收回；前台为真全屏（游戏/视频）时整条让位。"/>
+                   Text="对标 macOS 台前调度：每块显示器的左缘各常驻一条收起的舞台条，鼠标靠近整条滑出。卡片显示各应用最近窗口的实况缩略图（DWM 合成，不抓帧），点击即切到该窗口，最小化的窗口自动还原；同应用开了多个窗口时，点卡片会展开该组的全部窗口列，再点选要去的那个。当前前台应用所在屏的卡片带强调色描边。鼠标离开或切换成功后自动收回，按 Esc 随时全局收起；前台为真全屏（游戏/视频）时该屏的条整条让位。"/>
     </StackPanel>
 </UserControl>

@@ -71,6 +71,40 @@
             <Setter Property="VerticalContentAlignment" Value="Center" />
         </Style>
 
+        <!-- 图集网格的格子按钮（alpha.29 残项清零）：**必须显式给模板**。宿主设置窗口带一个隐式
+             Button 样式（Height=28 / Padding=14,0 / 硬编码边框与 CornerRadius=6 的模板），资源查找会
+             穿过 UserControl 落到任何未写 Style 的按钮上——图集格子此前正中此枪：56×56 的格子里被
+             撑出 28px 水平内边距，44px 缩略图只剩约 26px 的可视槽，右半被裁（真机取证
+             docs/evidence/round4/theme-grid-clipped-zoom.png：每格恰好剩约 60%）。本控件头注释承诺
+             "样式全部就地定义、不引用宿主资源字典"，这里把承诺补全：零内边距、无边框、内容居中。 -->
+        <Style x:Key="GalleryCellButton" TargetType="Button">
+            <Setter Property="Width" Value="56" />
+            <Setter Property="Height" Value="56" />
+            <Setter Property="Margin" Value="2" />
+            <Setter Property="Padding" Value="0" />
+            <Setter Property="Background" Value="Transparent" />
+            <Setter Property="BorderThickness" Value="0" />
+            <Setter Property="Cursor" Value="Hand" />
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Button">
+                        <Border x:Name="Root" Background="{TemplateBinding Background}"
+                                CornerRadius="6" Padding="0">
+                            <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center" />
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="Root" Property="Background" Value="{StaticResource RowBgHover}" />
+                            </Trigger>
+                            <Trigger Property="IsPressed" Value="True">
+                                <Setter TargetName="Root" Property="Background" Value="{StaticResource RowBgSelected}" />
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+
         <Style x:Key="CellItem" TargetType="ListBoxItem">
             <Setter Property="Foreground" Value="{StaticResource Fg}" />
             <Setter Property="Background" Value="Transparent" />
@@ -195,10 +229,11 @@
                                 </ItemsControl.ItemsPanel>
                                 <ItemsControl.ItemTemplate>
                                     <DataTemplate>
-                                        <Button Width="56" Height="56" Margin="2" Background="Transparent"
-                                                BorderThickness="0" Cursor="Hand" ToolTip="{Binding Key}"
+                                        <Button Style="{StaticResource GalleryCellButton}"
+                                                ToolTip="{Binding Key}"
                                                 Click="GalleryItem_Click">
                                             <Image Source="{Binding Thumb}" Width="44" Height="44"
+                                                   HorizontalAlignment="Center" VerticalAlignment="Center"
                                                    RenderOptions.BitmapScalingMode="HighQuality" />
                                         </Button>
                                     </DataTemplate>

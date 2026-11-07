@@ -25,6 +25,34 @@
         <!-- 图标烘焙转换器（v3 T6）：条目 → 当前 (源,尺寸,主题,DPI) 下已烘好并冻结的位图。
              必须声明在下面的模板之前（StaticResource 向后不可见）。 -->
         <dock:IconBakedSourceConverter x:Key="IconBaked"/>
+        <!-- Aurora Dock 签名件（窗口级，两主题共用本 XAML）：
+             · AurDockEdgeBrush = 面板描边的「接地感」竖向渐变（上 #33FFFFFF == MacDockBorder 暗值 →
+               下 #0D000000），1px 描边粗细不变；是否换用由 DockWindow.ApplyPanelEdgeBrush 按主题分派
+               （macOS 维持 MacDockBorder 的 DynamicResource 引用，亮暗/accent 变更照旧即时重解析）。
+             · AurIndicatorPill / AurIndicatorDotOff = 运行指示的 KDE 药丸变体与圆点关态（设置项
+               DockIndicatorStyle=pill 时由 DockWindow.ApplyIndicatorStyle 以窗口字典覆写
+               ThemeIndicatorDot/ThemeIndicatorUnderline 两键；dot 档移除覆写，样式仍归各主题字典）。 -->
+        <LinearGradientBrush x:Key="AurDockEdgeBrush" StartPoint="0,0" EndPoint="0,1">
+            <GradientStop Color="#33FFFFFF" Offset="0"/>
+            <GradientStop Color="#0D000000" Offset="1"/>
+        </LinearGradientBrush>
+        <Style x:Key="AurIndicatorDotOff" TargetType="Ellipse">
+            <Setter Property="Visibility" Value="Collapsed"/>
+        </Style>
+        <Style x:Key="AurIndicatorPill" TargetType="Rectangle">
+            <Setter Property="Fill" Value="{DynamicResource ThemeAccent}"/>
+            <Setter Property="Visibility" Value="Collapsed"/>
+            <Style.Triggers>
+                <DataTrigger Binding="{Binding Kind}" Value="Window">
+                    <Setter Property="Visibility" Value="Visible"/>
+                </DataTrigger>
+                <!-- 与圆点同款双触发：「一格 = 一个应用」合并后固定项背后有在跑的窗口仍要亮药丸，
+                     但不改 Kind（那会换掉右键菜单并随窗口关闭而消失）。 -->
+                <DataTrigger Binding="{Binding IsRunning}" Value="True">
+                    <Setter Property="Visibility" Value="Visible"/>
+                </DataTrigger>
+            </Style.Triggers>
+        </Style>
         <!-- 通用条目模板（Pinned/Window/RecycleBin）：图标 + 缺失回退字形 + 运行指示 + 悬停高亮。
              Media 条目由 MediaItemTemplate 接管（DockItemTemplateSelector 分派）。 -->
         <DataTemplate x:Key="DefaultItemTemplate">
@@ -83,7 +111,7 @@
                            HorizontalAlignment="Center" VerticalAlignment="Bottom" Margin="0,0,0,-4"
                            Panel.ZIndex="1"
                            Style="{DynamicResource ThemeIndicatorUnderline}"/>
-                <Border x:Name="Hover" CornerRadius="12" Background="#22FFFFFF">
+                <Border x:Name="Hover" CornerRadius="12" Background="{DynamicResource AurHoverTile}">
                     <Border.Style>
                         <Style TargetType="Border">
                             <Setter Property="Visibility" Value="Collapsed"/>
@@ -126,7 +154,7 @@
                 <mw:MediaCapsule
                     DataContext="{Binding MediaVm, RelativeSource={RelativeSource AncestorType=dock:DockWindow}}"/>
                 <!-- 悬停高亮；不参与命中（放行胶囊内部按钮的点击） -->
-                <Border x:Name="Hover" CornerRadius="16" Background="#22FFFFFF" IsHitTestVisible="False"
+                <Border x:Name="Hover" CornerRadius="16" Background="{DynamicResource AurHoverTile}" IsHitTestVisible="False"
                         Visibility="Collapsed"/>
             </Grid>
             <DataTemplate.Triggers>
@@ -166,9 +194,9 @@
                     <TextBlock Text="{Binding Detail}" FontSize="11.5" Margin="0,1,0,0"
                                HorizontalAlignment="Center" MaxWidth="106"
                                TextTrimming="CharacterEllipsis"
-                               Foreground="{DynamicResource ThemeTextSecondary}"/>
+                               Foreground="{DynamicResource MacTextSecondary}"/>
                 </StackPanel>
-                <Border x:Name="Hover" CornerRadius="14" Background="#22FFFFFF"
+                <Border x:Name="Hover" CornerRadius="14" Background="{DynamicResource AurHoverTile}"
                         IsHitTestVisible="False" Visibility="Collapsed"/>
             </Grid>
             <DataTemplate.Triggers>
@@ -202,10 +230,22 @@
                 Background="Transparent" Visibility="Collapsed"/>
         <Grid x:Name="PanelHost" HorizontalAlignment="Center" VerticalAlignment="Bottom"
               TextElement.FontFamily="{DynamicResource ThemeFontFamily}">
+            <!-- Aurora 首现弹入的位移轨（+12 DIP → 0，KeySpline 0.34,1.56,0.64,1 / 180ms）：
+                 只动视觉变换，AppBar 窗口矩形与命中几何不参与（见 DockWindow.PlayPanelEntrance）。
+                 非 Aurora 主题不启动该动画，Y 恒 0 = 既有"瞬间出现"。 -->
+            <Grid.RenderTransform>
+                <TranslateTransform x:Name="PanelEnterShift" Y="0"/>
+            </Grid.RenderTransform>
         <Border x:Name="DockPanelRoot" Padding="10,6"
                 CornerRadius="{DynamicResource ThemePanelCornerRadius}"
                 Background="{DynamicResource ThemeDockGlassBackground}"
-                BorderBrush="{DynamicResource MacDockBorder}" BorderThickness="1"/>
+                BorderBrush="{DynamicResource MacDockBorder}" BorderThickness="1">
+            <!-- Aurora 顶缘发丝线（高 1.5 DIP，AurHairlineBrush 随强调色即时重解析；macOS 主题该键
+                 回退全透明 → 不画，零回归）。顶对齐在面板内：天然位于倒影带之外（倒影元素是逐条目
+                 最后 Add 进条目 Grid 的，与这里无遮挡冲突）。IsHitTestVisible=False：不拦截点击。 -->
+            <Border Height="1.5" VerticalAlignment="Top"
+                    Background="{DynamicResource AurHairlineBrush}" IsHitTestVisible="False"/>
+        </Border>
         <!-- 左右停靠（实验）：竖排面板。复用条目模板，但不参与放大场/倒影/拖放排序——
              那套几何是水平轴写的，强行复用会把 Dock 主路径一起改坏。 -->
         <ItemsControl x:Name="VerticalList" Visibility="Collapsed" Width="112"

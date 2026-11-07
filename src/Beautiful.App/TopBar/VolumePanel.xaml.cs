@@ -50,10 +50,10 @@ public partial class VolumePanel : UserControl, IBackdropAware, IPopupShadow
         if (blur is not null)
         {
             Card.Background = blur;
-            Scrim.Background = (Brush)Resources["CardFillBlur"];
+            Scrim.Background = (Brush)FindResource("AurPopupFillBlur");
             return;
         }
-        Card.Background = (Brush)Resources["CardFillSolid"];
+        Card.Background = (Brush)FindResource("AurPopupFillSolid");
         Scrim.Background = Brushes.Transparent;
     }
 

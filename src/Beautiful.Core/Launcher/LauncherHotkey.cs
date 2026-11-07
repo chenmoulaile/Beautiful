@@ -40,6 +40,13 @@ public static class LauncherHotkey
     /// <summary>默认组合：系统未占用、不含 Win 键、需要两个修饰键（不易误触）。</summary>
     public const string Default = "ctrl+alt+space";
 
+    /// <summary>
+    /// 切换器呼出热键（alpha.29）默认组合：Ctrl + `（grave）。
+    /// 与启动器默认（ctrl+alt+space）、启动台 F4、系统 IME/布局切换（Ctrl/Win/Alt+Space）都不冲突；
+    /// 用户改键时避开这三个既有绑定即可（解析侧不硬拦，注册占用时只记日志）。
+    /// </summary>
+    public const string DefaultSwitcherOpen = "ctrl+grave";
+
     /// <summary>认识的主键名（App 侧的 VK 映射与此表一一对应；不在表内的名字一律解析失败）。</summary>
     public static IReadOnlyList<string> KeyNames { get; } =
     [
@@ -50,10 +57,14 @@ public static class LauncherHotkey
         "f1", "f2", "f3", "f4", "f5", "f6", "f7", "f8", "f9", "f10", "f11", "f12",
         "left", "right", "up", "down", "home", "end", "pageup", "pagedown",
         "minus", "equal", "comma", "period", "slash", "backslash", "semicolon", "quote", "leftbracket", "rightbracket",
+        // 反引号 `（US 键盘左上角）。切换器呼出热键（alpha.29）的默认主键：Ctrl+` 与 macOS 终端
+        // 用户的肌肉记忆同键位，且系统未占用；启动器与切换器共用本表，App 侧 VK 映射一一对应。
+        "grave",
     ];
 
     /// <summary>
-    /// 解析组合串：分隔符容忍 <c>+ - 空格</c>，大小写不敏感，别名（control/option/windows/cmd/super/esc…）归一。
+    /// 解析组合串：分隔符容忍 <c>+ - 空格</c>，大小写不敏感，别名（control/option/windows/cmd/super/esc…）
+    /// 与反引号符号写法（<c>`</c> → grave，设置页允许直接敲该键）归一。
     /// 返回 false 的情形：null/空白、没有任何修饰键、主键缺失、主键不认识、修饰键与主键之外还有多余 token。
     /// </summary>
     public static bool TryParse(string? raw, out LauncherGesture gesture)
@@ -72,6 +83,7 @@ public static class LauncherHotkey
                 case "win": case "windows": case "meta": case "super": case "cmd": win = true; continue;
                 case "shift": shift = true; continue;
             }
+            if (name == "`") name = "grave";                    // 反引号符号归一（US 键盘该键的天然输入形态，见 KeyNames 尾注）
             if (main is not null) return false;                 // 两个主键（"ctrl+a+b"）：不猜
             if (!KeyNames.Contains(name)) return false;         // 不认识的主键名
             main = name;
@@ -98,4 +110,12 @@ public static class LauncherHotkey
 
     /// <summary>解析并回到规范串；不合法即回落 <see cref="Default"/>（配置自愈用，绝不写回一个脏串）。</summary>
     public static string Canonicalize(string? raw) => TryParse(raw, out var gesture) ? gesture.ToText() : Default;
+
+    /// <summary>
+    /// 同 <see cref="Canonicalize"/>，但兜底串由调用方给（启动器落 Default，切换器呼出热键落
+    /// <see cref="DefaultSwitcherOpen"/>——两条热键的默认键位不同，自愈必须回到<b>各自</b>的默认，
+    /// 否则改坏呼出热键会把启动器的 Ctrl+Alt+Space 悄悄抄进配置里）。
+    /// </summary>
+    public static string CanonicalizeWithFallback(string? raw, string fallback)
+        => TryParse(raw, out var gesture) ? gesture.ToText() : fallback;
 }

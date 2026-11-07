@@ -121,11 +121,10 @@
             <Border x:Name="DocumentCard" Visibility="Collapsed" Margin="22,18,22,18"
                     CornerRadius="12" BorderThickness="1"
                     BorderBrush="{DynamicResource MacSeparator}"
-                    Background="{DynamicResource MacPopupSolid}">
-                <Border.Effect>
-                    <DropShadowEffect BlurRadius="22" ShadowDepth="4" Direction="270"
-                                      Color="#000000" Opacity="0.28"/>
-                </Border.Effect>
+                    Background="{DynamicResource MacPopupSolid}"
+                    Effect="{DynamicResource AurElevation3}">
+                <!-- 卡层阴影引 AurElevation3（Elevation 规格）：macOS 下 token 字典写入的是
+                     原 Blur22/Depth4/0.28 的同值兜底，Aurora 下是 Blur64/Depth18 的大浮层投影。 -->
                 <ScrollViewer x:Name="DocumentScroll" VerticalScrollBarVisibility="Auto"
                               HorizontalScrollBarVisibility="Disabled" Padding="0">
                     <StackPanel x:Name="DocumentBody" Margin="34,26,34,30"/>

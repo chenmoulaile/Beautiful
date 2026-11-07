@@ -33,6 +33,9 @@ public static class MacAccents
         new("indigo",   "靛蓝色", "#5856D6", "#5E5CE6"),
         new("cyan",     "青色",   "#32ADE6", "#64D2FF"),
         new("brown",    "棕色",   "#A2845E", "#AC8E68"),
+        // Aurora 主题签名色（追加在队尾，12 色 macOS 色板之后）：Aurora 主题在用户未显式选过
+        // 强调色（仍是默认 blue）时由 ThemeManager 按 Id 分支落到它；macOS 主题默认仍 blue。
+        new("aurora",   "极光青绿", "#1FA88C", "#2FD4B4"),
     ];
 
     /// <summary>null/空白/未知标识 → blue（手改配置不会把界面搞成无强调色）。</summary>

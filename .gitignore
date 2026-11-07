@@ -23,8 +23,13 @@ v3-*.png
 v31-*.png
 dist/
 
-# Apple 字体资产（D-FONT：所有者本地放置，公开仓库不分发；打包时条件性进产物）
-src/Beautiful.App/Assets/Fonts/
+# Apple 字体资产（D-FONT：所有者本地放置，公开仓库不分发；打包时条件性进产物）。
+# 只按 Apple 专有文件名排除（与 FontProbe.KnownFontFiles 同名集）；OFL 字体放 Inter/ 子目录可入库分发。
+src/Beautiful.App/Assets/Fonts/SF-Pro-*.otf
+src/Beautiful.App/Assets/Fonts/SF-Pro-*.ttf
+src/Beautiful.App/Assets/Fonts/SF-Mono-*.otf
+src/Beautiful.App/Assets/Fonts/SF-*.otf
+src/Beautiful.App/Assets/Fonts/SF-*.ttf
 
 # 安装器产物（55MB 级，随 GitHub Release 分发，不进版本库）
 installer/out/

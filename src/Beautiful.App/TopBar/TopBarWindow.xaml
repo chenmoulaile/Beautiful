@@ -29,12 +29,8 @@
     <!-- macOS 顶栏扁平按钮：透明底 + 悬停强调底色（ThemePanelBackground，DynamicResource 随主题）。
          左区菜单按钮与右区状态项共用；圆角 5 贴合系统菜单栏选中态。 -->
     <services:AcrylicWindow.Resources>
-        <!-- 顶部内高光（macOS 菜单栏的"light top edge"）：只占条带上 40% 高度，越往下越淡。 -->
-        <LinearGradientBrush x:Key="BarInnerGlow" StartPoint="0,0" EndPoint="0,1">
-            <GradientStop Color="#1AFFFFFF" Offset="0"/>
-            <GradientStop Color="#07FFFFFF" Offset="0.4"/>
-            <GradientStop Color="#00FFFFFF" Offset="1"/>
-        </LinearGradientBrush>
+        <!-- 顶部内高光（macOS 菜单栏的"light top edge"）读 AurInnerGlowBrush（Aur* 弹层语义键，
+             随主题/亮暗换色；macOS 下 token 字典写入的是原就地渐变的同值兜底）。 -->
         <Style x:Key="BarButton" TargetType="Button">
             <Setter Property="Background" Value="Transparent"/>
             <Setter Property="BorderThickness" Value="0"/>
@@ -70,7 +66,7 @@
              全部 IsHitTestVisible=False 之外的命中交给按钮自身：这一层不做任何交互，只保证
              "条带矩形内没有一个未绘制像素"（分层窗口里未绘制 = 真透明 = 直接看穿到桌面）。 -->
         <Border x:Name="BarBackground" Background="{DynamicResource ThemeDockBackground}"/>
-        <Border x:Name="BarGlow" IsHitTestVisible="False" Background="{StaticResource BarInnerGlow}"/>
+        <Border x:Name="BarGlow" IsHitTestVisible="False" Background="{DynamicResource AurInnerGlowBrush}"/>
         <Border x:Name="BarEdge" IsHitTestVisible="False" BorderBrush="{DynamicResource MacMenuBarHairline}" BorderThickness="0,0,0,1"
                 VerticalAlignment="Stretch"/>
 

@@ -188,7 +188,12 @@ internal static class DockContextMenuBuilder
         catch { return false; }
     }
 
-    /// <summary>回收站有没有内容（决定"清空回收站"是真能做还是已无可清）。读不到就当作有。</summary>
+    /// <summary>
+    /// 回收站有没有内容（决定"清空回收站"是真能做还是已无可清）。读不到就当作有。
+    /// 判定收口在 Core <see cref="RecycleBinSlot.MenuAssumesItems"/>（菜单口径：失败保守当作有可清），
+    /// 与图标轮询（<see cref="RecycleBinMonitor"/> → <see cref="RecycleBinSlot.IsFull"/>）共用同一份
+    /// shell 读数——Dock 图标与右键菜单在查询成功时永远一致。
+    /// </summary>
     private static bool RecycleBinHasItems()
     {
         try
@@ -198,7 +203,7 @@ internal static class DockContextMenuBuilder
                 cbSize = Marshal.SizeOf<NativeMethods.SHQUERYRBINFO>()
             };
             var hr = NativeMethods.SHQueryRecycleBin(null, ref info);
-            return hr != 0 || info.i64NumItems > 0;
+            return RecycleBinSlot.MenuAssumesItems(hr, info.i64NumItems);
         }
         catch { return true; }
     }

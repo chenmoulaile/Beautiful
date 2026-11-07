@@ -22,10 +22,11 @@ public class DockHideModeDeciderTests
         bool cursorInside = false,
         bool cursorAtEdge = false,
         PhysicalRect? dockBand = null,
-        PhysicalRect? monitorRect = null)
+        PhysicalRect? monitorRect = null,
+        IReadOnlyList<PhysicalRect>? occluding = null)
         => new(mode, dockBand ?? DockBand, monitorRect ?? Monitor, foreground,
                maximizedOnDockMonitor, desktopOrNone, modifierHeld, edgeToggleVisible,
-               cursorInside, cursorAtEdge);
+               cursorInside, cursorAtEdge, occluding);
 
     private static ForegroundWindow Window(int l, int t, int r, int b) => new(
         new IntPtr(42), new PhysicalRect(l, t, r, b),
@@ -135,6 +136,69 @@ public class DockHideModeDeciderTests
             DockHideModeDecider.Evaluate(Facts(DockHideModeKind.Smart, overlapping, cursorInside: true)));
         Assert.Equal(DockHideDecision.Visible,
             DockHideModeDecider.Evaluate(Facts(DockHideModeKind.Smart, overlapping, cursorAtEdge: true)));
+    }
+
+    // ---------- smart：全量遮挡集合（alpha.29 升级：背景窗口也让位） ----------
+
+    [Fact]
+    public void 智能隐藏_背景窗口遮挡集合命中也让位()
+    {
+        // 前台没有合格窗口（null），但 EnumWindows 采到一扇压进面板带的背景窗口 → 藏
+        var facts = Facts(DockHideModeKind.Smart, foreground: null,
+                          occluding: new List<PhysicalRect> { new(0, 900, 400, 1000) });
+        Assert.Equal(DockHideDecision.Hidden, DockHideModeDecider.Evaluate(facts));
+    }
+
+    [Fact]
+    public void 智能隐藏_遮挡集合全不相交时不藏()
+    {
+        // 背景窗口都在面板带上方（底边恰好贴带顶也不算）→ 可见
+        var facts = Facts(DockHideModeKind.Smart, foreground: null,
+                          occluding: new List<PhysicalRect> { new(0, 500, 1800, 900), new(100, 100, 300, 300) });
+        Assert.Equal(DockHideDecision.Visible, DockHideModeDecider.Evaluate(facts));
+    }
+
+    [Fact]
+    public void 智能隐藏_集合为空或缺失时退回前台判据()
+    {
+        // null（枚举不可用）与空列表（无合格窗口）都等价于 alpha.28 的"只看前台"：
+        var overlapping = Window(100, 900, 1800, 1000);
+        Assert.Equal(DockHideDecision.Hidden,
+            DockHideModeDecider.Evaluate(Facts(DockHideModeKind.Smart, overlapping, occluding: null)));
+        Assert.Equal(DockHideDecision.Hidden,
+            DockHideModeDecider.Evaluate(Facts(DockHideModeKind.Smart, overlapping,
+                                               occluding: Array.Empty<PhysicalRect>())));
+        Assert.Equal(DockHideDecision.Visible,
+            DockHideModeDecider.Evaluate(Facts(DockHideModeKind.Smart, foreground: null,
+                                               occluding: Array.Empty<PhysicalRect>())));
+    }
+
+    [Fact]
+    public void 智能隐藏_集合命中且光标贴边仍可唤回()
+    {
+        // 让位四档共用同一唤出口径：光标在 Dock 上或贴边时保持可见
+        var facts = Facts(DockHideModeKind.Smart, foreground: null,
+                          occluding: new List<PhysicalRect> { new(0, 900, 400, 1000) },
+                          cursorAtEdge: true);
+        Assert.Equal(DockHideDecision.Visible, DockHideModeDecider.Evaluate(facts));
+    }
+
+    [Fact]
+    public void 遮挡判据_边界相触与零面积矩形不算()
+    {
+        // 集合矩形底边恰好贴带顶边：与前台判据同一几何口径（RectsOverlap，边界相触不算）
+        var touching = Facts(DockHideModeKind.Smart, foreground: null,
+                             occluding: new List<PhysicalRect> { new(0, 800, 100, 980) });
+        Assert.False(DockHideModeDecider.OccluderOverlapsDock(touching));
+
+        // 零面积矩形与"压进上沿"的真遮挡对照
+        var zero = Facts(DockHideModeKind.Smart, foreground: null,
+                         occluding: new List<PhysicalRect> { default });
+        Assert.False(DockHideModeDecider.OccluderOverlapsDock(zero));
+
+        var real = Facts(DockHideModeKind.Smart, foreground: null,
+                         occluding: new List<PhysicalRect> { new(0, 900, 100, 1000) });
+        Assert.True(DockHideModeDecider.OccluderOverlapsDock(real));
     }
 
     // ---------- fullscreen：真全屏才让位（复用 FullscreenAvoidance 几何） ----------

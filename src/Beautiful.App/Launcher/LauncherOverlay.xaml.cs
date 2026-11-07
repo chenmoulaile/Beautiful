@@ -57,7 +57,7 @@ public partial class LauncherOverlay : UserControl, IBackdropAware, IPopupShadow
     // ---------- 背板（与控制中心/托盘菜单同一套两层材质） ----------
 
     /// <summary>
-    /// 拿到抓屏模糊 → 卡底铺该画刷并压 <c>CardFillBlur</c> 深色遮罩；拿不到 → 铺实心 <c>CardFillSolid</c>、
+    /// 拿到抓屏模糊 → 卡底铺该画刷并压 <c>AurPopupFillBlur</c> 深色遮罩；拿不到 → 铺实心 <c>AurPopupFillSolid</c>、
     /// 遮罩透明。两条分支都铺满整张卡（分层窗口上"没画到"就是看穿到桌面的洞）。
     /// </summary>
     public void OnBackdropReady(ScreenBackdrop? backdrop)
@@ -66,10 +66,10 @@ public partial class LauncherOverlay : UserControl, IBackdropAware, IPopupShadow
         if (blur is not null)
         {
             Card.Background = blur;
-            Scrim.Background = (Brush)Resources["CardFillBlur"];
+            Scrim.Background = (Brush)FindResource("AurPopupFillBlur");
             return;
         }
-        Card.Background = (Brush)Resources["CardFillSolid"];
+        Card.Background = (Brush)FindResource("AurPopupFillSolid");
         Scrim.Background = Brushes.Transparent;
     }
 

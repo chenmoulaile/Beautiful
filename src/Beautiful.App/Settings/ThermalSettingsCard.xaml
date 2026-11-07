@@ -41,12 +41,29 @@
                 </ComboBox>
             </StackPanel>
 
-            <!-- 数据源状态（实时）：读到什么显示什么，拿不到就明说"芯片保持隐藏"——
-                 不猜不装，让"为什么没有温度"在这里就有答案。 -->
+            <!-- 数据源状态（实时）：四态口径（未获取/已获取未启动/已启动已连接/已连接出数），
+                 文案由 Core ThermalSourceStatus 纯函数钉死——读到什么显示什么，拿不到就明说
+                 "芯片保持隐藏"，不猜不装，让"为什么没有温度"在这里就有答案。 -->
             <TextBlock x:Name="SourceStatusText" Style="{StaticResource ThermalHint}"
                        Text="数据源状态：检测中…"/>
+
+            <!-- 数据源动作行：获取（官方 GitHub 发布钉死 v0.9.4——最后一个带 WMI 提供方的版本）/
+                 启动（UAC 由用户确认）/ 打开目录。三个动作都只放文件或拉起进程，绝不静默装驱动。 -->
+            <StackPanel Orientation="Horizontal" Margin="0,10,0,0">
+                <Button x:Name="FetchSourceButton" Content="获取温度数据源" MinWidth="118"
+                        Margin="0,0,8,0" Click="FetchSource_Click"/>
+                <Button x:Name="LaunchSourceButton" Content="启动（需要管理员）" MinWidth="118"
+                        Margin="0,0,8,0" Click="LaunchSource_Click"/>
+                <Button x:Name="OpenToolFolderButton" Content="打开数据源目录" MinWidth="118"
+                        Click="OpenToolFolder_Click"/>
+            </StackPanel>
+            <TextBlock x:Name="ActionHintText" Style="{StaticResource ThermalHint}"
+                       Text="" Visibility="Collapsed"/>
+
             <TextBlock Style="{StaticResource ThermalHint}"
-                       Text="温度来自 LibreHardwareMonitor / OpenHardwareMonitor（在各自设置里勾选 WMI 提供方后可用）经 WMI 发布的传感器，兜底读取系统 ACPI 热区。都没有时芯片整体隐藏，不会显示编造的读数。"/>
+                       Text="温度来自 LibreHardwareMonitor 经 WMI 发布的传感器（官方便携包 v0.9.4 运行即发布，无需配置），已装 OpenHardwareMonitor 的同样可用，兜底读取系统 ACPI 热区。都没有时芯片整体隐藏，不会显示编造的读数。"/>
+            <TextBlock Style="{StaticResource ThermalHint}"
+                       Text="「获取」从官方 GitHub 发布下载便携包（约 1.9 MB）解压到本地固定目录，不静默安装任何组件；「启动」以管理员权限运行它（弹 UAC 由您确认）——它管理员运行时会装载自带的 WinRing0 内核驱动，这是 LibreHardwareMonitor 自己的行为；拒绝 UAC 也没关系，温度芯片仍可使用其他数据源。"/>
         </StackPanel>
     </Border>
 </UserControl>
