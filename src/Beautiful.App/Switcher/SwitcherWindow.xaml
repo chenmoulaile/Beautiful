@@ -22,8 +22,9 @@
          "非分层 + DWM 背板"（半透明卡底下的客户端像素不被合成 → 黑矩形）。玻璃感来自显示前的抓屏模糊
          （见 code-behind 的 ShowPanel：量好矩形 → ForPanel 抓屏 → 再 Show）。
          【样式】差异收敛为两处：模板经 DynamicResource 取 SwitcherIconSize / SwitcherTileRadius /
-         SwitcherAccent / SwitcherIconClip（图标遮罩几何，macOS 样式删键 → 不遮罩）；卡片半径、内边距、
-         字幕可见性、条目间距等不在模板里的，由 ApplyStyle() 直接赋值（无资源间接层，少一处易错点）。 -->
+         SwitcherAccent / SwitcherIconClip（图标遮罩几何，macOS 样式删键 → 不遮罩）；卡片圆角读主题键
+         MacSwitcherPanelRadius（CornerRadius 型资源，双主题 Apply 都写：macOS 18 / Aurora 20），
+         内边距、字幕可见性、条目间距等其余不在模板里的，由 ApplyStyle() 直接赋值（少一处易错点）。 -->
 
     <Window.Resources>
         <!-- 卡底/遮罩/内高光读 Aur* 弹层语义键（统一弹层底）：macOS 主题下是原就地硬编码的同值兜底，
@@ -38,7 +39,8 @@
         <!-- SwitcherIconClip（图标遮罩几何）不写默认值：缺键 → DynamicResource 不解析 → Clip=null -->
     </Window.Resources>
 
-    <Border x:Name="Card" Background="{DynamicResource AurPopupFillSolid}" CornerRadius="18">
+    <Border x:Name="Card" Background="{DynamicResource AurPopupFillSolid}"
+            CornerRadius="{DynamicResource MacSwitcherPanelRadius}">
         <Grid>
             <!-- 叠放顺序即材质顺序：抓屏模糊（Card.Background）→ 遮罩 → 主题 tint → 内高光 → 内容。
                  Scrim 只在有模糊时铺 AurPopupFillBlur（实心底形态再叠一层深色只会闷），由代码切换。 -->

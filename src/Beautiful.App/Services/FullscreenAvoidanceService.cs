@@ -12,6 +12,11 @@ namespace Beautiful.App.Services;
 /// Dock/顶栏的全屏避让服务（v4 Phase 3-T6）：1s 轮询前台窗口的 DWM 可见矩形，
 /// 判定全在 Core <see cref="FullscreenAvoidance"/>；这里只做 Win32 取值与 Show/Hide 落地。
 /// <para>
+/// 多屏 Dock 实例化改造：docks 由单 Window 扩为列表（每屏一个 DockWindow，全部由 App 注入），
+/// 逐实例判定与隐藏，隐藏状态一一对应（每实例一个 hidden 位）。单实例机器传一张单元素表，
+/// 行为与改造前逐字节一致。
+/// </para>
+/// <para>
 /// 误判方向：宁可"该让位时没让"（全屏边多一条 Dock），也不"没全屏就消失"——
 /// Core 的资格条件已经把最小化/cloaked/本进程/shell/最大化全部排除。
 /// 只读：不注入、不发输入、不改前台窗口。
@@ -19,16 +24,17 @@ namespace Beautiful.App.Services;
 /// </summary>
 public sealed class FullscreenAvoidanceService : IDisposable
 {
-    private readonly Window _dock;
+    private readonly IReadOnlyList<Window> _docks;
     private readonly Window? _topBar;
     private readonly DispatcherTimer _timer;
-    private bool _dockHidden;
+    private readonly bool[] _dockHidden;
     private bool _topHidden;
     private bool _disposed;
 
-    public FullscreenAvoidanceService(Window dock, Window? topBar)
+    public FullscreenAvoidanceService(IReadOnlyList<Window> docks, Window? topBar)
     {
-        _dock = dock;
+        _docks = docks;
+        _dockHidden = new bool[docks.Count];
         _topBar = topBar;
         _timer = new DispatcherTimer(DispatcherPriority.Background) { Interval = TimeSpan.FromSeconds(1) };
         _timer.Tick += (_, _) => Evaluate();
@@ -42,17 +48,20 @@ public sealed class FullscreenAvoidanceService : IDisposable
         {
             if (!SettingsService.Current.FullscreenAvoidanceEnabled)
             {
-                Restore(_dock, ref _dockHidden);
+                for (var i = 0; i < _docks.Count; i++) Restore(_docks[i], ref _dockHidden[i]);
                 if (_topBar is not null) Restore(_topBar, ref _topHidden);
                 return;
             }
 
             var foreground = FullscreenProbe.Read();
-            var hideDock = ShouldHide(_dock, foreground);
-            var hideTop = _topBar is not null && ShouldHide(_topBar, foreground);
-
-            Apply(_dock, hideDock, ref _dockHidden);
-            if (_topBar is not null) Apply(_topBar, hideTop, ref _topHidden);
+            for (var i = 0; i < _docks.Count; i++)
+            {
+                Apply(_docks[i], ShouldHide(_docks[i], foreground), ref _dockHidden[i]);
+            }
+            if (_topBar is not null)
+            {
+                Apply(_topBar, ShouldHide(_topBar, foreground), ref _topHidden);
+            }
         }
         catch (Exception ex)
         {

@@ -17,6 +17,21 @@ public sealed record AppSettings
     /// <summary>macOS 强调色板 id（blue/purple/…，白名单见 <see cref="Design.MacAccents"/>），未知值收敛为 blue。</summary>
     public string AccentColor { get; init; } = Design.MacAccents.DefaultId;
 
+    /// <summary>
+    /// 墙纸自适应取色（极致美化①，<b>默认关</b>——不改变 5.0.0 开箱观感）。开启后 Dock 玻璃底色
+    /// 随当前桌面壁纸的色相/饱和度轻混一层 tint（Aurora 走 <c>AuroraTokens.WallpaperTint</c> 混入
+    /// 公式，macOS 走 <c>MacTokens.WallpaperTint</c> 同权重混入，键位对齐）。幻灯片/纯色桌面与
+    /// 灰阶壁纸不取色（Core <see cref="Imaging.WallpaperTint"/> 返回 false，玻璃回主题原生色）。
+    /// </summary>
+    public bool WallpaperTintEnabled { get; init; }
+
+    /// <summary>
+    /// 墙纸取色强度（0..100，默认 <see cref="Imaging.WallpaperTint.DefaultStrength"/>=60）：
+    /// 线性映射为 tint 的 alpha（0..255），玻璃公式的混入权重 = alpha ×
+    /// <see cref="Imaging.WallpaperTint.GlassMixWeight"/>（满强度混入权重封顶 35%，玻璃仍是玻璃）。
+    /// </summary>
+    public int WallpaperTintStrength { get; init; } = Imaging.WallpaperTint.DefaultStrength;
+
     /// <summary>任务栏策略："hide" | "autohide" | "keep"。</summary>
     public string TaskbarPolicy { get; init; } = "hide";
 
@@ -38,6 +53,22 @@ public sealed record AppSettings
     /// Spotlight/热键/顶栏入口触达。
     /// </summary>
     public bool DockShowLaunchpad { get; init; } = true;
+
+    /// <summary>
+    /// Dock 托盘收纳列 applet（5.0.0 未闭合项④）：行尾功能格，点击展开弹层列出系统托盘图标
+    /// 并转发真实点击。默认<b>关</b>——弹层只在展开时读一次托盘（TrayPanel 的"展开才读"模式，
+    /// 不与顶栏常驻条叠加扫描/抓屏），但格子上不预览托盘位图，是否常驻由用户决定。
+    /// </summary>
+    public bool DockTrayEnabled { get; init; }
+
+    /// <summary>
+    /// 托盘收纳列在行尾的挂点：<c>widget</c>（默认，媒体胶囊之后、时钟/天气小组件之前）/
+    /// <c>end</c>（行尾，小组件之后）。白名单与语义在 Core <see cref="Dock.DockTrayPlacement"/>。
+    /// </summary>
+    public string DockTrayPosition { get; init; } = Dock.DockTrayPlacement.PositionWidget;
+
+    /// <summary>合法托盘收纳列挂点标识（与 Core 白名单同源，避免两份名单）。</summary>
+    public static IReadOnlyList<string> KnownDockTrayPositions { get; } = Dock.DockTrayPlacement.KnownPositions;
 
     /// <summary>
     /// Dock 运行指示样式：<c>dot</c>（默认，macOS 圆点 / Aurora 圆点+辉光，样式属各主题字典）/
@@ -86,8 +117,9 @@ public sealed record AppSettings
     /// <summary>
     /// 每显示器 Dock 覆盖配置（对标 MyDockFinder 多屏；schema 在 Core <see cref="Dock.DockMonitorProfile"/>，
     /// 解析在 <see cref="Dock.DockMonitorProfiles"/>）。null 字段 = 跟随全局，所以单屏机器
-    /// （列表为空）行为与无此项完全一致。Dock 落在哪块屏仍由 <see cref="DockMonitor"/> 决定；
-    /// 本列表回答"落在这块屏时用哪套边/自动隐藏/图标尺寸"。
+    /// （列表为空）行为与无此项完全一致。Dock 落在哪块屏由 App 组合根按屏钉住（单实例时仍读
+    /// <see cref="DockMonitor"/>）；本列表回答"落在这块屏时用哪套边/自动隐藏/图标尺寸，
+    /// 以及这块屏放完整 Dock（<c>ShowDock</c>）还是精简条（<c>Slim</c>）"。
     /// </summary>
     public IReadOnlyList<Dock.DockMonitorProfile> DockMonitorProfiles { get; init; } = [];
 
@@ -196,8 +228,13 @@ public sealed record AppSettings
     /// <summary>Dock 基准图标尺寸（32..96，加载时钳制）。</summary>
     public int DockIconSize { get; init; } = 56;
 
-    /// <summary>Dock 面板距屏幕底边距（0..24 DIP，默认 4；macOS 是悬浮感而非贴死底边）。</summary>
-    public int DockEdgeMargin { get; init; } = 4;
+    /// <summary>
+    /// Dock 面板距屏幕底边距（0..24 DIP，默认 6；macOS 是悬浮感而非贴死底边）。
+    /// 【wp-detail r5 默认值上调 4→6】只改代码默认，不动已有配置：旧版本 Save 全量序列化，
+    /// 现存配置文件基本都显式带 <c>"dockEdgeMargin": 4</c>——这些用户加载时原值保留、绝不改写；
+    /// 只有无配置文件 / 文件缺该字段的用户落新默认 6。钳制区间 0..24（Normalized）不变。
+    /// </summary>
+    public int DockEdgeMargin { get; init; } = 6;
 
     /// <summary>悬停放大强度倍率（1.0..2.5，加载时钳制）。默认值与 <see cref="DefaultMagnificationStrength"/> 同源。</summary>
     public double MagnificationStrength { get; init; } = DefaultMagnificationStrength;
@@ -455,6 +492,10 @@ public sealed record AppSettings
     public const int MinDockEdgeMargin = 0;
     public const int MaxDockEdgeMargin = 24;
 
+    /// <summary>墙纸取色强度下限/上限（0 = tint 全透明 = 关；100 = 满强度，混入权重封顶 35%）。</summary>
+    public const int MinWallpaperTintStrength = 0;
+    public const int MaxWallpaperTintStrength = Imaging.WallpaperTint.MaxStrength;
+
     /// <summary>放大强度下限（1.0 = 不放大）。</summary>
     public const double MinMagnificationStrength = 1.0;
 
@@ -506,6 +547,7 @@ public sealed record AppSettings
         LauncherHotkey = Launcher.LauncherHotkey.Canonicalize(LauncherHotkey),
         DockIconSize = Math.Clamp(DockIconSize, MinDockIconSize, MaxDockIconSize),
         DockEdgeMargin = Math.Clamp(DockEdgeMargin, MinDockEdgeMargin, MaxDockEdgeMargin),
+        WallpaperTintStrength = Math.Clamp(WallpaperTintStrength, MinWallpaperTintStrength, MaxWallpaperTintStrength),
         MagnificationStrength = Math.Clamp(MagnificationStrength, MinMagnificationStrength, MaxMagnificationStrength),
         DockMonitor = MonitorSelectorOrDefault(DockMonitor),
         TopBarMonitor = MonitorSelectorOrDefault(TopBarMonitor),
@@ -514,6 +556,7 @@ public sealed record AppSettings
         DockHideMode = Canonical(DockHideMode, "off", KnownDockHideModes),
         DockModifierKey = Canonical(DockModifierKey, "ctrl", KnownDockModifierKeys),
         DockIndicatorStyle = Canonical(DockIndicatorStyle, "dot", KnownDockIndicatorStyles),
+        DockTrayPosition = Canonical(DockTrayPosition, Dock.DockTrayPlacement.PositionWidget, KnownDockTrayPositions),
         DockMonitorProfiles = Dock.DockMonitorProfileList.Normalized(DockMonitorProfiles),
         ScreenCornerRadius = Math.Clamp(ScreenCornerRadius, MinScreenCornerRadius, MaxScreenCornerRadius),
         ScreenCornerMaskColor = Layout.ScreenCornerPlan.CanonicalMaskColor(ScreenCornerMaskColor),

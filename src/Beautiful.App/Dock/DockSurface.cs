@@ -1045,7 +1045,8 @@ public sealed class DockSurface : Canvas
     }
 
     /// <summary>
-    /// 强制复位悬停放大（全屏覆盖层关闭时由 DockWindow 调用，见 LaunchpadDismissed）。
+    /// 强制复位悬停放大（全屏覆盖层关闭时由 DockWindow 调用，见其 OnLaunchpadDismissed
+    /// ——订阅 Launcher.LaunchpadWindow.Dismissed）。
     /// <para>
     /// 【为什么需要】Launchpad 这类全屏面板盖住 Dock 的整段期间，Dock 收不到任何鼠标事件；
     /// 面板关闭的瞬间光标若恰好静止，既没有 MouseMove 也没有 MouseLeave，放大场就停留在

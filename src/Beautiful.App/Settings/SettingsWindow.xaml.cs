@@ -740,7 +740,10 @@ public partial class SettingsWindow : Window
             ? profiles[index] with { Edge = edge, AutoHide = autoHide, IconSize = iconSize }
             : new DockMonitorProfile { Monitor = _perMonitorTarget, Edge = edge, AutoHide = autoHide, IconSize = iconSize };
 
-        if (updated.Edge is null && updated.AutoHide is null && updated.IconSize is null)
+        // 多屏 Dock 实例化：showDock/slim 也算"存在意义"——只手改 JSON 写了 ShowDock/Slim 的条目
+        // （三行 UI 控件感知不到它们）不应被这次 upsert 误删。
+        if (updated.Edge is null && updated.AutoHide is null && updated.IconSize is null
+            && updated.ShowDock is null && updated.Slim is null)
         {
             if (index >= 0) profiles.RemoveAt(index);
         }
@@ -1126,6 +1129,8 @@ public partial class SettingsWindow : Window
         // 恢复默认把 StageManagerEnabled 重置为 false 后，这里显式刷新勾选态，避免 UI 与实际不一致。
         StageManagerCard.ReloadFromSettings();
         ThermalCard.ReloadFromSettings();   // 温度卡同理：恢复默认把 ThermalChipEnabled/间隔拉回默认，勾选态回读
+        WallpaperTintCard.ReloadFromSettings();   // 墙纸取色卡同理：恢复默认把开关/强度拉回默认，勾选态回读（_syncing 包住不回写）
+        TrayDockCard.ReloadFromSettings();        // 托盘收纳卡同理：恢复默认把开关/挂点拉回默认，勾选态回读（_syncing 包住不回写）
     }
 
     // ---------- 固定应用 ----------

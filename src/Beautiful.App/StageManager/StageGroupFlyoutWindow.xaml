@@ -15,19 +15,16 @@
          与舞台条同一宿主血统（WPF 分层窗口；行画面同走 StageFramePump 静帧链——
          round5 真机实拍 DWM 玻璃弹层注册全 0 却不合成像素，取证见 StageBarWindow.xaml 头注释）。
          每行 = 图标 + 窗口标题 + 静帧缩略区；点行即切到该窗口（最小化自动还原）。
-         样式自包含（卡片渐变/内高光与舞台条同源拷贝），只依赖全局主题键 ThemeBackdropTint /
-         ThemeTextPrimary / ThemeFontFamily 与应用级图形 SymbolApps。 -->
+         样式：卡底/缩略底色自包含（与舞台条同源拷贝，拷贝而非合并键：两窗各自独立分层），
+         内高光改读统一弹层键 AurInnerGlowBrush（StageBarWindow 同款；两主题运行时都有值，
+         详见 StageBarWindow.xaml 头注释"内高光改读 AurInnerGlowBrush"），
+         另依赖全局主题键 ThemeBackdropTint / ThemeTextPrimary / ThemeFontFamily 与应用级图形 SymbolApps。 -->
 
     <Window.Resources>
-        <!-- 与 StageBarWindow 同源的卡底/内高光/缩略底色（拷贝而非合并键：两窗各自独立分层）。 -->
+        <!-- 与 StageBarWindow 同源的卡底/缩略底色（拷贝而非合并键：两窗各自独立分层）。 -->
         <LinearGradientBrush x:Key="StageCardFill" StartPoint="0,0" EndPoint="0,1">
             <GradientStop Color="#F62C2C2F" Offset="0"/>
             <GradientStop Color="#FA1B1B1F" Offset="1"/>
-        </LinearGradientBrush>
-        <LinearGradientBrush x:Key="StageInnerGlow" StartPoint="0,0" EndPoint="0,1">
-            <GradientStop Color="#19FFFFFF" Offset="0"/>
-            <GradientStop Color="#06FFFFFF" Offset="0.42"/>
-            <GradientStop Color="#00FFFFFF" Offset="1"/>
         </LinearGradientBrush>
         <SolidColorBrush x:Key="StageThumbBackdrop" Color="#FF101013"/>
     </Window.Resources>
@@ -36,7 +33,7 @@
             BorderBrush="#26FFFFFF" BorderThickness="1" Padding="8">
         <Grid>
             <Border IsHitTestVisible="False" Background="{DynamicResource ThemeBackdropTint}"/>
-            <Border IsHitTestVisible="False" Background="{StaticResource StageInnerGlow}"/>
+            <Border IsHitTestVisible="False" Background="{DynamicResource AurInnerGlowBrush}"/>
 
             <!-- 窗口行：每"组内窗口"一行。数量上限由宿主按工作区高度与 MaxRows 夹定（无滚动）。 -->
             <ItemsControl x:Name="RowsControl" Focusable="False" IsHitTestVisible="True">

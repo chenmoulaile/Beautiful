@@ -24,6 +24,7 @@ using Application = System.Windows.Application;
 using Point = System.Windows.Point;
 using Rect = System.Windows.Rect;
 using MouseEventArgs = System.Windows.Input.MouseEventArgs;   // 与 System.Windows.Forms.MouseEventArgs 歧义（UseWindowsForms）
+using KeyEventArgs = System.Windows.Input.KeyEventArgs;       // Esc 收起托盘弹层（PreviewKeyDown）：消歧 System.Windows.Forms.KeyEventArgs
 using DragEventArgs = System.Windows.DragEventArgs;           // 拖放落位（v3 T5）：消歧 System.Windows.Forms.DragEventArgs
 using DragDropEffects = System.Windows.DragDropEffects;
 using DataFormats = System.Windows.DataFormats;
@@ -59,7 +60,7 @@ public partial class DockWindow : AcrylicWindow
         // 若要 1:1 复刻 v1 视觉尺度，把本常量改成 2.0/√2 ≈ 1.4142 即可（DockSurface.Sigma 同一口径）。
 
 
-    private readonly WindowTracker _tracker = new();
+    private readonly WindowTracker _tracker;
     private readonly DockViewModel _vm;
 
     /// <summary>角标服务（Phase 7-T2）：定时读白名单应用标题里的未读数。</summary>
@@ -76,18 +77,36 @@ public partial class DockWindow : AcrylicWindow
 
     /// <summary>小组件时钟定时器（每分钟刷新一次即可；10s 一拍是为了让分钟翻转更及时）。</summary>
     private System.Windows.Threading.DispatcherTimer? _widgetTimer;
-    // 组合根（本任务最简路径）：DockWindow 持有 SmtcService + MediaViewModel，
+    // 组合根（多屏 Dock 实例化改造）：WindowTracker / SmtcService / MediaViewModel 是**进程级单例**，
+    // 由 App 组合根创建一份后注入（多实例共享同一份：SMTC 是系统级单会话总线、WindowTracker 的
+    // shell-hook 宿主窗 + 2s 对账不该按实例翻倍）。三个参数传 null 时就地自建——行为与多屏化前
+    // 逐字节一致（自建者拥有，OnClosed 负责 Dispose；注入者不拥有，生命周期归 App）。
     // MediaViewModel 构造期自启动 SMTC；MediaPanel 惰性创建（胶囊点击时）。
-    // App.OnStartup / DockViewModel 保持不动（媒体条目由 DockViewModel 的 suffix 占位提供）。
     private readonly SmtcService _smtc;
     private readonly MediaViewModel _mediaVm;
     private readonly TaskbarManager? _taskbar; // App 注入：TaskbarCreated（explorer 重建）后重放策略
     private readonly Animation.MinimizeAnimator? _animator; // App 注入：Dock 触发的最小化走"预抓帧"路径（见 ActivateItem）
 
+    /// <summary>
+    /// 共享服务（tracker/smtc/mediaVm）是否由本实例自建：自建 = 拥有（OnClosed Dispose，历史行为）；
+    /// 注入 = 不拥有（App 在进程退出时统一释放，重载 Dock 也不动它们）。
+    /// </summary>
+    private readonly bool _ownsSharedServices;
+
+    /// <summary>
+    /// 本实例钉住的显示器选择器（primary 或 1..16 序号串；null = 跟随全局 <c>DockMonitor</c>）。
+    /// 多实例下每个 Dock 必须钉住**一块**屏——N 个实例都读全局 auto/序号会全部挤到同一块屏上。
+    /// 单实例路径不传（null），落位语义与多屏化前逐字节一致。
+    /// </summary>
+    private readonly string? _monitorSelector;
+
     /// <summary>光标最后一次扫过条带时的前台窗口（那时前台一定还是用户的）。
     /// 点击条带会把前台换给 Dock 自己，判定"点的是不是前台"必须在悬停时就留样本。</summary>
     private IntPtr _foregroundAtHover;
     private MediaPanel? _mediaPanel;
+    /// <summary>托盘收纳列的展开弹层宿主（激活式 FluentPopupHost；null = 未打开）。一次只开一张：
+    /// 再次点击格子 = 收起（toggle 语义，与小组件点击开面板同款交互）。</summary>
+    private FluentPopupHost? _trayPanelHost;
     private DateTime? _panelAutoHiddenAtUtc; // 面板最近一次"失焦自动收起"时刻（胶囊点击的 toggle 语义用）
     // 图标尺寸/放大强度滑杆拖动时会连续触发排布刷新；条带重排（AppBar 协商 + SetWindowPos）成本较高，
     // 用一次性防抖把拖动期间的多次请求合并成落定后的一次重排（排布参数本身每帧即时写入，图标视觉跟手）。
@@ -182,12 +201,17 @@ public partial class DockWindow : AcrylicWindow
     private HwndSource? _source;
     private NativeMaterialHost? _nativeMaterial;
 
-    public DockWindow(TaskbarManager? taskbar = null, Animation.MinimizeAnimator? animator = null)
+    public DockWindow(TaskbarManager? taskbar = null, Animation.MinimizeAnimator? animator = null,
+        WindowTracker? tracker = null, SmtcService? smtc = null, MediaViewModel? mediaVm = null,
+        string? monitorSelector = null)
     {
         _taskbar = taskbar;
         _animator = animator;
-        _smtc = new SmtcService();
-        _mediaVm = new MediaViewModel(_smtc, Dispatcher); // 先于 InitializeComponent：XAML 模板可能经 RelativeSource 绑定 MediaVm
+        _monitorSelector = string.IsNullOrWhiteSpace(monitorSelector) ? null : monitorSelector.Trim();
+        _ownsSharedServices = tracker is null;   // 全套注入或全套自建（App 只成套传），以 tracker 为代表判定
+        _tracker = tracker ?? new WindowTracker();
+        _smtc = smtc ?? new SmtcService();
+        _mediaVm = mediaVm ?? new MediaViewModel(_smtc, Dispatcher); // 先于 InitializeComponent：XAML 模板可能经 RelativeSource 绑定 MediaVm
         InitializeComponent();
         // 分隔符初值取**设置指向的那个主题**（与下面 ThemeManager.Apply 同一表达式），不读 ThemeManager.Current：
         // 此刻本窗口还没应用主题，读 Current 会拿到上一/默认主题 → 首帧少画/多画一道细线。
@@ -453,6 +477,8 @@ public partial class DockWindow : AcrylicWindow
         // 策略重放订阅与上面的 ThemeChanged 同一条时序纪律：句柄已生成、构造已完成，
         // OnClosed 里有对称的一句解绑（半构造实例绝不挂在宿主事件上）。
         if (_taskbar is not null) _taskbar.PolicyApplied += OnTaskbarPolicyApplied;
+        // 启动台关闭 → 复位本实例的放大场（多屏实例化：每实例各订各的，关闭通知全员复位）。
+        Launcher.LaunchpadWindow.Dismissed += OnLaunchpadDismissed;
 
         // 角标（Phase 7-T2）：标题解析是纯函数，服务只做定时采样；关窗口时在 OnClosed 里停掉。
         _badges = new DockBadgeService(_vm, Surface, Dispatcher);
@@ -1036,6 +1062,10 @@ public partial class DockWindow : AcrylicWindow
     {
         _vm.ApplyWidgetEnabled(SettingsService.Current.DockWidgetEnabled);
         _vm.ApplyLaunchpadEnabled(SettingsService.Current.DockShowLaunchpad);
+        // 托盘收纳列（5.0.0 未闭合项④）：开关默认关、挂点语义在 Core DockTrayPlacement；
+        // 设置页变更走 App.ApplyDockTray 即时重放（同 ApplyDockWidget 路径，不需要重启 Dock）。
+        _vm.ApplyTrayEnabled(SettingsService.Current.DockTrayEnabled);
+        _vm.ApplyTrayPosition(SettingsService.Current.DockTrayPosition);
         RefreshWidgetClock();
 
         _widgetTimer = new System.Windows.Threading.DispatcherTimer(
@@ -1062,6 +1092,51 @@ public partial class DockWindow : AcrylicWindow
         }
 
         TopBar.NotificationCenterWindow.ShowOrToggle(NotificationService.Current, anchor);
+    }
+
+    /// <summary>
+    /// 托盘收纳列点击（5.0.0 未闭合项④）：展开/收起托盘图标弹层（toggle）。弹层由激活式
+    /// <see cref="FluentPopupHost"/> 承载（Esc/失活即关），数据链与顶栏同源（TrayIconSource 两路 +
+    /// 注册表快照回填），展开才读——Dock 常驻表面不为它读托盘，不与顶栏常驻条叠加扫描。
+    /// </summary>
+    private void ToggleTrayPanel(DockItem item)
+    {
+        if (_trayPanelHost is { IsLoaded: true })
+        {
+            _trayPanelHost.Close();   // Closed 处理器清引用 + panel.Shutdown()
+            return;
+        }
+        _trayPanelHost = null;
+
+        // 锚点 = 格子下缘中点（surface 本地 DIP → 物理像素，用 Surface 自己转换避免窗口内偏移误差）。
+        // FluentPopupHost 的翻转规则：下方放不下（Dock 贴底必然放不下）时上翻，卡片底边停在
+        // 锚点上方 12px——正好贴在 Dock 面板上沿。
+        if (Surface.GetItemBounds(item) is not { } bounds) return;
+        var anchor = Surface.PointToScreen(new Point(bounds.X + bounds.Width / 2, bounds.Y + bounds.Height));
+
+        var host = new FluentPopupHost();
+        var panel = new TrayColumnPanel();
+        panel.AttachHost(host);
+        host.Content = panel;
+        host.KeepAliveProbe = () => host.IsActive || host.CursorInInflated(FluentPopupHost.RectInflate);
+        host.PreviewKeyDown += TrayPanelHost_PreviewKeyDown;
+        host.Closed += (_, _) =>
+        {
+            _trayPanelHost = null;
+            host.PreviewKeyDown -= TrayPanelHost_PreviewKeyDown;   // 与上面的订阅对称解绑（弹层是瞬态对象）
+            panel.Shutdown();                                      // 停 3s 自动重读 + 还掉 source（幂等）
+        };
+        _trayPanelHost = host;
+        host.ShowAt(anchor);
+        Logger.Info("托盘收纳列弹层已打开");
+    }
+
+    /// <summary>Esc 收起托盘弹层（激活式弹层的键盘语义，与控制中心面板同款）。</summary>
+    private void TrayPanelHost_PreviewKeyDown(object sender, KeyEventArgs e)
+    {
+        if (e.Key != Key.Escape) return;
+        e.Handled = true;
+        _trayPanelHost?.Close();
     }
 
     // ---------- 主题引擎（Task 13） ----------
@@ -1477,6 +1552,7 @@ public partial class DockWindow : AcrylicWindow
     {
         ThemeManager.ThemeChanged -= OnThemeChanged;
         IconThemeService.Changed -= OnIconThemeChanged;
+        Launcher.LaunchpadWindow.Dismissed -= OnLaunchpadDismissed;   // 与 OnSourceInitialized 的订阅对称
         _nativeMaterial?.Dispose();
         _nativeMaterial = null; // 解除主题订阅，防止闭包引用已关闭窗口
         if (_taskbar is not null) _taskbar.PolicyApplied -= OnTaskbarPolicyApplied;
@@ -1497,10 +1573,19 @@ public partial class DockWindow : AcrylicWindow
         _widgetTimer = null;
         _weather?.Dispose();
         _weather = null;
+        // 托盘收纳列弹层（瞬态激活式窗口）随 Dock 一起收：Closed 处理器做剩余清理（停定时器/还 source）。
+        _trayPanelHost?.Close();
+        _trayPanelHost = null;
         _vm.Detach();
-        _tracker.Dispose();
-        _mediaVm.Dispose();                          // 停定时器 + 解除 SmtcService 事件订阅
-        _smtc.Dispose();
+        // 共享服务（App 注入的进程级单例）不随实例销毁：N 实例共用一份 SMTC 订阅与 shell-hook
+        // 宿主窗，谁最后一个走谁也不该 Dispose——生命周期归 App（OnExit 统一释放）。
+        // 自建（tracker 为 null 的构造）保留历史行为：本实例拥有，随窗口释放。
+        if (_ownsSharedServices)
+        {
+            _tracker.Dispose();
+            _mediaVm.Dispose();                      // 停定时器 + 解除 SmtcService 事件订阅
+            _smtc.Dispose();
+        }
         base.OnClosed(e);
     }
 
@@ -1594,7 +1679,7 @@ public partial class DockWindow : AcrylicWindow
                                        // （日志有"滑下（露 4px）"、屏幕上却始终完整 Dock）。几何重协商留给
                                        // 滑回路径（ShowFromAutoHide → AssertWindowRect），隐藏期一律不写窗口矩形。
         var target = MonitorGeometry.ForEdge(_hwnd, StripEdge.Bottom, VisiblePanelDip(), StripHeadroomDip(),
-                                             SettingsService.Current.DockMonitor);
+                                             _monitorSelector ?? SettingsService.Current.DockMonitor);
         if (target is null) return;   // 显示器取不到（拔屏瞬间）：保持上次几何，不写非法矩形
         var t = target.Value;
         _monitorRect = t.MonitorRect;                       // 媒体面板水平钳制要用**本屏**左右缘
@@ -1791,6 +1876,12 @@ public partial class DockWindow : AcrylicWindow
                 OpenWidgetPanel(item);
                 break;
 
+            case DockItemKind.Tray:
+                // 托盘收纳格不启动任何程序：点它展开/收起托盘图标弹层（收纳列唯一交互语义，
+                // 真实图标的点击转发在弹层里完成——Dock 常驻表面不读托盘，见 DockItemKind.Tray）。
+                ToggleTrayPanel(item);
+                break;
+
             case DockItemKind.Finder:
                 // macOS：访达格永远可点，打开用户主目录（Windows 语境里最接近"我的文件"的落点）
                 OpenInFinder(item.LaunchPath);
@@ -1892,15 +1983,24 @@ public partial class DockWindow : AcrylicWindow
         FluentMenu.Show(new FluentPopupHost(), new Point(p.X, p.Y), views);
     }
 
-    /// <summary>启动台请求（alpha.22 启动台常驻格）：App 装配后注入（LaunchpadWindow.ShowOrToggle(service)）。</summary>
-    internal static Action? LaunchpadRequested;
+    /// <summary>
+    /// 启动台请求（alpha.22 启动台常驻格）：App 装配后逐实例订阅（LaunchpadWindow.ShowOrToggle）。
+    /// 多屏 Dock 实例化后改为<b>实例事件</b>——static Action 是"N 实例共用一条委托"的旧单实例假设，
+    /// 任一实例点击都会触发同一委托且随重载残留旧闭包；实例事件由 App 在创建/关闭时对称订阅/解绑。
+    /// </summary>
+    internal event Action? LaunchpadRequested;
 
     /// <summary>
-    /// 启动台关闭回调：App 装配后注入（Surface.ResetMagnification）。
-    /// 启动台全屏盖住 Dock 期间 Dock 收不到鼠标事件，关闭瞬间光标静止时放大场会卡在
+    /// 启动台关闭回调（多屏 Dock 实例化改造）：事件源已反转到 <see cref="Launcher.LaunchpadWindow.Dismissed"/>
+    /// ——本实例在 OnSourceInitialized 订阅、OnClosed 解绑（与 ThemeChanged 同一条时序纪律），触发时
+    /// 只复位自己的放大场。启动台全屏盖住 Dock 期间 Dock 收不到鼠标事件，关闭瞬间光标静止时放大场会卡在
     /// 旧状态（真机实测"Esc 关闭后 Dock 停在放大态"），关闭时必须主动复位一次。
     /// </summary>
-    internal static Action? LaunchpadDismissed;
+    private void OnLaunchpadDismissed()
+    {
+        if (_closing) return;
+        Surface.ResetMagnification();
+    }
 
     /// <summary>
     /// 在自家访达里打开（Phase 6-c 互通）：目录直接导航；文件则打开其所在文件夹。
@@ -2174,13 +2274,14 @@ public partial class DockWindow : AcrylicWindow
     }
 
     /// <summary>解析条目对应的可预览源窗口句柄：Window→其句柄；Pinned→该 exe 最近的一个可见非最小化窗口；
-    /// RecycleBin/Media→无（不预览）。</summary>
+    /// RecycleBin/Media/Tray→无（不预览）。</summary>
     private bool PreviewSourceFor(DockItem item, out IntPtr hwnd)
     {
         hwnd = IntPtr.Zero;
         switch (item.Kind)
         {
             case DockItemKind.Widget:   // 小组件没有可预览的窗口
+            case DockItemKind.Tray:     // 托盘收纳格同理：它的交互在点击后的弹层里，不是一颗窗口
                 return false;
 
             case DockItemKind.Window:
@@ -2196,7 +2297,7 @@ public partial class DockWindow : AcrylicWindow
                 hwnd = MostRecentWindowForExe(item.LaunchPath);
                 return hwnd != IntPtr.Zero;
 
-            default:   // RecycleBin / Media：不预览
+            default:   // RecycleBin / Media / Tray：不预览（Tray 走 default 分支，显式写进注释保持口径可读）
                 return false;
         }
     }

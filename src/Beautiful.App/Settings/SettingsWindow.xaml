@@ -382,6 +382,11 @@
                                   Checked="Reflection_Changed" Unchecked="Reflection_Changed"/>
                         <CheckBox x:Name="BounceCheck" Content="启动固定应用时播放弹跳动画"
                                   Margin="0,8,0,0" Checked="Bounce_Changed" Unchecked="Bounce_Changed"/>
+
+                        <!-- 墙纸取色（5.0.0 独立自包含卡）：读写闭环在控件内（勾选/改强度 → App.SetWallpaperTint
+                             落盘并即时撤/重提 tint），宿主零事件代码；恢复默认勾选态经
+                             ReapplyAll → WallpaperTintCard.ReloadFromSettings() 回读（同温度卡约定）。 -->
+                        <settings:WallpaperTintCard x:Name="WallpaperTintCard"/>
                     </StackPanel>
                 </Border>
 
@@ -848,6 +853,10 @@
                         </StackPanel>
                         <TextBlock Style="{StaticResource HintText}"
                                    Text="九档隐藏方式（对标 MyDockFinder）：智能隐藏在别的窗口盖住 Dock 时让位、移开即回；全屏/最大化档只认 Dock 所在屏的前台；双击边缘切换要双击 Dock 残留的边缘条带；仅桌面档在回桌面时才出现。自动隐藏档：光标离开 Dock 后延迟指定毫秒才滑下（0 = 离开即滑，默认 500ms——“悬停触发延迟”就是这一项），唤出方式决定滑下后鼠标怎么唤回——“触底停留”路过底边不弹，“边缘二次触发”要触底→离开→2 秒内再触底。"/>
+                        <!-- 托盘收纳列（5.0.0 独立自包含卡）：读写闭环在控件内（开关/挂点 → App.ApplyDockTray
+                             落盘并让各 Dock 实例立即重排行尾），宿主零事件代码；恢复默认勾选态经
+                             ReapplyAll → TrayDockCard.ReloadFromSettings() 回读（同温度卡约定）。 -->
+                        <settings:TrayDockCard x:Name="TrayDockCard"/>
                         <CheckBox x:Name="DockWidgetCheck" Content="在 Dock 行尾显示时钟 / 天气小组件"
                                   Margin="0,8,0,0" Checked="DockWidget_Changed" Unchecked="DockWidget_Changed"/>
                         <CheckBox x:Name="DockLaunchpadCheck" Content="在 Dock 显示启动台"

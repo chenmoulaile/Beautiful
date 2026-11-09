@@ -36,6 +36,30 @@ public static class ThemeManager
     /// </summary>
     public static string AccentHex { get; private set; } = "#0A84FF";
 
+    /// <summary>
+    /// 当前生效的墙纸取色 tint（<c>#AARRGGBB</c>，alpha 携带用户强度；"" = 取色关闭）。
+    /// 由 <see cref="Services.WallpaperThemeService"/> 在后台提色后写入（string 引用读原子，
+    /// 与 AccentHex 同一套线程口径），<see cref="ApplyTokens"/> 每次重写 token 键时带上——
+    /// 于是换主题/换亮暗/换强调色都不会把 tint 冲掉。
+    /// </summary>
+    public static string WallpaperTintHex { get; private set; } = "";
+
+    /// <summary>
+    /// 墙纸取色结果的落地口（唯一）：记下 tint 并重写当前主题字典的 token 键。与
+    /// <see cref="ApplyAppearance"/> 同一条"只重写键、不重建窗口"路径，DynamicResource 即时生效；
+    /// 主题字典尚未合并（启动早期）时静默跳过——首帧 <see cref="Apply"/> 会读同一状态贴上。
+    /// 同值重复写入直接短路（开关抖动/壁纸广播连发时不重写 token）。
+    /// </summary>
+    public static void ApplyWallpaperTint(string tintHex, Application app)
+    {
+        var next = tintHex ?? "";
+        WallpaperTintHex = next;
+        var dict = FindThemeDictionary(app);
+        if (dict is null) return;
+        ApplyTokens(dict, Current, _iconSize);
+        Logger.Info($"墙纸取色：{(next.Length > 0 ? $"tint {next}" : "撤回（无壁纸/灰阶/取色失败）")}");
+    }
+
     public static void Apply(ThemeDefinition theme, Application app)
     {
         Current = theme;
@@ -79,10 +103,20 @@ public static class ThemeManager
         // 面板圆角：macOS 维持字典既有 18（record 25 与字典 18 的存量矛盾按"不回归"原则保留现状），
         // 其余主题按参数层 PanelCornerRadius 注入（Aurora=26）。
         var panelRadius = theme.Id == "MacOS" ? 18d : theme.PanelCornerRadius;
+        // 墙纸取色：tint 只在生效时覆盖 token（"" = 用 token 默认全透明，两条主题线与 5.0.0 逐字节一致）。
+        var tintHex = WallpaperTintHex;
         if (theme.Id == "Aurora")
-            AuroraTokenDictionary.Apply(dict, AuroraTokens.For(IsDark), accent, font, panelRadius);
+        {
+            var auroraTokens = AuroraTokens.For(IsDark);
+            if (tintHex.Length > 0) auroraTokens = auroraTokens with { WallpaperTint = tintHex };
+            AuroraTokenDictionary.Apply(dict, auroraTokens, accent, font, panelRadius);
+        }
         else
-            MacTokenDictionary.Apply(dict, MacTokens.For(IsDark), accent, font, panelRadius);
+        {
+            var macTokens = MacTokens.For(IsDark);
+            if (tintHex.Length > 0) macTokens = macTokens with { WallpaperTint = tintHex };
+            MacTokenDictionary.Apply(dict, macTokens, accent, font, panelRadius);
+        }
         ApplyDockMetrics(dict, theme, iconSize);
         // 强调色/主题可能变了：首字母色块缓存整体作废（条目个位数，重建零负担）。
         Services.LetterTileRenderer.ClearCache();

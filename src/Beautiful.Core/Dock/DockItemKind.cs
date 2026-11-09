@@ -43,5 +43,15 @@ public enum DockItemKind
     Finder,
 
     /// <summary>启动台常驻格（macOS Dock 第二格）：点击打开 Launchpad；同上不参与固定/拖拽。</summary>
-    Launchpad
+    Launchpad,
+
+    /// <summary>
+    /// 托盘收纳列 applet（5.0.0 未闭合项④）：行尾的一个功能格，把 Windows 通知区域（系统托盘）的
+    /// 第三方图标"收进"Dock——格子上只有一个自绘的收纳箭头（<b>不显示</b>托盘位图： Dock 常驻表面
+    /// 若为它读托盘就要与顶栏常驻条叠加扫描/抓屏，违背"不重复扫描"的裁定），点击展开弹层才读
+    /// （TrayPanel.xaml.cs 的"展开才读"模式）并转发真实托盘图标的点击。默认关（设置项
+    /// <c>DockTrayEnabled</c>），挂点由 <see cref="DockTrayPlacement"/> 裁定。
+    /// 不参与固定/拖拽/窗口跟踪，右键无菜单（<see cref="DockContextMenuPlan"/> 的 default 空表）。
+    /// </summary>
+    Tray
 }

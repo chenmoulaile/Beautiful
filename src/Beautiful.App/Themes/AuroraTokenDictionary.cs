@@ -73,6 +73,7 @@ public static class AuroraTokenDictionary
         dict["MacDockPanelRadiusRatio"] = t.DockPanelRadiusRatio;
         // CornerRadius 类型（同 MacTokenDictionary）：XAML 的 CornerRadius="{DynamicResource}" 直取。
         dict["MacPopupCornerRadius"] = new CornerRadius(t.PopupCornerRadius);
+        dict["MacSwitcherPanelRadius"] = new CornerRadius(t.SwitcherPanelRadius);   // 切换器卡圆角（Aurora 20，层级对齐 26 面板圆角）
         dict["MacMenuItemHeight"] = t.MenuItemHeight;
         dict["MacWindowCornerRadius"] = t.WindowCornerRadius;
         dict["MacControlCornerRadius"] = t.ControlCornerRadius;
@@ -112,6 +113,7 @@ public static class AuroraTokenDictionary
         dict["AurWallpaperTint"] = MacTokenDictionary.Brush(t.WallpaperTint);
         dict["AurPopupFillSolid"] = VerticalGradient(t.PopupFillTop, t.PopupFillBottom);
         dict["AurPopupFillBlur"] = MacTokenDictionary.Brush(t.PopupFillBlur);
+        dict["AurMediaPanelFillSolid"] = VerticalGradient(t.MediaPanelFillTop, t.MediaPanelFillBottom);  // 媒体面板实心底（降级形态）
         dict["AurEaseSpring"] = t.SpringEase;
         dict["AurCardEnterMs"] = t.CardEnterMs;
 

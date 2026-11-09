@@ -73,6 +73,7 @@ public class MacDesignTokensTests
             Assert.InRange(t.DockEdgeMargin, 0, 24);    // 距底边距默认 4
             Assert.InRange(t.DockPanelRadiusRatio, 0.42, 0.46);
             Assert.Equal(10, t.WindowCornerRadius);
+            Assert.Equal(18, t.SwitcherPanelRadius);    // 切换器卡圆角键化（wp-detail r5）：macOS 原生 18 观感不回归
             Assert.True(t.MenuPopupMs > 0 && t.GenieMs >= 450);
             Assert.Contains("SF Pro Text", t.FontText); // 携带字体失败时由后面的 Segoe 回退
             Assert.Contains("Segoe UI", t.FontText);

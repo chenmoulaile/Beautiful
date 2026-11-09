@@ -57,6 +57,13 @@ public partial class LaunchpadWindow : Window, System.ComponentModel.INotifyProp
 
     private static LaunchpadWindow? _current;
 
+    /// <summary>
+    /// 启动台已关闭（多屏 Dock 实例化改造）：事件源从 DockWindow 的静态回调链反转到这里——
+    /// 旧形态是本窗口 Invoke DockWindow 的 static Action（N 实例共用一条委托的旧单实例假设）；
+    /// 现在每个 DockWindow 实例自行订阅本事件、关闭时各自复位放大场，重载随 OnClosed 对称解绑。
+    /// </summary>
+    internal static event Action? Dismissed;
+
     private readonly LauncherService _service;
     private IReadOnlyList<LauncherApp> _apps = Array.Empty<LauncherApp>();
     private ObservableCollection<LaunchpadTile> _pageTiles = new();
@@ -280,7 +287,8 @@ public partial class LaunchpadWindow : Window, System.ComponentModel.INotifyProp
         if (ReferenceEquals(_current, this)) _current = null;
         // 全屏面板关闭必须通知 Dock 复位悬停放大：面板盖住 Dock 期间收不到鼠标事件，
         // 关闭瞬间光标静止时 Dock 会停在放大态（真机实测反馈）。
-        Dock.DockWindow.LaunchpadDismissed?.Invoke();
+        // 多屏实例化后 DockWindow 逐实例订阅本事件（OnSourceInitialized 订阅 / OnClosed 解绑）。
+        Dismissed?.Invoke();
         Logger.Info("启动台已关闭");
     }
 

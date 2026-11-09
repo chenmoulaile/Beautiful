@@ -18,13 +18,11 @@
          背板，只会让面板出现硬边黑块（v3 §1.B）。窗口底维持 {x:Null}：圆角缺口是真透明，
          点击落到底下的桌面而不是我们（分层窗口里"未绘制不参与命中测试"）。
          玻璃感 = 显示前抓屏自绘模糊（code-behind 的 RefreshBackdrop，由 DockWindow 在 Show 之前调用）；
-         抓不到就回落 PanelFillSolid 实心渐变，两条分支都铺满整张卡。 -->
+         抓不到就回落主题实心底 AurMediaPanelFillSolid（Aur* 弹层语义键：macOS 兜底值 =
+         MediaPanel 原就地硬编码同值 #C81C1C1E→#D5171719，Aurora 按 Dark/Light token 给暗/亮玻璃；
+         GradientStop 上挂不了 DynamicResource，所以整支渐变进主题字典，本文件不存局部拷贝），
+         两条分支都铺满整张卡。 -->
     <services:AcrylicWindow.Resources>
-        <!-- 面板底（降级形态）：抓屏不可用时自铺的**实心**渐变，兜底不露黑也不露洞 -->
-        <LinearGradientBrush x:Key="PanelFillSolid" StartPoint="0,0" EndPoint="0,1">
-            <GradientStop Color="#C81C1C1E" Offset="0"/>
-            <GradientStop Color="#D5171719" Offset="1"/>
-        </LinearGradientBrush>
         <!-- 抓屏模糊之上的遮罩：半透明深色渐变，负责标题的文字对比度 -->
         <LinearGradientBrush x:Key="PanelFillBlur" StartPoint="0,0" EndPoint="0,1">
             <GradientStop Color="#8C1C1C1E" Offset="0"/>
@@ -92,7 +90,7 @@
         </Style>
     </services:AcrylicWindow.Resources>
 
-    <Border x:Name="PanelRoot" CornerRadius="20" Background="{StaticResource PanelFillSolid}"
+    <Border x:Name="PanelRoot" CornerRadius="20" Background="{DynamicResource AurMediaPanelFillSolid}"
             BorderBrush="#33FFFFFF" BorderThickness="1"
             Padding="20,18" TextElement.FontFamily="{DynamicResource ThemeFontFamily}">
         <Grid>

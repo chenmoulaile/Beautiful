@@ -45,6 +45,11 @@ public sealed record MacTokens
     public string ControlFillHover { get; init; } = "";
     public string Separator { get; init; } = "";
     public string BackdropTint { get; init; } = "";
+    /// <summary>
+    /// 墙纸取色混入色（#AARRGGBB；默认全透明 = 取色关闭，与 AuroraTokens.WallpaperTint 键位对齐）。
+    /// 运行时由 ThemeManager 按取色结果写入（with 覆盖），Dock 玻璃三停按 alpha × 0.35 权重混入。
+    /// </summary>
+    public string WallpaperTint { get; init; } = "";
 
     // ---------- 度量（DIP） ----------
     public double MenuBarHeight { get; init; }
@@ -60,6 +65,9 @@ public sealed record MacTokens
     public double MenuItemHeight { get; init; }
     public double WindowCornerRadius { get; init; }
     public double ControlCornerRadius { get; init; }
+    /// <summary>切换器面板卡圆角（键 MacSwitcherPanelRadius，SwitcherWindow.ApplyStyle 读键赋值；
+    /// macOS 原生 18 观感不回归，Aurora 侧由 AuroraTokens 给自己的值）。</summary>
+    public double SwitcherPanelRadius { get; init; }
 
     // ---------- 字体 ----------
     public string FontText { get; init; } = "";
@@ -109,6 +117,7 @@ public sealed record MacTokens
         ControlFillHover = "#4DFFFFFF",
         Separator = "#33FFFFFF",
         BackdropTint = "#4D202020",
+        WallpaperTint = "#00000000",
         MenuBarHeight = 24,
         MenuBarFontSize = 13,
         MenuItemPaddingX = 10,
@@ -122,6 +131,7 @@ public sealed record MacTokens
         MenuItemHeight = 21,
         WindowCornerRadius = 10,
         ControlCornerRadius = 6,
+        SwitcherPanelRadius = 18,
         FontText = "SF Pro Text, Segoe UI Variable, Segoe UI",
         FontDisplay = "SF Pro Display, SF Pro Text, Segoe UI Variable Display, Segoe UI",
         FontMono = "SF Mono, Cascadia Mono, Consolas",
@@ -167,6 +177,7 @@ public sealed record MacTokens
         ControlFillHover = "#26000000",
         Separator = "#1A000000",
         BackdropTint = "#4DFFFFFF",
+        WallpaperTint = "#00000000",
         MenuBarHeight = 24,
         MenuBarFontSize = 13,
         MenuItemPaddingX = 10,
@@ -180,6 +191,7 @@ public sealed record MacTokens
         MenuItemHeight = 21,
         WindowCornerRadius = 10,
         ControlCornerRadius = 6,
+        SwitcherPanelRadius = 18,
         FontText = "SF Pro Text, Segoe UI Variable, Segoe UI",
         FontDisplay = "SF Pro Display, SF Pro Text, Segoe UI Variable Display, Segoe UI",
         FontMono = "SF Mono, Cascadia Mono, Consolas",

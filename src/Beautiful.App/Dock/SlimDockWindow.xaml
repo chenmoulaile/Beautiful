@@ -1,0 +1,96 @@
+<services:AcrylicWindow
+        x:Class="Beautiful.App.Dock.SlimDockWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:services="clr-namespace:Beautiful.App.Services"
+        Title="Beautiful Dock"
+        WindowStyle="None"
+        AllowsTransparency="True"
+        Background="{x:Null}"
+        ShowInTaskbar="False"
+        ShowActivated="False"
+        Topmost="True"
+        SizeToContent="Manual"
+        ResizeMode="NoResize"
+        Width="200"
+        Height="40">
+
+    <!-- 副屏精简条（多屏 Dock 实例化，showDock=false 且 slim=true 的屏启用）：
+         轻量图标行 + 点击切窗，无媒体面板/无角标管线/无放大场。
+         与 DockWindow 同一条分层窗口纪律：Background={x:Null} 未绘制区域不参与命中，
+         可见面板 Border 自带背景；主题值走 ThemeManager 合并字典的 DynamicResource，
+         不订阅 ThemeChanged——切主题换字典即时重解析（比 DockWindow 少一条订阅面）。
+         Title 与 DockWindow 同名（"Beautiful Dock"）：exit/settings 的进程间信号按标题
+         找第一个主 UI 窗口，多实例下任一窗口接收即可，WndProc 里接了同款转发。 -->
+    <Grid x:Name="Root" Loaded="OnWindowLoaded">
+        <Grid x:Name="PanelHost" HorizontalAlignment="Center" VerticalAlignment="Bottom"
+              TextElement.FontFamily="{DynamicResource ThemeFontFamily}">
+            <Border x:Name="SlimPanelRoot" Padding="8,4"
+                    CornerRadius="{DynamicResource ThemePanelCornerRadius}"
+                    Background="{DynamicResource ThemeDockGlassBackground}"
+                    BorderBrush="{DynamicResource MacDockBorder}" BorderThickness="1">
+                <ItemsControl x:Name="List" ItemsSource="{Binding Windows}"
+                              PreviewMouseLeftButtonUp="OnItemClick"
+                              VerticalAlignment="Center">
+                    <ItemsControl.ItemsPanel>
+                        <ItemsPanelTemplate>
+                            <StackPanel Orientation="Horizontal"/>
+                        </ItemsPanelTemplate>
+                    </ItemsControl.ItemsPanel>
+                    <ItemsControl.ItemTemplate>
+                        <DataTemplate>
+                            <!-- 条目：26 DIP 图标 + 悬停高亮（AurHoverTile 与 DockWindow 条目同一 token）。
+                                 最小化窗口降透明度（45%，与 dim 档同一观感口径），一眼可辨识；
+                                 图标为 null 时回退占位字形 ▣（DefaultItemTemplate 同款既有码点，非新增）。 -->
+                            <Border x:Name="ItemRoot" Width="32" Height="32" CornerRadius="8"
+                                    Background="Transparent" Margin="2,0"
+                                    ToolTip="{Binding Title}">
+                                <Grid>
+                                    <Image Source="{Binding Icon}" Width="26" Height="26"
+                                           HorizontalAlignment="Center" VerticalAlignment="Center"
+                                           RenderOptions.BitmapScalingMode="HighQuality">
+                                        <Image.Style>
+                                            <Style TargetType="Image">
+                                                <Setter Property="Visibility" Value="Visible"/>
+                                                <Style.Triggers>
+                                                    <DataTrigger Binding="{Binding Icon}" Value="{x:Null}">
+                                                        <Setter Property="Visibility" Value="Collapsed"/>
+                                                    </DataTrigger>
+                                                </Style.Triggers>
+                                            </Style>
+                                        </Image.Style>
+                                    </Image>
+                                    <TextBlock Text="▣" FontSize="16" FontWeight="SemiBold"
+                                               HorizontalAlignment="Center" VerticalAlignment="Center"
+                                               Foreground="{DynamicResource ThemeTextPrimary}">
+                                        <TextBlock.Style>
+                                            <Style TargetType="TextBlock">
+                                                <Setter Property="Visibility" Value="Collapsed"/>
+                                                <Style.Triggers>
+                                                    <DataTrigger Binding="{Binding Icon}" Value="{x:Null}">
+                                                        <Setter Property="Visibility" Value="Visible"/>
+                                                    </DataTrigger>
+                                                </Style.Triggers>
+                                            </Style>
+                                        </TextBlock.Style>
+                                    </TextBlock>
+                                    <Border x:Name="Hover" CornerRadius="8"
+                                            Background="{DynamicResource AurHoverTile}"
+                                            IsHitTestVisible="False" Visibility="Collapsed"/>
+                                </Grid>
+                            </Border>
+                            <DataTemplate.Triggers>
+                                <Trigger SourceName="ItemRoot" Property="IsMouseOver" Value="True">
+                                    <Setter TargetName="Hover" Property="Visibility" Value="Visible"/>
+                                </Trigger>
+                                <DataTrigger Binding="{Binding IsMinimized}" Value="True">
+                                    <Setter TargetName="ItemRoot" Property="Opacity" Value="0.45"/>
+                                </DataTrigger>
+                            </DataTemplate.Triggers>
+                        </DataTemplate>
+                    </ItemsControl.ItemTemplate>
+                </ItemsControl>
+            </Border>
+        </Grid>
+    </Grid>
+</services:AcrylicWindow>

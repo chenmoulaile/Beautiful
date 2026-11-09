@@ -16,8 +16,8 @@ namespace Beautiful.App.MediaWidget;
 /// <para>
 /// 【形态（v3 T2/T3）】<see cref="AcrylicWindow"/> 分层窗口：20px 圆角 + 1px 亮边自绘，
 /// 圆角缺口靠 <c>Background={x:Null}</c> 真透明（也真点击穿透）。玻璃感来自
-/// <see cref="RefreshBackdrop"/> 的抓屏自绘模糊，与 DWM 材质无关；抓不到就回落 <c>PanelFillSolid</c>，
-/// 两条分支都把整张卡铺满（分层窗口上"没画到"= 看穿到桌面的洞）。
+/// <see cref="RefreshBackdrop"/> 的抓屏自绘模糊，与 DWM 材质无关；抓不到就回落主题实心底
+/// <c>AurMediaPanelFillSolid</c>，两条分支都把整张卡铺满（分层窗口上"没画到"= 看穿到桌面的洞）。
 /// 主题色不再需要重建实例：底色遮罩与 tint 全走 DynamicResource，换主题即时变色。
 /// </para>
 /// </summary>
@@ -59,7 +59,8 @@ public partial class MediaPanel
     /// </para>
     /// <para>
     /// 面板尺寸恒为 420×520（XAML），因此用一次性冻结画刷（<see cref="ScreenBlurBackdrop.ForWindow"/>）；
-    /// 拿不到背板（抓屏失败 / <c>BEAUTIFUL_NOBLUR=1</c>）→ 回落 XAML 里的实心渐变，绝不留透明洞。
+    /// 拿不到背板（抓屏失败 / <c>BEAUTIFUL_NOBLUR=1</c>）→ 回落主题实心底
+    /// <c>AurMediaPanelFillSolid</c>（XAML 初值即铺），绝不留透明洞。
     /// </para>
     /// </summary>
     public void RefreshBackdrop()
@@ -67,10 +68,13 @@ public partial class MediaPanel
         try
         {
             var blur = ScreenBlurBackdrop.ForWindow(this, new Rect(0, 0, Width, Height));
-            PanelRoot.Background = blur ?? (Brush)Resources["PanelFillSolid"];
+            // 实心底读主题键 AurMediaPanelFillSolid（Aur* 弹层语义键，两主题 Apply 都写）：FindResource
+            // 与 SwitcherWindow.ApplyStyle 同款——键缺席会抛，被下方 catch 接住，PanelRoot 保持 XAML
+            // 里 DynamicResource 铺的主题底（不置 null，绝不露透明洞）。
+            PanelRoot.Background = blur ?? (Brush)FindResource("AurMediaPanelFillSolid");
             // Scrim 铺**深色遮罩** PanelFillBlur 而非模糊画刷本身（同 FluentMenu 的两层材质）：
             // 模糊直接赋给 Scrim 就没人压暗卡片，浮在亮背景上会被冲成浅灰、文字对比度丢失。
-            // 实心底分支保持透明——PanelFillSolid 本身已是深色，再叠一层只会闷。
+            // 实心底分支保持透明——主题实心底本身已是深色（亮色主题为亮玻璃），再叠一层只会闷。
             Scrim.Background = blur is not null ? (Brush)Resources["PanelFillBlur"] : Brushes.Transparent;
         }
         catch (Exception ex)

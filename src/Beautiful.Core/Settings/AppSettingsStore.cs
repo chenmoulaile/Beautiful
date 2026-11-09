@@ -65,6 +65,8 @@ public sealed class AppSettingsStore
             report($"设置自愈：DockHideMode={raw.DockHideMode} → {normalized.DockHideMode}（9 档白名单）");
         if (!string.Equals(raw.DockModifierKey, normalized.DockModifierKey, StringComparison.Ordinal))
             report($"设置自愈：DockModifierKey={raw.DockModifierKey} → {normalized.DockModifierKey}");
+        if (!string.Equals(raw.DockTrayPosition, normalized.DockTrayPosition, StringComparison.Ordinal))
+            report($"设置自愈：DockTrayPosition={raw.DockTrayPosition} → {normalized.DockTrayPosition}（widget/end 白名单）");
 
         try
         {

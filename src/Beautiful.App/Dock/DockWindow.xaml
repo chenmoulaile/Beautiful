@@ -205,11 +205,33 @@
                 </Trigger>
             </DataTemplate.Triggers>
         </DataTemplate>
+        <!-- 托盘收纳列条目（5.0.0 未闭合项④）：44 宽标准图标格，图形是自绘矢量——一条向上
+             的收纳箭头（Windows"显示隐藏的图标"的 chevron 语义）+ 底部托盘线，颜色走
+             MacTextSecondary（次要内容色，两主题 token 字典同键）。不预览托盘位图：
+             Dock 是常驻表面，为格子读托盘就要与顶栏常驻条叠加扫描/抓屏；真实的图标平铺
+             与点击转发都在点击后的弹层（TrayColumnPanel）里。 -->
+        <DataTemplate x:Key="TrayItemTemplate">
+            <Grid x:Name="ItemRoot" Background="Transparent" Width="44"
+                  ToolTip="托盘收纳：点击列出系统托盘图标，点击图标交回它自己的应用">
+                <Path Data="M 13,19 L 22,11 L 31,19 M 12,27 L 32,27"
+                      Stroke="{DynamicResource MacTextSecondary}" StrokeThickness="1.8"
+                      StrokeStartLineCap="Round" StrokeEndLineCap="Round" StrokeLineJoin="Round"
+                      HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                <Border x:Name="Hover" CornerRadius="12" Background="{DynamicResource AurHoverTile}"
+                        IsHitTestVisible="False" Visibility="Collapsed"/>
+            </Grid>
+            <DataTemplate.Triggers>
+                <Trigger SourceName="ItemRoot" Property="IsMouseOver" Value="True">
+                    <Setter TargetName="Hover" Property="Visibility" Value="Visible"/>
+                </Trigger>
+            </DataTemplate.Triggers>
+        </DataTemplate>
         <dock:DockItemTemplateSelector x:Key="ItemSelector"
                                        DefaultTemplate="{StaticResource DefaultItemTemplate}"
                                        MediaTemplate="{StaticResource MediaItemTemplate}"
                                        SeparatorTemplate="{StaticResource SeparatorItemTemplate}"
-                                       WidgetTemplate="{StaticResource WidgetItemTemplate}"/>
+                                       WidgetTemplate="{StaticResource WidgetItemTemplate}"
+                                       TrayTemplate="{StaticResource TrayItemTemplate}"/>
         <!-- 条目右键菜单（固定/取消固定）v2 Task 15 起改走 FluentMenu（自绘高级弹层，观感同托盘菜单）：
              代码后置按 DockSurface.HitTestItem 命中的条目在光标处 FluentMenu.Show，不再用原生 ContextMenu。
              历史注记：容器挂 ContextMenuService 的 ContextMenu 在本 AppBar 窗口会把事件路由到

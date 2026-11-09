@@ -8,8 +8,10 @@ namespace Beautiful.Core.Launcher;
 /// <param name="Name">界面显示名（扫描器已剥掉 ".lnk"；这里不再二次加工，见 <see cref="LauncherIndex.Build"/>）。</param>
 /// <param name="LaunchPath">真正交给 shell 启动的目标：快捷方式解析出的 exe，或解析失败时的 .lnk 本身。</param>
 /// <param name="Arguments">快捷方式自带的参数（启动时原样带上，否则"带参数启动"的那批快捷方式会启动错）。</param>
-/// <param name="IconPath">图标源：<b>优先给 .lnk 本身</b>，因为 App 侧的图标降级链第 ③ 层正是
-/// "解析 .lnk 后在目标/IconLocation 上重跑"——把 .lnk 交进去能让图标跟着快捷方式自定义图标走。</param>
+/// <param name="IconPath">图标源：桌面条目<b>优先给 .lnk 本身</b>，因为 App 侧的图标降级链第 ③ 层正是
+/// "解析 .lnk 后在目标/IconLocation 上重跑"——把 .lnk 交进去能让图标跟着快捷方式自定义图标走；
+/// MSIX 条目给<b>包内 logo 资产全路径</b>（AppxLogoResolver 选变体 + MsixIndexSource 验存，v5 ⑤ 补源），
+/// 图片文件由 MsixLogoImage 直解码，解析失败仍为 null → 首字母色块兜底。</param>
 public sealed record LauncherApp(
     string Name,
     string LaunchPath,

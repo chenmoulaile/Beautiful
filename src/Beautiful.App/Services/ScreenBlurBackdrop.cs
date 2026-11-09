@@ -139,7 +139,7 @@ public sealed class ScreenBackdrop
 /// </para>
 /// <para>
 /// 【降级不得变黑】抓屏失败（无显示器 / 安全桌面 / 全零帧 / GDI 异常）一律返回 null，
-/// 调用方改用现成的实心渐变卡底（<c>CardFillSolid</c> / <c>PanelFillSolid</c>）。
+/// 调用方改用现成的实心渐变卡底（<c>CardFillSolid</c> / 主题键 <c>AurMediaPanelFillSolid</c>）。
 /// 环境开关 <c>BEAUTIFUL_NOBLUR=1</c> 强制走这条降级，便于肉眼验证降级形态。
 /// </para>
 /// </summary>

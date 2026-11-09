@@ -22,9 +22,12 @@
         <DropShadowEffect x:Key="CardShadow" BlurRadius="36" ShadowDepth="10" Direction="270"
                           Color="#000000" Opacity="0.62"/>
 
-        <!-- 结果行：整行是命中区（点哪行启动哪行），选中态用强调色的软填充 + 底缘 1px 发丝边
-             （Aur* 选中行语义键：macOS 下是原 accent@0.92 的同值兜底，Aurora 下是低透明 accent 软填充，
-             压在抓屏模糊之上不会把图标与名称糊成一片；强调色来自 DynamicResource，换色自动跟随）。
+        <!-- 结果行：整行是命中区（点哪行启动哪行），选中态用强调色的软填充 + 左缘 2dip accent 竖条
+             + 底缘 1px 发丝边（Aur* 选中行语义键：macOS 下是原 accent@0.92 的同值兜底，Aurora 下是
+             低透明 accent 软填充，压在抓屏模糊之上不会把图标与名称糊成一片；强调色来自
+             DynamicResource，换色/换主题/亮暗切换自动跟随——AurSelectionHairline 就是运行时 accent 画刷）。
+             【左缘竖条与内容定位】BorderThickness 左缘 2px 会把内容往右推 2px，触发器里同步把左内边距
+             14 → 12，选中与未选中的图标 x 起点逐像素一致（行间不跳）。
              【不用 Effect/不加动画】本面板是瞬态表面，但行模板会被虚拟化重排：Effect 会把它推进
              离屏滤镜管线（本项目对 Dock 的逐帧路径已裁定禁止），这里也无需引入第二套材质。 -->
         <Style x:Key="RowStyle" TargetType="Border">
@@ -36,7 +39,8 @@
                 <DataTrigger Binding="{Binding IsSelected}" Value="True">
                     <Setter Property="Background" Value="{DynamicResource AurSelectionFill}"/>
                     <Setter Property="BorderBrush" Value="{DynamicResource AurSelectionHairline}"/>
-                    <Setter Property="BorderThickness" Value="0,0,0,1"/>
+                    <Setter Property="BorderThickness" Value="2,0,0,1"/>
+                    <Setter Property="Padding" Value="12,0"/>
                 </DataTrigger>
             </Style.Triggers>
         </Style>

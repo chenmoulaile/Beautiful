@@ -62,6 +62,9 @@ public sealed record AuroraTokens
     public double MenuItemHeight { get; init; }
     public double WindowCornerRadius { get; init; }
     public double ControlCornerRadius { get; init; }
+    /// <summary>切换器面板卡圆角（键 MacSwitcherPanelRadius，SwitcherWindow.ApplyStyle 读键赋值；
+    /// 20 与 Aurora 自家 26 面板圆角拉开层级——切换器是"比面板小一号的浮卡"，不是 Dock 面板本体）。</summary>
+    public double SwitcherPanelRadius { get; init; }
 
     // ---------- 字体 ----------
     /// <summary>正文族（运行时被 FontProbe.FamilyFor("Aurora") 的解析结果覆写；这里是探测失败兜底串）。</summary>
@@ -98,6 +101,11 @@ public sealed record AuroraTokens
     /// <summary>弹层实心底渐变（上→下两停；"渲染恒为深色玻璃"旧裁定在 Aurora 放开的载体）。</summary>
     public string PopupFillTop { get; init; } = "";
     public string PopupFillBottom { get; init; } = "";
+    /// <summary>媒体面板实心底渐变（上→下两停；抓屏模糊不可用时的降级形态，键 AurMediaPanelFillSolid。
+    /// 两停 alpha 与 macOS 兜底同规格（C8/D5），色相随 Aurora 玻璃族；亮色给亮玻璃，媒体面板文字
+    /// 是 ThemeTextPrimary，暗底配亮字/亮底配暗字在两套外观下都成立）。</summary>
+    public string MediaPanelFillTop { get; init; } = "";
+    public string MediaPanelFillBottom { get; init; } = "";
     /// <summary>弹层模糊背板上的遮罩（实色，保文字对比度）。</summary>
     public string PopupFillBlur { get; init; } = "";
     /// <summary>微过冲弹簧曲线（CSS 语义；WPF 落 KeySpline(0.34,1.56,0.64,1)，y 超 1 才出得过冲）。</summary>
@@ -148,6 +156,7 @@ public sealed record AuroraTokens
         MenuItemHeight = 24,
         WindowCornerRadius = 12,
         ControlCornerRadius = 9,
+        SwitcherPanelRadius = 20,
         FontText = "Inter, Inter Medium, Inter SemiBold, Inter Display, Segoe UI Variable, Segoe UI",
         FontDisplay = "Inter Display, Inter, Segoe UI Variable Display, Segoe UI",
         FontMono = "Cascadia Mono, Consolas",
@@ -170,6 +179,8 @@ public sealed record AuroraTokens
         PopupFillTop = "#EE1B1D24",
         PopupFillBottom = "#E617181E",
         PopupFillBlur = "#88131318",
+        MediaPanelFillTop = "#C81B1D24",
+        MediaPanelFillBottom = "#D515171D",
         SpringEase = "cubic-bezier(0.34,1.56,0.64,1)",
         CardEnterMs = 180,
     };
@@ -217,6 +228,7 @@ public sealed record AuroraTokens
         MenuItemHeight = 24,
         WindowCornerRadius = 12,
         ControlCornerRadius = 9,
+        SwitcherPanelRadius = 20,
         FontText = "Inter, Inter Medium, Inter SemiBold, Inter Display, Segoe UI Variable, Segoe UI",
         FontDisplay = "Inter Display, Inter, Segoe UI Variable Display, Segoe UI",
         FontMono = "Cascadia Mono, Consolas",
@@ -239,6 +251,8 @@ public sealed record AuroraTokens
         PopupFillTop = "#F0FAFCFE",
         PopupFillBottom = "#EAF4F7FA",
         PopupFillBlur = "#88EEF2F7",
+        MediaPanelFillTop = "#C8FAFCFE",
+        MediaPanelFillBottom = "#D5F0F3F7",
         SpringEase = "cubic-bezier(0.34,1.56,0.64,1)",
         CardEnterMs = 180,
     };

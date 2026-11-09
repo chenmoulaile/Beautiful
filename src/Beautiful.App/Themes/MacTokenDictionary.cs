@@ -2,6 +2,7 @@ using System.Windows;
 using System.Windows.Media;
 using System.Windows.Media.Effects;
 using Beautiful.Core.Design;
+using Beautiful.Core.Imaging;
 using Color = System.Windows.Media.Color;                 // UseWindowsForms 隐式 using 消歧
 using ColorConverter = System.Windows.Media.ColorConverter;
 using FontFamily = System.Windows.Media.FontFamily;
@@ -57,6 +58,7 @@ public static class MacTokenDictionary
         dict["MacControlFillHover"] = Brush(t.ControlFillHover);
         dict["MacSeparator"] = Brush(t.Separator);
         dict["MacBackdropTint"] = Brush(t.BackdropTint);
+        dict["MacWallpaperTint"] = Brush(t.WallpaperTint);   // 墙纸取色（键位与 AurWallpaperTint 对齐）
 
         dict["MacMenuBarHeight"] = t.MenuBarHeight;
         dict["MacMenuBarFontSize"] = t.MenuBarFontSize;
@@ -68,6 +70,7 @@ public static class MacTokenDictionary
         // CornerRadius（而非 boxed double）：XAML 侧 CornerRadius="{DynamicResource MacPopupCornerRadius}"
         // 直接取值，DynamicResource 不走 TypeConverter，double 会赋不上（CalendarFlyout 卡底圆角消费点）。
         dict["MacPopupCornerRadius"] = new CornerRadius(t.PopupCornerRadius);
+        dict["MacSwitcherPanelRadius"] = new CornerRadius(t.SwitcherPanelRadius);   // 切换器卡圆角（macOS 18 = 原生观感）
         dict["MacMenuItemHeight"] = t.MenuItemHeight;
         dict["MacWindowCornerRadius"] = t.WindowCornerRadius;
         dict["MacControlCornerRadius"] = t.ControlCornerRadius;
@@ -93,6 +96,10 @@ public static class MacTokenDictionary
         dict["ThemeDockSeparatorFill"] = Brush(t.DockSeparator);
         dict["ThemeBackdropTint"] = Brush(t.BackdropTint);
         dict["ThemeFontFamily"] = new FontFamily(fontText);
+        // Dock 玻璃（macOS 形态）：静态字典的三停只是首帧值，这里带上墙纸 tint 重算。
+        // tint 全透明（取色关闭）时权重 0 → 逐字节等于 MacOS.xaml:15-19 的静态渐变，5.0.0 观感零变化；
+        // 混入权重与 Aurora 公式同源（WallpaperTint.GlassMixWeight，alpha × 0.35）。
+        dict["ThemeDockGlassBackground"] = DockGlassGradient(t);
         // 面板圆角由 ThemeManager 按主题传入（macOS 维持既有 18 —— record 25 与字典 18 的存量矛盾按
         // "不回归"原则保留现状；Aurora 注入其 PanelCornerRadius=26）。
         dict["ThemePanelCornerRadius"] = new CornerRadius(panelCornerRadius);
@@ -104,6 +111,7 @@ public static class MacTokenDictionary
         // AuroraTokenDictionary 按自身 token 覆写（亮色走亮弹层底）。
         dict["AurPopupFillSolid"] = VerticalGradient("#F82C2C2F", "#FB1F1F23");
         dict["AurPopupFillBlur"] = VerticalGradient("#8A232327", "#9919191C");
+        dict["AurMediaPanelFillSolid"] = VerticalGradient("#C81C1C1E", "#D5171719");  // 媒体面板实心底：MediaPanel.xaml 原就地硬编码同值（macOS 视觉零回归）
         dict["AurInnerGlowBrush"] = InnerGlow();
         dict["AurCardFill"] = Brush("#14FFFFFF");
         dict["AurCardFillHover"] = Brush("#14FFFFFF");
@@ -128,6 +136,36 @@ public static class MacTokenDictionary
         var brush = new LinearGradientBrush { StartPoint = new Point(0, 0), EndPoint = new Point(0, 1) };
         brush.GradientStops.Add(new GradientStop((Color)ColorConverter.ConvertFromString(topHex), 0.0));
         brush.GradientStops.Add(new GradientStop((Color)ColorConverter.ConvertFromString(bottomHex), 1.0));
+        brush.Freeze();
+        return brush;
+    }
+
+    // ══════════════════════════ Dock 玻璃公式（墙纸取色的 macOS 混入位） ══════════════════════════
+    //
+    // 三停字面值与 MacOS.xaml:15-19 的静态渐变逐字节相同（静态字典是"首帧值"的出处，这里运行时重算）。
+    // tint 权重 = tint alpha × WallpaperTint.GlassMixWeight(0.35)，与 AuroraTokenDictionary.DockGlassGradient
+    // 的 tint.ScA × 0.35 同源——两条主题线对同一张壁纸的混入力度永远一致。权重 0（取色关闭）时
+    // Core.WallpaperTint.MixHex 恒等返回基色 → 画刷与静态字典逐字节相同（关态零回归由 Core 单测锁定）。
+
+    /// <summary>macOS Dock 玻璃三停（上亮下沉；= MacOS.xaml 的 ThemeDockGlassBackground）。</summary>
+    private static readonly (string Hex, double Offset)[] DockGlassStops =
+    [
+        ("#C838383A", 0.0),
+        ("#B8242426", 0.5),
+        ("#A8161618", 1.0),
+    ];
+
+    /// <summary>把墙纸 tint 按同源权重混进 macOS 玻璃三停（tint 解析失败/全透明 = 静态渐变原样）。</summary>
+    private static LinearGradientBrush DockGlassGradient(MacTokens t)
+    {
+        var weight = 0.0;
+        if (WallpaperTint.TryParseHex(t.WallpaperTint, out _, out _, out _, out var alpha))
+            weight = alpha / 255.0 * WallpaperTint.GlassMixWeight;
+        var brush = new LinearGradientBrush { StartPoint = new Point(0, 0), EndPoint = new Point(0, 1) };
+        foreach (var (hex, offset) in DockGlassStops)
+            brush.GradientStops.Add(new GradientStop(
+                (Color)ColorConverter.ConvertFromString(WallpaperTint.MixHex(hex, t.WallpaperTint, weight)),
+                offset));
         brush.Freeze();
         return brush;
     }

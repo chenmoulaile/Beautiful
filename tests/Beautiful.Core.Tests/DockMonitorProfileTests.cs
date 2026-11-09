@@ -162,4 +162,64 @@ public class DockMonitorProfileTests
             globalHideMode: "off", globalEdge: "bottom", globalIconSize: 56);
         Assert.Equal(80, plan.IconSize);   // 99 钳到 16 → 命中
     }
+
+    // ---------- showDock / slim（多屏 Dock 实例化：每屏放什么表面） ----------
+
+    [Fact]
+    public void showDock_slim默认值_无覆盖的屏等于多屏化前现状()
+    {
+        // 无覆盖列表：ShowDock=true / Slim=false —— 未配置的屏显示完整 Dock，零回归
+        var plan = DockMonitorProfiles.Resolve([], 1, true, "off", "bottom", 56);
+        Assert.True(plan.ShowDock);
+        Assert.False(plan.Slim);
+    }
+
+    [Fact]
+    public void showDock_slim逐屏覆盖_未命中屏回落现状()
+    {
+        var profiles = new List<DockMonitorProfile>
+        {
+            new() { Monitor = "2", ShowDock = false, Slim = true },
+            new() { Monitor = "3", ShowDock = false },
+        };
+        var on2 = DockMonitorProfiles.Resolve(profiles, 2, false, "off", "bottom", 56);
+        Assert.False(on2.ShowDock);
+        Assert.True(on2.Slim);
+
+        var on3 = DockMonitorProfiles.Resolve(profiles, 3, false, "off", "bottom", 56);
+        Assert.False(on3.ShowDock);
+        Assert.False(on3.Slim);   // slim 未写 = false
+
+        // 显示器 1 无覆盖：完整 Dock（现状）
+        var on1 = DockMonitorProfiles.Resolve(profiles, 1, true, "off", "bottom", 56);
+        Assert.True(on1.ShowDock);
+        Assert.False(on1.Slim);
+    }
+
+    [Fact]
+    public void 值相等比较含showDock与slim_计划变更才会重落地()
+    {
+        // DockWindow.ApplyPendingScreenPlan 按 record struct 值相等跳过重复落地：
+        // showDock/slim 进了比较集，覆盖翻转才会触发重落地。
+        var a = DockMonitorProfiles.Resolve([], 1, true, "off", "bottom", 56);
+        var b = DockMonitorProfiles.Resolve(
+            new List<DockMonitorProfile> { new() { Monitor = "1" } }, 1, true, "off", "bottom", 56);
+        Assert.Equal(a, b);   // 全 null 覆盖 == 无覆盖
+        var c = DockMonitorProfiles.Resolve(
+            new List<DockMonitorProfile> { new() { Monitor = "1", ShowDock = false, Slim = true } },
+            1, true, "off", "bottom", 56);
+        Assert.NotEqual(a, c);
+    }
+
+    [Fact]
+    public void 表面判定_full优先_slim仅在全关时生效()
+    {
+        // showDock=true：完整 Dock（slim 开着也无效）
+        Assert.Equal(DockSurfaceKind.Full, DockMonitorProfiles.SurfaceKindOf(showDock: true, slim: false));
+        Assert.Equal(DockSurfaceKind.Full, DockMonitorProfiles.SurfaceKindOf(showDock: true, slim: true));
+        // showDock=false 且 slim=true：精简条
+        Assert.Equal(DockSurfaceKind.Slim, DockMonitorProfiles.SurfaceKindOf(showDock: false, slim: true));
+        // 两者皆关：什么都不放
+        Assert.Equal(DockSurfaceKind.None, DockMonitorProfiles.SurfaceKindOf(showDock: false, slim: false));
+    }
 }

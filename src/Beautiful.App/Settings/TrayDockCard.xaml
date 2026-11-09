@@ -1,0 +1,46 @@
+<UserControl x:Class="Beautiful.App.Settings.TrayDockCard"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+    <!-- Dock 托盘收纳列设置卡（5.0.0 未闭合项④）：**自包含** UserControl——样式与资源全部定义在本文件，
+         不引用设置窗口宿主的任何 StaticResource（与 WallpaperTintCard/ThermalSettingsCard 同一接线约定：
+         宿主只需把本控件放进 Dock 分区即可，放哪里都不掉样式）。配色沿用宿主同款分区卡片观感
+         （半透明白底 + 灰描边），与其它分区视觉一致。 -->
+    <UserControl.Resources>
+        <Style x:Key="TraySectionTitle" TargetType="TextBlock">
+            <Setter Property="FontSize" Value="13"/>
+            <Setter Property="FontWeight" Value="SemiBold"/>
+            <Setter Property="Margin" Value="0,0,0,10"/>
+        </Style>
+        <Style x:Key="TrayHint" TargetType="TextBlock">
+            <Setter Property="FontSize" Value="11"/>
+            <Setter Property="Opacity" Value="0.72"/>
+            <Setter Property="TextWrapping" Value="Wrap"/>
+            <Setter Property="Margin" Value="0,6,0,0"/>
+        </Style>
+    </UserControl.Resources>
+
+    <Border Background="#0FFFFFFF" BorderBrush="#22808080" BorderThickness="1"
+            CornerRadius="10" Padding="16,12" Margin="0,0,0,12">
+        <StackPanel>
+            <TextBlock Text="托盘收纳列" Style="{StaticResource TraySectionTitle}"/>
+
+            <CheckBox x:Name="TrayEnabledCheck" Content="在 Dock 行尾显示托盘收纳格"
+                      Margin="0,0,0,8"
+                      Checked="TrayEnabled_Changed" Unchecked="TrayEnabled_Changed"/>
+
+            <StackPanel Orientation="Horizontal">
+                <TextBlock Text="挂点" VerticalAlignment="Center" Margin="0,0,12,0"/>
+                <ComboBox x:Name="TrayPositionBox" Width="200" VerticalAlignment="Center"
+                          SelectionChanged="TrayPosition_Changed">
+                    <ComboBoxItem Content="时钟 / 天气小组件之前（默认）"/>
+                    <ComboBoxItem Content="行尾（小组件之后）"/>
+                </ComboBox>
+            </StackPanel>
+
+            <TextBlock Style="{StaticResource TrayHint}"
+                       Text="把系统托盘的第三方图标收进 Dock：格子上是一个收纳箭头，点击展开弹层列出真实托盘图标；左键＝它的默认动作、右键＝它自己的菜单，都交回那个应用处理（与顶栏托盘面板同一套转发机制）。"/>
+            <TextBlock Style="{StaticResource TrayHint}"
+                       Text="弹层只在打开时读取托盘（打开期间每 3 秒自动重读，关闭即停），不与顶栏常驻托盘条叠加扫描；Dock 格子上不预览托盘位图——读不到像素的图标宁可用空框占位，也不会拿别的图凑数。"/>
+        </StackPanel>
+    </Border>
+</UserControl>

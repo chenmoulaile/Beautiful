@@ -319,7 +319,10 @@ public sealed partial class SwitcherWindow : Window
     private void ApplyStyle()
     {
         var accent = (Brush)Resources["SwitcherAccent"];
-        _baseIconSize = 56; _panelRadius = 18; _itemGap = 4; _verticalBias = 0.42;
+        _baseIconSize = 56; _itemGap = 4; _verticalBias = 0.42;
+        // 卡圆角随主题键 MacSwitcherPanelRadius（CornerRadius 型资源，键面与 MacPopupCornerRadius 同款）：
+        // macOS 18 保持原生观感不回归，Aurora 20；键取不到/类型不符回落 18——样式绝不因主题键缺席而变形状。
+        _panelRadius = TryFindResource("MacSwitcherPanelRadius") is CornerRadius cr ? cr.TopLeft : 18;
         _captionVisible = true;
         _bodyPadding = new Thickness(16, 13, 16, 13);
         // 激活卡描边随主题强调色（ThemeAccent，DynamicResource 字典里的运行时画刷），

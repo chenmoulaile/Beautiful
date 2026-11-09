@@ -126,11 +126,13 @@ public sealed class LauncherService : IDisposable
 
     /// <summary>
     /// 结果行图标（alpha.29 残项清零后的三级兜底链）：<b>① macOS 图标集</b>（macOS 化 r4，与 Dock
-    /// 同一套键映射）→ <b>② 系统图标提取</b>（v3 T6 管线，请求实际显示尺寸，LRU 缓存）→
-    /// <b>③ GNOME 式首字母色块</b>（accent 底 + 白色首字母 + 圆角 tile，<c>LetterTileRenderer</c>）。
-    /// 任何应用都不允许空白格：MSIX 条目（IconPath 恒 null，见 <c>MsixIndexSource</c> 注释）以前
-    /// 走到 ② 的"无源可提"就返回 null，启动台画空框——Microsoft「Family」格空白的根因；现在终点
-    /// 收在 ③ 的色块上，画不出来（渲染异常）才返回 null 留空。
+    /// 同一套键映射）→ <b>② 系统图标提取</b>（v3 T6 管线，请求实际显示尺寸，LRU 缓存；AppsFolder 条目
+    /// 的 IconPath 现在指向 <b>MSIX 包内 logo 资产</b>——v5 ⑤ 补源：MsixIndexSource 读包清单 +
+    /// <c>AppxLogoResolver</c> 选变体，图片文件由 <see cref="MsixLogoImage"/> 直解码，绝不喂给
+    /// IconExtractor 的 exe/ico 链）→ <b>③ GNOME 式首字母色块</b>（accent 底 + 白色首字母 + 圆角 tile，
+    /// <c>LetterTileRenderer</c>）。
+    /// 任何应用都不允许空白格：MSIX 条目解析不到包内 logo 时（包目录读不动/清单缺失/资产不存在）
+    /// IconPath 仍为 null，走到 ③ 收在色块上，画不出来（渲染异常）才返回 null 留空。
     /// </summary>
     public BitmapSource? IconOf(LauncherApp app, int size = IconExtractor.PreferredSize)
     {
@@ -148,16 +150,30 @@ public sealed class LauncherService : IDisposable
             ? (string.IsNullOrWhiteSpace(app.IconPath) ? app.Name : app.IconPath)
             : app.LaunchPath);
         if (mac is not null) return mac;
-        // ② 系统图标提取：AppsFolder 条目只认 IconPath（19041 投影给不出包内 logo，恒 null → 跳过），
-        //    绝不退回 explorer.exe。
+        // ② 系统图标提取：AppsFolder 条目只认 IconPath（19041 投影给不出包内 logo → 由 MsixIndexSource
+        //    读包清单补源，见该处注释），绝不退回 explorer.exe。
         var source = isAppsFolder
             ? app.IconPath
             : string.IsNullOrWhiteSpace(app.IconPath) ? app.LaunchPath : app.IconPath;
-        if (!string.IsNullOrWhiteSpace(source) && IconExtractor.GetIcon(source, size) is { } extracted)
-            return extracted;
+        if (!string.IsNullOrWhiteSpace(source))
+        {
+            // 包内 logo 是图片文件（清单声明的 .png/.jpg）：IconExtractor 的降级链以 exe/ico 为对象，
+            // .png 落到它的 ⑤ SHGetFileInfo 只会拿回"PNG 文件类型"的系统图标——错图标比没图标更糟；
+            // 所以图片路径走 MsixLogoImage 直解码，解不出落 ③ 色块。普通条目的 .lnk/exe/ico 源不动。
+            var bitmap = IsImageFile(source)
+                ? MsixLogoImage.TryLoad(source)
+                : IconExtractor.GetIcon(source, size);
+            if (bitmap is not null) return bitmap;
+        }
         // ③ 首字母色块（终点兜底）：accent 色由 ThemeManager 缓存（后台线程可读，见 AccentHex 注释）。
         return Services.LetterTileRenderer.Render(app.Name, size, Themes.ThemeManager.AccentHex);
     }
+
+    /// <summary>图片文件路径（MSIX 包内 logo 的声明扩展名；.ico/.exe/.dll 等仍归 IconExtractor）。</summary>
+    private static bool IsImageFile(string path) =>
+        path.EndsWith(".png", StringComparison.OrdinalIgnoreCase)
+        || path.EndsWith(".jpg", StringComparison.OrdinalIgnoreCase)
+        || path.EndsWith(".jpeg", StringComparison.OrdinalIgnoreCase);
 
     // ---------- 开合 ----------
 

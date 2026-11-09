@@ -61,6 +61,18 @@ public sealed class DockViewModel
     /// <summary>启动台常驻格是否参与排布（设置项 DockShowLaunchpad，默认开 = alpha.22 以来的既有行为）。</summary>
     private bool _launchpadEnabled = true;
 
+    /// <summary>
+    /// 托盘收纳列 applet（5.0.0 未闭合项④）：行尾功能格，实例固定（与回收站/媒体同一后缀槽纪律——
+    /// 引用不变 ⇒ Reconcile 零事件），点击展开系统托盘弹层。
+    /// </summary>
+    private readonly DockItem _tray = CreateTrayItem();
+
+    /// <summary>托盘收纳列是否参与排布（设置项 DockTrayEnabled，默认关）。</summary>
+    private bool _trayEnabled;
+
+    /// <summary>托盘收纳列挂点（设置项 DockTrayPosition，语义在 Core <see cref="DockTrayPlacement"/>）。</summary>
+    private string _trayPosition = DockTrayPlacement.PositionWidget;
+
     private readonly DockItem _appsSeparator = MakeSeparator(DockSeparatorRole.AppsBoundary);
     private readonly DockItem _trashSeparator = MakeSeparator(DockSeparatorRole.TrashBoundary);
 
@@ -339,6 +351,17 @@ public sealed class DockViewModel
                Detail: DockWidget.Detail(null, -1));
 
     /// <summary>
+    /// 托盘收纳列常驻格：无提取图标（Icon=null）——托盘格的图形是模板里的自绘矢量（收纳箭头），
+    /// 走图标提取会被画成回退字形 ▣；托盘位图也不进这格（Dock 常驻表面不读托盘，见 DockItemKind.Tray）。
+    /// </summary>
+    private static DockItem CreateTrayItem()
+        => new(Id: "tray:column",
+               Label: "托盘收纳",
+               Icon: null,
+               Kind: DockItemKind.Tray,
+               LaunchPath: string.Empty);
+
+    /// <summary>
     /// 刷新小组件两行文字（时钟由定时器驱动，天气由 WeatherService 驱动）。
     /// 只在文字真的变了时才替换条目实例：<see cref="Reconcile"/> 用引用相等做最小差异，
     /// 每秒替换会让 DockSurface 每秒重建一次容器（放大动画会被打断）。
@@ -422,6 +445,34 @@ public sealed class DockViewModel
         }
 
         _launchpadEnabled = enabled;
+        Reconcile();
+    }
+
+    /// <summary>开关托盘收纳列（设置页）：立即重排，不需要重启 Dock。</summary>
+    public void ApplyTrayEnabled(bool enabled)
+    {
+        if (_trayEnabled == enabled)
+        {
+            return;
+        }
+
+        _trayEnabled = enabled;
+        Reconcile();
+    }
+
+    /// <summary>
+    /// 移动托盘收纳列挂点（设置页）：语义与规范化在 Core <see cref="DockTrayPlacement"/>，
+    /// 位置真的变了才重排（重复喂同一值零事件）。
+    /// </summary>
+    public void ApplyTrayPosition(string position)
+    {
+        var normalized = DockTrayPlacement.NormalizePosition(position);
+        if (_trayPosition == normalized)
+        {
+            return;
+        }
+
+        _trayPosition = normalized;
         Reconcile();
     }
 
@@ -650,11 +701,26 @@ public sealed class DockViewModel
         semantic.Add(_recycleBin); kinds.Add(_recycleBin.Kind);
         semantic.Add(_media); kinds.Add(_media.Kind);
 
+        // 托盘收纳列（5.0.0 未闭合项④）：行尾功能格。插入点由 Core DockTrayPlacement 裁定——
+        // 默认在小组件之前（小组件保持"信息块永远在最右端"的 macOS 语义），end 档挂到行尾；
+        // 小组件关闭时两档挂点收敛为行尾。它与邻居之间不产生分隔符（DockSeparatorPlan 的边界
+        // 清单不认识 Tray，见 DockTrayPlacementTests）。
+        var traySlot = DockTrayPlacement.SuffixIndex(_trayEnabled, _trayPosition, _widgetEnabled);
+        if (traySlot == 2)
+        {
+            semantic.Add(_tray); kinds.Add(_tray.Kind);
+        }
+
         // 小组件挂在行尾（媒体胶囊之后）：它不参与固定/窗口块，也不该被分隔符切开——
         // macOS 的 Dock 里"信息块"永远在最右端单独待着。
         if (_widgetEnabled)
         {
             semantic.Add(_widget); kinds.Add(_widget.Kind);
+        }
+
+        if (traySlot == 3)
+        {
+            semantic.Add(_tray); kinds.Add(_tray.Kind);
         }
 
         // ② 主题决定的分隔符槽位（Core 纯函数，可单测）

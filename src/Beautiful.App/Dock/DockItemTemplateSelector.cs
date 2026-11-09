@@ -18,11 +18,15 @@ public sealed class DockItemTemplateSelector : DataTemplateSelector
 
     public DataTemplate? WidgetTemplate { get; set; }
 
+    public DataTemplate? TrayTemplate { get; set; }
+
     public override DataTemplate? SelectTemplate(object item, DependencyObject container) => item switch
     {
         DockItem { Kind: DockItemKind.Media } => MediaTemplate,
         // 小组件没有图标，走图标模板会被画成回退字形 ▣
         DockItem { Kind: DockItemKind.Widget } => WidgetTemplate ?? DefaultTemplate,
+        // 托盘收纳格同理：图形是模板里的自绘矢量（Icon 恒 null），走图标模板同样画成回退字形 ▣
+        DockItem { Kind: DockItemKind.Tray } => TrayTemplate ?? DefaultTemplate,
         // 分隔符模板未提供（旧主题字典缺键）时收起为 0 宽条目：宁可看不见也不画成方块图标
         DockItem { Kind: DockItemKind.Separator } => SeparatorTemplate ?? DefaultTemplate,
         _ => DefaultTemplate

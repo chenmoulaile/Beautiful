@@ -60,7 +60,7 @@ public class AppSettingsTests
         Assert.Equal("macos", s.SwitcherStyle);
         Assert.Equal("alt+tab", s.SwitcherHotkey);
         Assert.Equal(56, s.DockIconSize);
-        Assert.Equal(4, s.DockEdgeMargin);
+        Assert.Equal(6, s.DockEdgeMargin);   // wp-detail r5 默认 4→6（已有配置文件里显式写的 4 不受影响）
         Assert.Equal(1.7, s.MagnificationStrength);
         Assert.Equal("bottom", s.DockPosition);
         Assert.True(s.PreviewEnabled);
@@ -336,7 +336,7 @@ public class AppSettingsStoreTests : IDisposable
         Assert.Equal("macos", s.SwitcherStyle);
         Assert.Equal("alt+tab", s.SwitcherHotkey);
         Assert.Equal(56, s.DockIconSize);
-        Assert.Equal(4, s.DockEdgeMargin);
+        Assert.Equal(6, s.DockEdgeMargin);   // wp-detail r5 默认 4→6（已有配置文件里显式写的 4 不受影响）
         Assert.Equal(1.7, s.MagnificationStrength);
         Assert.Equal("bottom", s.DockPosition);
         Assert.True(s.PreviewEnabled);

@@ -1,4 +1,6 @@
 using System.IO;
+using System.Xml.Linq;
+using Beautiful.App.Interop;
 using Beautiful.App.Services;
 using Beautiful.Core.Launcher;
 using Windows.Management.Deployment;
@@ -68,9 +70,20 @@ public static class MsixIndexSource
         var list = new List<LauncherApp>();
         try
         {
-            // 19041 投影的 AppListEntry 只给 AppUserModelId + DisplayInfo(Description/DisplayName)：
-            // 没有 logo/exe 路径可取，IconPath 因此只能留 null（alpha.29 起 IconOf 对这类条目按
-            // **显示名**查图标集/覆盖表，查不到再画首字母色块兜底——不再出现空白格）。
+            // 【图标补源（v5 ⑤ 未闭合项）】19041 投影的 AppListEntry 本身只给 AppUserModelId +
+            // DisplayInfo（Description/DisplayName），但**包目录本身可读**：WindowsApps 根目录的 ACL
+            // 只挡"列根目录"，逐包 InstallLocation 及其中的 AppxManifest.xml / targetsize-*.png
+            // 本机实测均可读（2026-11-09 探针：179 包中 111 包命中，微软 Family / 记事本 / 计算器 /
+            // 画图 / Store / Terminal 全部拿到 targetsize-256 unplated 资产）。于是读包清单、按 Core
+            // 的 AppxLogoResolver 展开变体候选、逐个 File.Exists 取第一个真实存在的资产填进 IconPath
+            // ——启动器图标链第②级由此拿到"包内 logo"这一级（见 LauncherService.IconOf）；找不到
+            // 维持 null，交回显示名表/首字母色块兜底。任何一步失败都只少一张图标，绝不向上抛。
+            // 19041 投影没有 Package.InstallPath（更高 SDK 才进投影），EffectivePath 又是 19041 专属
+            // （SupportedOSPlatformVersion=17763 会触发 CA1416）；改用 InstalledLocation.Path——17763 起
+            // 就有、与 2026-11-09 探针的 InstallLocation 同源。包读不动时为 null——ResolveLogoPath
+            // 对空白 installRoot 一律返回 null，条目照常收录、只少一张图标。
+            var installRoot = package.InstalledLocation?.Path;
+            var logos = new Dictionary<string, string?>(StringComparer.OrdinalIgnoreCase);
             foreach (var entry in await package.GetAppListEntriesAsync())
             {
                 try
@@ -79,7 +92,14 @@ public static class MsixIndexSource
                     var name = entry.DisplayInfo?.DisplayName;
                     // AUMID 是启动凭据、名字是显示与检索的主体，缺任何一个这条都没意义。
                     if (string.IsNullOrWhiteSpace(aumid) || string.IsNullOrWhiteSpace(name)) continue;
-                    list.Add(new LauncherApp(name!.Trim(), ExplorerPath(), AppsFolderArguments(aumid), null));
+                    // 同一包的多条 Application 各自解析（AUMID '!' 后段是 Application Id），
+                    // 但清单只读一次：结果按 AUMID 记忆，别把磁盘 IO 塞进逐条目循环。
+                    if (!logos.TryGetValue(aumid, out var logo))
+                    {
+                        logo = ResolveLogoPath(installRoot, aumid);
+                        logos[aumid] = logo;
+                    }
+                    list.Add(new LauncherApp(name!.Trim(), ExplorerPath(), AppsFolderArguments(aumid), logo));
                 }
                 catch { /* 单条目失效（包正在被卸载）：跳过这一条 */ }
             }
@@ -91,6 +111,49 @@ public static class MsixIndexSource
             // 逐包记一行会把日志刷满（SmtcService 的"会话失效是常态竞态而非故障"同一条判断）。
             System.Diagnostics.Debug.WriteLine($"MsixIndexSource: 跳过包: {ex.Message}");
             return [];
+        }
+    }
+
+    /// <summary>请求的 logo 像素：与启动台的最大请求尺寸对齐（<see cref="IconExtractor.PreferredSize"/> = 256）。</summary>
+    private const int LogoRequestPx = IconExtractor.PreferredSize;
+
+    /// <summary>
+    /// 解析包内 logo 资产的全路径；读不动/清单缺失/资产不存在<b>一律 null</b>（调用方维持旧兜底链，
+    /// 绝不抛上 UI——与 <see cref="ScanAsync"/> 的"只可能少一批条目"同一纪律，这里只是"少一张图标"）。
+    /// 顺序：清单 → <see cref="AppxLogoResolver.Candidates"/> 展开变体候选 → 逐个 File.Exists 取第一个。
+    /// </summary>
+    private static string? ResolveLogoPath(string? installRoot, string aumid)
+    {
+        try
+        {
+            if (string.IsNullOrWhiteSpace(installRoot)) return null;
+            var manifestPath = Path.Combine(installRoot, "AppxManifest.xml");
+            if (!File.Exists(manifestPath)) return null;
+            XDocument manifest;
+            try
+            {
+                manifest = XDocument.Load(manifestPath, LoadOptions.None);
+            }
+            catch
+            {
+                return null;   // 清单损坏/编码异常/被锁：静默降级
+            }
+            // AUMID = 包族名!应用 Id：取 '!' 后的段去清单里挑对应 Application（对不上交给
+            // 解析器回落到第一个带 logo 声明的 Application，单应用包即全量包的绝大多数）。
+            var bang = aumid.IndexOf('!');
+            var appId = bang >= 0 ? aumid[(bang + 1)..] : aumid;
+            foreach (var candidate in AppxLogoResolver.Candidates(manifest, LogoRequestPx, appId))
+            {
+                var full = Path.Combine(installRoot, candidate.RelativePath);
+                if (File.Exists(full)) return full;
+            }
+            return null;
+        }
+        catch
+        {
+            // installRoot 含非法字符（Path.Combine 抛 ArgumentException）这类极端输入也接住：
+            // 一个包的 logo 解析失败不许影响别的条目。
+            return null;
         }
     }
 
