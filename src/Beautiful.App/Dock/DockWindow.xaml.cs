@@ -171,6 +171,22 @@ public partial class DockWindow : AcrylicWindow
     /// </summary>
     private System.Windows.Threading.DispatcherTimer? _conditionTimer;
 
+    /// <summary>
+    /// smart 档遮挡采样的独立节拍（wp-borrow 收口，2026-11-10）：此前 80ms 一拍每拍全量 EnumWindows
+    ///（12.5 次/秒，50+ 顶层窗口的机器上每秒 600+ 窗次 API 批，OccludingWindowProbe.cs 的成本论证
+    /// 只覆盖"零 SEND 与粗筛"，没论证 80ms 步长本身）。窗口遮挡拓扑以人为感知尺度变化（拖窗/开关窗），
+    /// 前台切换的判定也本就按 80ms 拍滚动，240ms（3 拍）的遮挡时滞对"隐藏/滑回"决策不可感知；
+    /// 对照组：auto 档的窗口对账是 2s 一拍。缓存带 band 值比对——面板宽度变化（图标增减）时立即重采。
+    /// </summary>
+    private const int OccludingSampleIntervalMs = 240;
+
+    /// <summary>最近一轮遮挡采样结果（<see cref="SampleOccludingCached"/> 缓存；非 smart 档恒 null）。</summary>
+    private List<PhysicalRect>? _occludingCache;
+
+    /// <summary>缓存采样的 TickCount 时间戳与当时的面板带矩形（带变了缓存即失效）。</summary>
+    private long _occludingSampledTick;
+    private PhysicalRect _occludingCacheBand;
+
     /// <summary>当前生效的隐藏模式（规范化串；Core <see cref="DockHideModes.Known"/> 白名单内）。</summary>
     private string _hideMode = "off";
 
@@ -784,6 +800,7 @@ public partial class DockWindow : AcrylicWindow
     {
         _conditionTimer?.Stop();
         _conditionTimer = null;
+        _occludingCache = null;   // 换档/关窗后不留旧采样：下次进 smart 档重新采
     }
 
     /// <summary>半透明模式：光标不在 Dock 上时降到 45%，移上去立刻回 100%。
@@ -926,10 +943,13 @@ public partial class DockWindow : AcrylicWindow
         // 背景窗口压住 Dock 也让位（此前只看前台一扇，是代码注释自认的刻意近似）。
         // 采样全程零 SEND 消息（OccludingWindowProbe），粗筛后多数窗口不进 DWM 查询；
         // 其余档判定只看前台，不做这次扫描。
+        // wp-borrow 收口（2026-11-10）：采样从 80ms 拍拆出独立 240ms 节拍，两拍间复用缓存
+        //（窗口遮挡拓扑的人为变化尺度远大于 240ms 时滞；80ms 拍保留的纯查表事实——光标/
+        // 前台/修饰键——不受影响），Core 判定接口（DockHideFacts/DockHideModeDecider）不变。
         IReadOnlyList<PhysicalRect>? occluding = null;
         if (mode == DockHideModeKind.Smart)
         {
-            occluding = OccludingWindowProbe.CollectOverlappingBounds(band);
+            occluding = SampleOccludingCached(band);
         }
 
         var decision = DockHideModeDecider.Evaluate(new DockHideFacts(
@@ -954,6 +974,27 @@ public partial class DockWindow : AcrylicWindow
             ShowFromAutoHide();
         }
         // Dimmed 不属于条件档的取值域（Dim 是独立模式）；万一出现按"不动"处理，下一拍重判。
+    }
+
+    /// <summary>
+    /// smart 档遮挡采样（带节拍缓存）：<see cref="OccludingSampleIntervalMs"/> 内复用上一轮结果；
+    /// 面板带矩形变了（图标增减改变面板宽度）立即失效重采。返回值直接喂 DockHideFacts.OccludingBounds，
+    /// 时滞语义见 <see cref="OccludingSampleIntervalMs"/> 注释。
+    /// </summary>
+    private List<PhysicalRect> SampleOccludingCached(PhysicalRect band)
+    {
+        var now = Environment.TickCount64;
+        if (_occludingCache is not null
+            && now - _occludingSampledTick < OccludingSampleIntervalMs
+            && _occludingCacheBand == band)
+        {
+            return _occludingCache;
+        }
+
+        _occludingSampledTick = now;
+        _occludingCacheBand = band;
+        _occludingCache = OccludingWindowProbe.CollectOverlappingBounds(band);
+        return _occludingCache;
     }
 
     /// <summary>可见面板带的物理矩形（窗口矩形减去顶部放大余量）：智能隐藏判"窗口盖住 Dock"的基准。

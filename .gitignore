@@ -41,3 +41,4 @@ installer/out/
 # 本地 AI 工作区与图标下载暂存（不入公开仓库）
 .workbuddy/
 tools/_icon-download-r4/
+.auto/

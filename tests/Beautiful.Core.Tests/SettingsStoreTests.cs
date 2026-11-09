@@ -62,14 +62,12 @@ public class AppSettingsTests
         Assert.Equal(56, s.DockIconSize);
         Assert.Equal(6, s.DockEdgeMargin);   // wp-detail r5 默认 4→6（已有配置文件里显式写的 4 不受影响）
         Assert.Equal(1.7, s.MagnificationStrength);
-        Assert.Equal("bottom", s.DockPosition);
         Assert.True(s.PreviewEnabled);
         Assert.True(s.BounceEnabled);
         Assert.Null(s.ReflectionEnabled);   // v3 T4 三态：null = 跟随主题默认（不再由设置硬关/硬开）
         Assert.True(s.FullscreenPassthrough);
         Assert.Equal("ctrl+alt+space", s.LauncherHotkey);
         Assert.True(s.LauncherEnabled);       // v3 T7：启动器默认开（关掉它等于没有这个功能）
-        Assert.False(s.AutoHideDock);
     }
 
     [Fact]
@@ -97,14 +95,11 @@ public class AppSettingsTests
     }
 
     [Fact]
-    public void v2未知样式或停靠位_收敛为默认_大小写与首尾空白归一()
+    public void v2未知样式_收敛为默认_大小写与首尾空白归一()
     {
         Assert.Equal("macos", new AppSettings { SwitcherStyle = "weird" }.Normalized().SwitcherStyle);
         Assert.Equal("macos", new AppSettings { SwitcherStyle = "Linux" }.Normalized().SwitcherStyle);
         Assert.Equal("macos", new AppSettings { SwitcherStyle = "  HARMONYOS  " }.Normalized().SwitcherStyle);
-        Assert.Equal("bottom", new AppSettings { DockPosition = "x" }.Normalized().DockPosition);
-        Assert.Equal("left", new AppSettings { DockPosition = "LEFT" }.Normalized().DockPosition);
-        Assert.Equal("bottom", new AppSettings { DockPosition = "diagonal" }.Normalized().DockPosition);
     }
 
     [Fact]
@@ -113,16 +108,14 @@ public class AppSettingsTests
         // 手改 JSON 可把 string 写成 null（STJ 填进非可空属性）；空白串等同未配置
         var nulled = new AppSettings
         {
-            SwitcherStyle = null!, DockPosition = null!, SwitcherHotkey = null!, LauncherHotkey = null!
+            SwitcherStyle = null!, SwitcherHotkey = null!, LauncherHotkey = null!
         }.Normalized();
         Assert.Equal("macos", nulled.SwitcherStyle);
-        Assert.Equal("bottom", nulled.DockPosition);
         Assert.Equal("alt+tab", nulled.SwitcherHotkey);
         Assert.Equal("ctrl+alt+space", nulled.LauncherHotkey);
 
-        var blank = new AppSettings { SwitcherStyle = "   ", DockPosition = "", SwitcherHotkey = "  ", LauncherHotkey = "" }.Normalized();
+        var blank = new AppSettings { SwitcherStyle = "   ", SwitcherHotkey = "  ", LauncherHotkey = "" }.Normalized();
         Assert.Equal("macos", blank.SwitcherStyle);
-        Assert.Equal("bottom", blank.DockPosition);
         Assert.Equal("alt+tab", blank.SwitcherHotkey);
         Assert.Equal("ctrl+alt+space", blank.LauncherHotkey);
     }
@@ -133,7 +126,7 @@ public class AppSettingsTests
         var once = new AppSettings
         {
             DockIconSize = 500, MagnificationStrength = 12, SwitcherStyle = "weird",
-            DockPosition = "x", Theme = "nope", TaskbarPolicy = "nope",
+            Theme = "nope", TaskbarPolicy = "nope",
             SwitcherHotkey = null!, LauncherHotkey = " "
         }.Normalized();
         Assert.Equal(once, once.Normalized());
@@ -231,7 +224,6 @@ public class AppSettingsStoreTests : IDisposable
             SwitcherHotkey = "ctrl+alt+tab",
             DockIconSize = 64,
             MagnificationStrength = 2.2,
-            DockPosition = "left",
             PreviewEnabled = false,
             BounceEnabled = false,
             ReflectionEnabled = true,
@@ -240,7 +232,6 @@ public class AppSettingsStoreTests : IDisposable
             // LauncherHotkey.Canonicalize（终审补：win+space / ctrl+space / alt+space 这类系统绑定
             // 会被自愈成默认组合，用它当样本就永远等不上）。
             LauncherHotkey = "ctrl+alt+f5",
-            AutoHideDock = true,
             DockMonitor = "2",
             TopBarMonitor = "primary"
         };
@@ -266,6 +257,40 @@ public class AppSettingsStoreTests : IDisposable
         Assert.Contains(notes, n => n.Contains("TaskbarGlass"));
         Assert.Contains(notes, n => n.Contains("UseWallpaperAccent"));
         Assert.True(File.Exists(Path.Combine(_dir, "settings.json")));
+    }
+
+    [Fact]
+    public void 已删除死键_旧配置残留值_静默忽略不抛错()
+    {
+        // wp-borrow 收口（2026-11-10）：AutoHideDock / DockPosition 是 App 侧零消费的死键，已删除
+        //（真正的自动隐藏=DockAutoHide+DockHideMode，真正的停靠边=DockEdge）。旧 settings.json
+        // 里可能还残留这两个键：加载必须静默忽略（STJ 未知键默认 Skip），不抛错、不删文件、
+        // 不影响其余字段；下次 Save 全量序列化后自然消失。本测试锁住"未知键=忽略"这一语义，
+        // 防止未来有人把 UnmappedMemberHandling 收紧成 Fail 导致旧配置直接启动崩溃。
+        Directory.CreateDirectory(_dir);
+        File.WriteAllText(Path.Combine(_dir, "settings.json"),
+            """{"Theme":"macos","DockPosition":"left","AutoHideDock":true,"DockIconSize":64}""");
+        var notes = new List<string>();
+        var s = _store.Load(notes.Add);
+        Assert.Equal("macos", s.Theme);
+        Assert.Equal(64, s.DockIconSize);
+        Assert.Equal("bottom", s.DockEdge);   // 真正的停靠边不受残留死键影响
+        Assert.True(File.Exists(Path.Combine(_dir, "settings.json")));
+    }
+
+    [Fact]
+    public void DockEdge枚举串_白名单收敛与归一_非法值落bottom()
+    {
+        // wp-borrow 收口（2026-11-10）：DockEdge 补进 Normalized()（此前是唯一没进规范化的
+        // 运行语义枚举串），白名单直接复用 Core DockMonitorProfiles.KnownEdges（bottom|left|right）。
+        // 手改 settings.json 写 "top" 会收敛为 bottom——与其余所有枚举键的三方对齐口径一致。
+        Assert.Equal("left", new AppSettings { DockEdge = "LEFT" }.Normalized().DockEdge);
+        Assert.Equal("right", new AppSettings { DockEdge = "  Right  " }.Normalized().DockEdge);
+        Assert.Equal("bottom", new AppSettings { DockEdge = "top" }.Normalized().DockEdge);
+        Assert.Equal("bottom", new AppSettings { DockEdge = "diagonal" }.Normalized().DockEdge);
+        Assert.Equal("bottom", new AppSettings { DockEdge = "" }.Normalized().DockEdge);
+        Assert.Equal("bottom", new AppSettings { DockEdge = null! }.Normalized().DockEdge);
+        Assert.Equal("bottom", new AppSettings().DockEdge);   // 默认值本身就是白名单成员
     }
 
     [Fact]
@@ -338,14 +363,12 @@ public class AppSettingsStoreTests : IDisposable
         Assert.Equal(56, s.DockIconSize);
         Assert.Equal(6, s.DockEdgeMargin);   // wp-detail r5 默认 4→6（已有配置文件里显式写的 4 不受影响）
         Assert.Equal(1.7, s.MagnificationStrength);
-        Assert.Equal("bottom", s.DockPosition);
         Assert.True(s.PreviewEnabled);
         Assert.True(s.BounceEnabled);
         Assert.Null(s.ReflectionEnabled);   // v3 T4 三态：null = 跟随主题默认（不再由设置硬关/硬开）
         Assert.True(s.FullscreenPassthrough);
         Assert.Equal("ctrl+alt+space", s.LauncherHotkey);
         Assert.True(s.LauncherEnabled);       // v3 T7：启动器默认开（关掉它等于没有这个功能）
-        Assert.False(s.AutoHideDock);
         // v3.1 新增的顶栏时钟四项：旧文件里没有这些键，必须落在"与 v3.0.0 观感一致"的代码默认，
         // 而不是布尔零值（零值会把日期/星期/24 小时制全关掉，顶栏就只剩一个光秃秃的时间）。
         Assert.False(s.ClockShowSeconds);
@@ -408,10 +431,9 @@ public class AppSettingsStoreTests : IDisposable
         // 值域问题由 Normalized 兜底，不是结构损坏 → 自愈网不删用户的其余配置
         Directory.CreateDirectory(_dir);
         File.WriteAllText(Path.Combine(_dir, "settings.json"),
-            """{"SwitcherStyle":"weird","DockPosition":"x","Theme":"macos"}""");
+            """{"SwitcherStyle":"weird","Theme":"macos"}""");
         var s = _store.Load();
         Assert.Equal("macos", s.SwitcherStyle);
-        Assert.Equal("bottom", s.DockPosition);
         Assert.Equal("macos", s.Theme);
         Assert.True(File.Exists(Path.Combine(_dir, "settings.json")));
     }
@@ -447,7 +469,7 @@ public class AppSettingsStoreTests : IDisposable
     {
         Directory.CreateDirectory(_dir);
         File.WriteAllText(Path.Combine(_dir, "settings.json"),
-            """{"SwitcherStyle":null,"DockPosition":null,"SwitcherHotkey":null,"LauncherHotkey":null}""");
+            """{"SwitcherStyle":null,"SwitcherHotkey":null,"LauncherHotkey":null}""");
         var s = _store.Load();
         Assert.Equal(new AppSettings(), s);
         Assert.True(File.Exists(Path.Combine(_dir, "settings.json")));

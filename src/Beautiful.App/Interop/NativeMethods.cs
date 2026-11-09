@@ -709,7 +709,7 @@ internal static partial class NativeMethods
             // IShellItem → IShellItemImageFactory 走标准 COM QI（Marshal 负责引用计数，
             // 不自己 P/Invoke ole32 的导出函数：那条路径在本仓库不可验证，错了就是难查的悬挂指针）。
             var target = typeof(IShellItemImageFactory).GUID;
-            var hr = Marshal.QueryInterface(punk, ref target, out var factory);
+            var hr = Marshal.QueryInterface(punk, in target, out var factory);
             Marshal.Release(punk);
             if (hr != 0 || factory == IntPtr.Zero) return null;
             var obj = Marshal.GetObjectForIUnknown(factory);

@@ -277,28 +277,33 @@ public partial class StageBarWindow : Window
         var maxByHeight = MaxCardsByWorkArea();
         var visible = Math.Min(groups.Count, maxByHeight);
 
-        var items = new List<StageGroupItem>(visible);
-        for (int i = 0; i < visible; i++)
-            items.Add(new StageGroupItem(groups[i], _service.GetIcon(groups[i].AppId)));
-
-        // FrameTargets 的数据源（与 ItemsSource 同序同长；无论是否重绑都指向最新一拍）。
-        _items = items;
-
-        // 二级弹层的组在快照里消失（窗口全关/换屏）：立即收掉，别留一份指向空组的僵尸列。
-        if (_flyoutGroupId is not null)
-        {
-            var found = false;
-            foreach (var item in items)
-                if (item.AppId == _flyoutGroupId) { found = true; break; }
-            if (!found) CloseFlyout();
-        }
-
-        // 卡片集合无变化就不重绑：签名 = 逐卡（句柄, 是否当前, 计数标签）。
-        var signature = string.Join('|', items.ConvertAll(c => $"{c.Handle.ToInt64():X},{c.IsCurrent},{c.CountLabel}"));
+        // 卡片集合无变化就不重建：签名 = 逐卡（句柄, 是否当前, 计数标签）。
+        // 【为什么签名必须先行、一致即整批复用旧实例】StageGroupItem.Frame 是静帧泵写入、
+        // XAML 绑定读取的唯一画面通道——签名一致时 _items 与 Cards.ItemsSource 必须是
+        // 同一批实例。曾经"先 new 一批、签名不变就不重绑"：泵每拍把帧写进看不见的新实例，
+        // UI 还绑着上一拍的旧实例，画面停在首拍；直到点卡片翻转 IsCurrent 才"碰巧"触发
+        // 重绑带帧的实例出画面（round7 缺陷 3 的"首帧黑、点击后正常"主根因）。
+        var signature = StageItemsSignature(groups, visible);
         if (signature != _lastItemsSignature)
         {
             _lastItemsSignature = signature;
+            var items = new List<StageGroupItem>(visible);
+            for (int i = 0; i < visible; i++)
+                items.Add(new StageGroupItem(groups[i], _service.GetIcon(groups[i].AppId)));
+
+            // FrameTargets 的数据源（与 ItemsSource 同一 list 同序同长，永远指向 UI 正显示的实例）。
+            _items = items;
             Cards.ItemsSource = items;
+        }
+
+        // 二级弹层的组在快照里消失（窗口全关/换屏）：立即收掉，别留一份指向空组的僵尸列。
+        // 用当前生效集合判（签名一致时即 UI 正显示的那批）。
+        if (_flyoutGroupId is not null)
+        {
+            var found = false;
+            foreach (var item in _items)
+                if (item.AppId == _flyoutGroupId) { found = true; break; }
+            if (!found) CloseFlyout();
         }
 
         // 高度先于布局定型：窗口高 = 上下内边距 + 可见卡数×槽高（无滚动，见类注释）。
@@ -310,6 +315,21 @@ public partial class StageBarWindow : Window
         }
         if (_expanded)
             EnsureFramePump().Start();   // 展开期重开一拍：新卡片/新句柄立刻拿到首帧
+    }
+
+    /// <summary>
+    /// 卡片集合签名（直接取自快照，不经过 StageGroupItem 实例——签名计算本身不能先建实例）。
+    /// 口径与 <see cref="StageGroupItem.CountLabelOf"/> 严格一致：计数标签变 = 签名变。
+    /// </summary>
+    private static string StageItemsSignature(IReadOnlyList<StageGroup> groups, int visible)
+    {
+        var parts = new string[visible];
+        for (int i = 0; i < visible; i++)
+        {
+            var g = groups[i];
+            parts[i] = $"{g.ThumbnailHandle.ToInt64():X},{g.IsCurrent},{StageGroupItem.CountLabelOf(g.AppName, g.Windows.Count)}";
+        }
+        return string.Join('|', parts);
     }
 
     /// <summary>上拍卡片集合签名（去抖：对账不改变内容时不重建视觉树）。</summary>
@@ -677,10 +697,12 @@ public partial class StageBarWindow : Window
             WindowCount = group.Windows.Count;
             Windows = group.Windows;
             Icon = icon;
-            CountLabel = group.Windows.Count > 1
-                ? $"{group.AppName}（{group.Windows.Count} 个窗口）"
-                : group.AppName;
+            CountLabel = CountLabelOf(group.AppName, group.Windows.Count);
         }
+
+        /// <summary>卡片标题拼法（单源）：UpdateGroups 的签名与本标签必须同口径，改这里即两处同改。</summary>
+        internal static string CountLabelOf(string appName, int windowCount)
+            => windowCount > 1 ? $"{appName}（{windowCount} 个窗口）" : appName;
 
         public IntPtr Handle { get; }        // 卡片缩略候选窗口（点击切换的目标）
         public string AppId { get; }

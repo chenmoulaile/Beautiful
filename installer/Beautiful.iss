@@ -27,6 +27,16 @@
 #define AppName "Beautiful"
 #define AppExe "Beautiful.exe"
 
+; ---- round7 r3：编译期形态门禁 ----
+; SourceDir 必须是 publish.cmd / install-local.cmd / build-installer.cmd 产出的自包含目录
+;（发布自检通过后写入 SC-STAMP.txt）。任何旁路盖拷进发布目录的混合产物（"FDD runtimeconfig +
+; app-local host + partial runtime 件"，app-local hostfxr 锁死框架查找根，装完双击必死——
+; round7 三轮真机缺陷同一根因）没有 stamp，ISCC 直接拒编。运行期 ssPostInstall 摘 host
+; （见 [Code]）是最后保险，编译期拦下才是正道。
+#if !FileExists(AddBackslash(SourceDir) + "SC-STAMP.txt")
+  #error 发布目录缺 SC-STAMP.txt：SourceDir 不是脚本产出的自包含形态（round7 r3，混合产物装完双击必死）。请用 scripts\build-installer.cmd 打包；不要把 bin\Release 构建输出或 lite 产物拷进发布目录。
+#endif
+
 ; VersionInfoVersion 只接受纯数字（x.y[.z[.b]]），而本地试构建常带 -test/-rc 后缀。
 ; 文件属性里放剥掉后缀的数字版本，人看的版本（AppVersion / 文件名）保留完整字符串。
 #define DashPos Pos("-", AppVersion)
@@ -84,7 +94,7 @@ Name: "desktopicon"; Description: "Create a desktop shortcut"; GroupDescription:
 [Files]
 ; 不用 createallsubdirs：那会把源目录里的空子目录（开发机跑出来的 logs/config/cache）
 ; 也照样在目标机上建出来，即使里面的文件已被 Excludes 排掉。
-Source: "{#SourceDir}\*"; DestDir: "{app}"; Excludes: "logs\*,config\*,cache\*"; \
+Source: "{#SourceDir}\*"; DestDir: "{app}"; Excludes: "logs\*,config\*,cache\*,SC-STAMP.txt"; \
   Flags: ignoreversion recursesubdirs
 
 [InstallDelete]
@@ -96,6 +106,13 @@ Source: "{#SourceDir}\*"; DestDir: "{app}"; Excludes: "logs\*,config\*,cache\*";
 ; [InstallDelete] 先于 [Files] 执行：自包含新产物随后会把同名文件原样拷回（hostfxr/hostpolicy/
 ; coreclr 本就是 self-contained 产物的组成部分），framework-dependent 新产物则从此走系统 fxr——
 ; 两种布局都安全。logs/config/cache 是用户数据，归 [UninstallDelete]，此处绝不触碰。
+;
+; round7 真机缺陷 1 补全：round5 名单只删 9 个宿主件，真机现场（8.0 自包含残留 + net10 应用
+; 文件混装，取证 docs/evidence/round7/00-boot-error-screen.png）里 System.Private.CoreLib.dll
+; 等旧 runtime 程序集仍成堆躺在 {app}。卡启动的虽只有宿主三件套（hostfxr 锁定框架查找根），
+; 但残留会在历次升级中滚雪球。这里扩成"宿主 9 件 + BCL/WPF/VC runtime 通配与散件"：
+; 任意旧 self-contained 布局一次清干净。通配只匹配 {app} 根层、不递归子目录，logs/config/cache
+; 依旧安全；新产物自带的同名件随后由 [Files] 原样拷回，删了不亏、留着必脏。
 Type: files; Name: "{app}\hostfxr.dll"
 Type: files; Name: "{app}\hostpolicy.dll"
 Type: files; Name: "{app}\nethost.dll"
@@ -105,6 +122,21 @@ Type: files; Name: "{app}\clrcompression.dll"
 Type: files; Name: "{app}\mscordaccore.dll"
 Type: files; Name: "{app}\mscordbi.dll"
 Type: files; Name: "{app}\mscorrc.dll"
+Type: files; Name: "{app}\System.Private.CoreLib.dll"
+Type: files; Name: "{app}\System.*.dll"
+Type: files; Name: "{app}\Microsoft.*.dll"
+Type: files; Name: "{app}\Presentation*.dll"
+Type: files; Name: "{app}\UIAutomation*.dll"
+Type: files; Name: "{app}\WindowsBase.dll"
+Type: files; Name: "{app}\netstandard.dll"
+Type: files; Name: "{app}\ReachFramework.dll"
+Type: files; Name: "{app}\DirectWriteForwarder.dll"
+Type: files; Name: "{app}\D3DCompiler_47_cor3.dll"
+Type: files; Name: "{app}\PenImc_cor3.dll"
+Type: files; Name: "{app}\vcruntime140.dll"
+Type: files; Name: "{app}\vcruntime140_1.dll"
+Type: files; Name: "{app}\msvcp140.dll"
+Type: files; Name: "{app}\concrt140.dll"
 
 [Icons]
 Name: "{group}\{#AppName}"; Filename: "{app}\{#AppExe}"; WorkingDir: "{app}"
@@ -141,11 +173,56 @@ begin
   Sleep(2000);
 end;
 
+// round7 r2 缺陷（混合形态产物）的运行期兜底：[Files] 拷贝完成后检查 {app}\Beautiful.runtimeconfig.json
+// 的形态——没有 includedFrameworks 段（framework-dependent，或"FDD runtimeconfig + app-local host
+// + partial runtime 件"的混合形态）时，app-local hostfxr/hostpolicy 会把框架查找根锁死在应用
+// 目录，应用目录没有全套 runtime 就双击必死（Required: Microsoft.NETCore.App 10.0.0 (x64)，
+// DOTNET_ROOT 也不生效）。此时摘掉 app-local host 三件（hostfxr/hostpolicy/nethost），应用改走
+// 系统 fxr——装有 .NET Desktop Runtime 10 的机器即可正常启动；混合产物里残留的 coreclr 等运行
+// 时件没有 hostfxr 加载链入口，不会被加载，留着无害。自包含产物（includedFrameworks 在位）的
+// host 文件是启动链必需件，原样保留。打包入口的编译期门禁见 scripts\build-installer.cmd——
+// 混合产物在那里就该被拦下，这里是最后一道保险。
+procedure RemoveAppLocalHostForFdd;
+var
+  cfgFile: String;
+  lines: TArrayOfString;
+  i: Integer;
+  selfContained: Boolean;
+  hostFile: String;
+begin
+  cfgFile := ExpandConstant('{app}\Beautiful.runtimeconfig.json');
+  if not FileExists(cfgFile) then Exit;
+  selfContained := False;
+  if LoadStringsFromFile(cfgFile, lines) then
+    for i := 0 to GetArrayLength(lines) - 1 do
+      if Pos('includedFrameworks', lines[i]) > 0 then
+      begin
+        selfContained := True;
+        Break;
+      end;
+  if selfContained then Exit;
+  for i := 0 to 2 do
+  begin
+    case i of
+      0: hostFile := ExpandConstant('{app}\hostfxr.dll');
+      1: hostFile := ExpandConstant('{app}\hostpolicy.dll');
+      2: hostFile := ExpandConstant('{app}\nethost.dll');
+    end;
+    if FileExists(hostFile) then
+    begin
+      DeleteFile(hostFile);
+      Log(Format('FDD runtimeconfig: removed app-local %s', [hostFile]));
+    end;
+  end;
+end;
+
 procedure CurStepChanged(CurStep: TSetupStep);
 begin
   // 覆盖安装：旧实例还开着就会锁住 exe/dll，先请它退出
   if CurStep = ssInstall then
     AskRunningInstanceToExit(ExpandConstant('{app}\Beautiful.exe'));
+  if CurStep = ssPostInstall then
+    RemoveAppLocalHostForFdd;
 end;
 
 procedure CurUninstallStepChanged(CurUninstallStep: TUninstallStep);

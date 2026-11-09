@@ -1,0 +1,132 @@
+# ci-screenshot.ps1 — Windows CI 上的"运行期目视取证"：
+# 启动 Beautiful.exe → 等待界面就绪 → 全屏截图（Dock/顶栏初始态）
+# → 模拟点击顶栏时钟（验证通知中心是否打开/是否报错）→ 再截图
+# → 收集 logs/ 里的异常行 → 有未处理异常则以非零码退出
+# 来源：整份移植自远端 agent/alpha.15-p2（alpha.13-p0 起 7 条分支都带，此为最演进版）。
+# 主线适配（wp-borrow 收口）：SDK/publish 参数对齐 release.yml 的 net10 自包含发布；
+# 日志锚点按主线实文核对（Dock 就绪=DockWindow.xaml.cs、顶栏已显示=App.xaml.cs）。
+param(
+    [string]$AppDir = "$PSScriptRoot\..\build\shot-app",
+    [string]$OutDir = "$PSScriptRoot\..\build\shots"
+)
+$ErrorActionPreference = 'Stop'
+New-Item -ItemType Directory -Force -Path $OutDir | Out-Null
+
+# 【关键】runner 会话默认 disconnected → DWM 停止合成 → CopyFromScreen 拿到旧帧。
+# 把会话重定向到物理控制台，保住实时合成（alpha.15 实证：不加这句，截图全是启动前的旧桌面）。
+# alpha.16 修：quser 的 ID 在【第三列】（行尾是 LOGONTIME，上个版本按行尾数字解析必然落空）。
+quser 2>$null | Out-String | Write-Host
+$sessionId = $null
+foreach ($line in (quser 2>$null)) {
+    $cols = ($line -replace '^>\s*', '' ) -split '\s+'
+    if ($cols.Length -ge 3 -and $cols[0] -eq $env:USERNAME -and $cols[2] -match '^\d+$') {
+        $sessionId = $cols[2]; break
+    }
+}
+if (-not $sessionId) {
+    # 兜底：不认用户名（列错位）时取任何数字 ID 的行
+    foreach ($line in (quser 2>$null)) {
+        $cols = ($line -replace '^>\s*', '' ) -split '\s+'
+        if ($cols.Length -ge 3 -and $cols[2] -match '^\d+$' -and $cols[0] -ne 'USERNAME') {
+            $sessionId = $cols[2]; break
+        }
+    }
+}
+if ($sessionId) {
+    Write-Host "redirect session $sessionId -> console"
+    tscon $sessionId /dest:console 2>&1 | Write-Host
+    Start-Sleep -Seconds 2
+} else {
+    Write-Host "WARN: no interactive session found for $($env:USERNAME)（截图可能为旧帧）"
+}
+
+Add-Type -AssemblyName System.Windows.Forms
+Add-Type -AssemblyName System.Drawing
+Add-Type @"
+using System;
+using System.Runtime.InteropServices;
+public static class User32 {
+    [DllImport("user32.dll")] public static extern bool SetCursorPos(int x, int y);
+    [DllImport("user32.dll")] public static extern void mouse_event(uint dwFlags, uint dx, uint dy, uint dwData, UIntPtr dwExtraInfo);
+    [DllImport("user32.dll")] public static extern bool SetProcessDPIAware();
+    public const uint LEFTDOWN = 0x0002, LEFTUP = 0x0004;
+}
+"@
+[User32]::SetProcessDPIAware() | Out-Null
+
+function Save-Shot([string]$name) {
+    $b = [System.Windows.Forms.Screen]::PrimaryScreen.Bounds
+    $bmp = New-Object System.Drawing.Bitmap($b.Width, $b.Height)
+    $g = [System.Drawing.Graphics]::FromImage($bmp)
+    $g.CopyFromScreen(0, 0, 0, 0, $bmp.Size)
+    $g.Dispose()
+    $path = Join-Path $OutDir $name
+    $bmp.Save($path, [System.Drawing.Imaging.ImageFormat]::Png)
+    $bmp.Dispose()
+    Write-Host "shot: $path ($($b.Width)x$($b.Height))"
+}
+
+function Click-At([int]$x, [int]$y) {
+    [User32]::SetCursorPos($x, $y) | Out-Null
+    Start-Sleep -Milliseconds 150
+    [User32]::mouse_event([User32]::LEFTDOWN, 0, 0, 0, [UIntPtr]::Zero)
+    Start-Sleep -Milliseconds 60
+    [User32]::mouse_event([User32]::LEFTUP, 0, 0, 0, [UIntPtr]::Zero)
+}
+
+# 1) 启动 app
+$exe = Join-Path $AppDir 'Beautiful.exe'
+if (-not (Test-Path $exe)) { throw "找不到 $exe（先跑 dotnet publish）" }
+$proc = Start-Process -FilePath $exe -WorkingDirectory $AppDir -PassThru
+Write-Host "app started pid=$($proc.Id)"
+
+try {
+    Start-Sleep -Seconds 12          # Dock/顶栏动画/托盘桥就绪
+    Save-Shot '01-initial.png'
+
+    # 2) 点顶栏时钟（顶栏横跨屏幕顶部，时钟在右端）
+    $b = [System.Windows.Forms.Screen]::PrimaryScreen.Bounds
+    # 时钟文本在顶栏右侧 x≈width-240~-180（右侧还有音量/WiFi/控制中心/通知四个图标，共~170px）
+    Click-At -x ($b.Width - 240) -y 12
+    Start-Sleep -Seconds 4           # 通知中心滑入 + 可能的异常弹窗出现
+    Save-Shot '02-clock-flyout.png'
+
+    # 3) 再点一次验证"再点收起"语义，然后点 Dock 图标取证启动弹跳
+    Click-At -x ($b.Width - 240) -y 12
+    Start-Sleep -Seconds 2
+    Save-Shot '03-after-toggle.png'
+
+    # 4) Dock 图标点击（底部胶囊中部）→ 启动弹跳/窗口启动取证
+    Click-At -x ([int]($b.Width / 2 - 100)) -y ($b.Height - 40)
+    Start-Sleep -Seconds 2
+    Save-Shot '04-dock-launch.png'
+}
+finally {
+    # 5) 日志取证：未处理异常 → CI 红；Dock/顶栏就绪行缺失 → CI 红
+    #    （锚点为主线日志实文：「Dock 就绪：WPF 渲染 tier=…」/「顶栏已显示」）
+    $logDir = Join-Path $AppDir 'logs'
+    if (Test-Path $logDir) {
+        Copy-Item -Path $logDir -Destination $OutDir -Recurse -Force
+        $all = Get-ChildItem $logDir -Filter *.log | Get-Content | Out-String
+        $hits = Get-ChildItem $logDir -Filter *.log | ForEach-Object {
+            Select-String -Path $_.FullName -Pattern '未处理异常|XamlParseException|Unhandled'
+        }
+        if ($hits) {
+            Write-Host "FOUND UI EXCEPTIONS:"
+            $hits | ForEach-Object { Write-Host $_.Line }
+            exit 7
+        }
+        if ($all -notmatch 'Dock 就绪')      { Write-Host 'MISSING: Dock 就绪';    exit 9 }
+        if ($all -notmatch '顶栏已显示')      { Write-Host 'MISSING: 顶栏已显示';   exit 10 }
+        Write-Host "logs clean: no unhandled UI exceptions; Dock/TopBar ready lines present"
+    } else {
+        Write-Host "no logs dir (app may have failed to start)"
+        exit 8
+    }
+    if (-not $proc.HasExited) {
+        Get-Process | Where-Object { $_.Id -eq $proc.Id } | Stop-Process -Force
+        Write-Host "app stopped"
+    }
+}
+Write-Host "SCREENSHOT-OK"
+exit 0   # 显式归零：quser 的非零 $LASTEXITCODE 不得污染 CI 结果（alpha.15 RUN#2 实证）

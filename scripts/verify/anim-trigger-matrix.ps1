@@ -19,7 +19,7 @@ function Find-BeautifulExe {
     $candidates = @(
         (Join-Path $PSScriptRoot '..\..\dist\Beautiful\Beautiful.exe'),
         (Join-Path $PSScriptRoot '..\..\dist\Beautiful.exe'),
-        (Join-Path $PSScriptRoot '..\..\src\Beautiful.App\bin\Debug\net8.0-windows10.0.19041.0\Beautiful.exe')
+        (Join-Path $PSScriptRoot '..\..\src\Beautiful.App\bin\Debug\net10.0-windows10.0.19041.0\Beautiful.exe')
     )
     foreach ($c in $candidates) {
         if (Test-Path $c) { return (Resolve-Path $c).Path }

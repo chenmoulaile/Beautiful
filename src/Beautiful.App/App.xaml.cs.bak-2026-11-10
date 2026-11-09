@@ -1,0 +1,1819 @@
+﻿using System.Diagnostics;
+using System.Threading;
+using System.Threading.Tasks;
+using System.Windows;
+using System.Windows.Threading;
+using Beautiful.App.Dock;
+using Beautiful.App.Interop;   // 退出信号要用 FindWindowByTitle / PostMessage / 注册消息号
+using Beautiful.App.MediaWidget;   // 多屏组合根：进程级共享 MediaViewModel 在此构造
+using Beautiful.App.Services;
+using Beautiful.App.Shell;
+using Beautiful.App.Themes;
+using Beautiful.App.TopBar;
+using Beautiful.Core.Controls;
+using Beautiful.Core.Finder;
+using Application = System.Windows.Application;
+using MessageBox = System.Windows.MessageBox;
+
+namespace Beautiful.App;
+
+/// <summary>
+/// WPF 应用壳层（Task 17）：完整启动流程与退出编排。
+/// 启动：Logger → 全局异常兜底 → 单实例 Mutex（第二实例弹窗即退）→ SettingsService.Load →
+/// 任务栏策略/自启落地 → DockWindow（构造期按设置应用主题；SMTC 经 MediaViewModel 构造期
+/// fire-and-forget 初始化，失败仅记日志降级为无胶囊）→ 顶栏 TopBarWindow（TopBarEnabled，
+/// Task 8；创建失败仅降级不连坐）→ 切换器 SwitcherService + 可见面板 SwitcherWindow（Task 11/12，
+/// 接管开关关闭时不装配面板 → Alt+Tab 回到系统原生）→ --settings 打开设置窗口 → 托盘。
+/// 策略落地至托盘就位整体 try/catch：失败还原任务栏/托盘后优雅退出，防僵尸进程。
+/// ShutdownMode=OnExplicitShutdown：Dock 被 Alt+F4 等关闭后壳层仍驻留（托盘可重载/退出），
+/// 退出只走托盘"退出"或显式 <see cref="Application.Shutdown"/>。
+/// 退出链路（ExitApp）：关设置窗 → 收切换面板 + 卸键盘钩子 → 关顶栏（ABE_TOP ABM_REMOVE）
+/// → 关 Dock（ABM_REMOVE）→ TaskbarManager.Restore → 托盘 Dispose → 设置兜底落盘 → Shutdown；
+/// OnExit 兜底重复清理（全部幂等）。
+/// </summary>
+public partial class App : Application
+{
+    private const string MutexName = "Beautiful.SingleInstance";
+    private const int MaxExceptionDialogs = 5; // 界面异常弹窗上限：防异常循环导致弹窗风暴（超限仍记日志）
+
+    private Mutex? _mutex;
+    private bool _ownsMutex;
+    private int _exceptionDialogs;
+    private TaskbarManager? _taskbar;
+
+    // ---------- 多屏 Dock 实例化（组合根） ----------
+    // Dock 不再是单实例：完整 DockWindow 每屏至多一个（_docks），showDock=false&slim=true 的屏
+    // 放 SlimDockWindow 精简条（_slimDocks）。WindowTracker/SmtcService/MediaViewModel 是**进程级
+    // 单例**（SMTC 是系统级单会话总线、WindowTracker 的 shell-hook 宿主窗 + 2s 对账轮询不随实例
+    // 翻倍），在这里创建一份注入给每个 Dock 实例；生命周期归本类（OnExit 统一释放）。
+    // 单屏机器（在屏显示器 ≤1）走与多屏化前逐字节一致的旧路径：单个 DockWindow、monitorSelector
+    // 不传（跟随全局 DockMonitor），这是"主屏行为绝不回归"的硬保证。
+    private readonly List<DockWindow> _docks = new();
+    private readonly List<SlimDockWindow> _slimDocks = new();
+    private WindowTracker? _sharedTracker;
+    private SmtcService? _sharedSmtc;
+    private MediaViewModel? _sharedMediaVm;
+    private bool _docksCreatedOnce;   // ReloadDock 的守卫：Dock 表面从未建成功过（启动失败）就不重载
+
+    /// <summary>当前进程的全部完整 Dock 实例（每屏至多一个；设置窗口/即时生效入口遍历它）。</summary>
+    internal IReadOnlyList<DockWindow> Docks => _docks;
+
+    /// <summary>主 Dock（第一块屏的完整 Dock 实例）：设置窗口的 VM 锚定、媒体面板入口、
+    /// 顶栏上下文的落点。单屏机器 == 唯一实例；多屏机器取枚举序第一块。</summary>
+    private DockWindow? PrimaryDock() => _docks.Count > 0 ? _docks[0] : null;
+
+    /// <summary>最小化/最大化动画（v3.2）：持有两条 WinEvent 钩子，退出必须卸。</summary>
+    private Animation.MinimizeAnimator? _animator;
+
+    /// <summary>
+    /// 动画器的全局访问点（alpha.25）：访达窗口首帧渲染后自调 PlayOpenForSelf 播 mac 开窗
+    /// （OBJECT_SHOW 钩子带 SkipOwnProcess，自家窗口走不了事件路径）。null = 动画子系统未启用。
+    /// </summary>
+    public static Animation.MinimizeAnimator? SharedAnimator { get; private set; }
+
+    /// <summary>窗口过渡接管器（alpha.21）：关闭原生 DWM 过渡 + 斗篷代管；退出必须全量还原。</summary>
+    private Animation.WindowTransitionGuard? _transitionGuard;
+
+    /// <summary>系统最小化动画接管（v3.0 §Q2-2）：退出必须还原用户原来的 SPI_SETANIMATION 值。</summary>
+    private Animation.SystemAnimationSuppressor? _animSuppressor;
+
+    private TopBarWindow? _topBar;
+    private FullscreenAvoidanceService? _fullscreenAvoidance;
+    private HotCornerService? _hotCorners;
+    private ScreenCorners.ScreenCornerService? _screenCorners;
+    private StageManager.StageManagerService? _stageManager;
+    private Switcher.SwitcherService? _switcher;
+    private Switcher.SwitcherWindow? _switcherWindow;
+    private Launcher.LauncherService? _launcher;
+    private Launcher.LaunchpadHotkeyService? _launchpadHotkey;
+    private Settings.SettingsWindow? _settingsWindow;
+    private TrayIconManager? _tray;
+
+    /// <summary>通知中心数据服务（Phase 4-T5）：常驻，面板反复开关时历史保持连续。</summary>
+    private NotificationService? _notifications;
+
+    /// <summary>音量 HUD 控制器（Phase 4-T7）：持有媒体键钩子与 HUD 窗口，退出必须释放。</summary>
+    private VolumeOsdController? _volumeOsd;
+
+    /// <summary>CPU 温度轮询（对标 MyDockFinder 温度显示，默认关）：后台表，退出必须停。</summary>
+    private ThermalMonitorService? _thermal;
+
+    /// <summary>墙纸自适应取色（极致美化①，默认关）：监听壁纸变更→后台提色→tint 落玻璃，退出必须停。</summary>
+    private WallpaperThemeService? _wallpaperTint;
+
+    private bool _exiting;
+
+    /// <summary>诊断截图是否专门拍 Dock（--dock-badge）：只影响 --shot 选窗口，不影响产品逻辑。</summary>
+    private bool _shotDock;
+
+    protected override void OnStartup(StartupEventArgs e)
+    {
+        base.OnStartup(e);
+
+        // 1. 日志最先初始化：后续每一步的成败都应有据可查
+        Logger.Init();
+        Logger.Info($"启动 args=[{string.Join(' ', e.Args)}]");
+
+        // 2. 全局异常兜底先于任何业务代码
+        DispatcherUnhandledException += OnDispatcherUnhandledException;
+        AppDomain.CurrentDomain.UnhandledException += OnAppDomainUnhandledException;
+        TaskScheduler.UnobservedTaskException += OnUnobservedTaskException;
+
+        // 2.5 `--exit`：让**正在运行的那个实例**走完整退出链路，本实例发完信号就退。
+        // 必须排在单实例检查之前——否则它会被当成"第二实例"直接弹窗退出，什么也没发出去。
+        if (e.Args.Contains("--exit", StringComparer.OrdinalIgnoreCase))
+        {
+            var sent = RequestExitOfRunningInstance();
+            Environment.Exit(sent ? 0 : 3);   // 3 = 没有找到在跑的实例（未安装/已退出）
+            return;
+        }
+
+        // 3. 单实例：互斥体已被持有 → 带 --settings 就把请求转给在跑的实例，否则弹窗提示后退出
+        if (!AcquireSingleInstanceMutex())
+        {
+            // 用户在跑着 Dock 的情况下双击/命令行再开一次带 --settings 的 exe，他要的是那个设置窗口，
+            // 不是"已在运行"的模态提示。转发成功就静默退场；失败（没找到窗口）退回原来的提示，
+            // 因为此时确实什么都没发生，不吭声只会让人以为双击没反应。
+            if (e.Args.Contains("--settings", StringComparer.OrdinalIgnoreCase)
+                && PostToRunningInstance(NativeMethods.SettingsRequestMessage))
+            {
+                Logger.Info("第二实例：已把 --settings 转发给在跑的实例");
+                Environment.Exit(0);
+                return;
+            }
+            Logger.Warn("Beautiful 已在运行，第二实例退出");
+            MessageBox.Show("Beautiful 已在运行", "Beautiful",
+                MessageBoxButton.OK, MessageBoxImage.Information);
+            Shutdown();
+            return;
+        }
+
+        // 4. 设置加载：先于任何 VM 构造（DockWindow/MediaViewModel 构造期读设置）
+        SettingsService.Load();
+
+        // 4.1 native 健康（v4 Phase 2）：缺失/BEAUTIFUL_NONATIVE 都只记日志，纯 C# 形态继续启动。
+        Logger.Info($"Native 层健康：{NativeLoader.Status}（modules=0x{NativeLoader.Modules:X}）");
+
+        // 4.5 系统亮暗监听（v4 Phase 1 T4）：外观=auto 时由 WM_SETTINGCHANGE 驱动换 token。
+        // 监听失败只影响实时性，启动时取样仍然有效（见 SystemAppearance.Start 的降级日志）。
+        SystemAppearance.Start();
+        SystemAppearance.Changed += OnSystemAppearanceChanged;
+
+        // 4.6 墙纸取色（极致美化①，默认关）：监听壁纸/设置变化，开关开时后台提色并把 tint 写进
+        // 主题 token。附属能力：监听装不上降级为兜底轮询（见 WallpaperThemeService），绝不连坐主 UI。
+        _wallpaperTint = new WallpaperThemeService(Dispatcher);
+        _wallpaperTint.Start();
+
+        // 5-8. 任务栏策略/自启落地 → Dock 显示 → --settings → 托盘，整体 try/catch 自愈：
+        // 该序列任何一步失败若被全局兜底吞掉（Handled=true）会留下"无 Dock 无托盘 + 任务栏被隐藏"
+        // 的僵尸进程，故此处就地回滚（还原任务栏 + 释放托盘）后优雅关停。
+        _taskbar = new TaskbarManager();
+        try
+        {
+            _taskbar.Apply(SettingsService.PolicyOf(SettingsService.Current));
+            SettingsService.SetAutostart(SettingsService.Current.Autostart);
+
+            // 6.2 最小化/最大化动画（v3.2）：先于 Dock 构造并注入——Dock 触发的最小化要"趁窗口还
+            // 画着先抓一帧"，事件路径到我们手里时窗口已经 iconic。落点回调查询 Docks 集合是惰性的，
+            // 此刻为空没关系。它是纯装饰的附属能力，装不上只记日志，绝不连坐主 UI（与顶栏同一处置）。
+            if (SettingsService.Current.MinimizeAnimation)
+            {
+                try
+                {
+                    // v3.0 §Q2-6：动画参数从 config/anim-params.json 热加载（文件不存在会自动生成默认表）。
+                    // 必须在动画器构造之前 Load：构造期就要用它算挂载自检行与首帧时长。
+                    Services.AnimParamsStore.Load();
+
+                    // 过渡接管器（alpha.21）：先建 guard 再建动画器（构造参数传入）。
+                    // 管理资格 = 窗口资格判定（排除自己/工具窗口/任务栏桌面等）。
+                    _transitionGuard = new Animation.WindowTransitionGuard(
+                        hwnd => Services.WindowEligibility.IsEligibleWindow(hwnd, (uint)Environment.ProcessId));
+
+                    // 落点回调查询 Docks 集合是惰性的：逐实例问"这扇窗口在我这儿吗"，
+                    // 谁有谁答（DockWindow.IconRectPhysical 找不到即返回 null 的语义天然支持多实例）。
+                    _animator = new Animation.MinimizeAnimator(
+                        hwnd => Docks.Select(d => d.IconRectPhysical(hwnd)).FirstOrDefault(r => r is not null),
+                        _transitionGuard);
+                    SharedAnimator = _animator;
+
+                    // 过渡接管启动扫描：存量窗口统一关原生过渡（新窗口由 OBJECT_SHOW 钩子接管）。
+                    // 斗篷代管的窗口在 Dock/切换器里豁免（ManagedCloakOverride）：不能凭空消失。
+                    Services.WindowEligibility.ManagedCloakOverride =
+                        hwnd => _transitionGuard!.IsCloakedByUs(hwnd);
+                    // SW_HIDE 代管窗口（alpha.24）同理豁免：斗篷被拒的第三方窗口被我们藏起来播 genie，
+                    // 不豁免就会在 2s 对账里从 Dock 消失，用户失去还原入口。
+                    Services.WindowEligibility.HiddenByUsOverride =
+                        hwnd => _transitionGuard!.IsHiddenByUs(hwnd);
+                    _transitionGuard.ScanExistingWindows();
+
+                    // v3.0 §Q2-2：接管系统"缩向任务栏"动画，消除两条动画打架。
+                    // 只在本程序真的会播动画时才接管；关掉动画功能就等于把系统动画原样还给用户。
+                    if (SettingsService.Current.AnimSuppressSystemAnim)
+                    {
+                        _animSuppressor = new Animation.SystemAnimationSuppressor();
+                        _animSuppressor.Enable();
+                    }
+                    else
+                    {
+                        Logger.Info("系统动画接管：设置项 AnimSuppressSystemAnim 为关，系统最小化动画保持原样");
+                    }
+                }
+                catch (Exception ex)
+                {
+                    Logger.Warn($"最小化动画未启用：{ex.GetType().Name} {ex.Message}");
+                }
+            }
+
+            // 6. Dock 即主 UI：--minimized 仅标识自启来源（自启语义），Dock 照常显示，超出仅记录。
+            // 进程级单例服务先建（多屏实例共享一份），再按屏装配 Dock 表面（单屏 == 唯一实例）。
+            // 主题在第一个窗口构造前显式 Apply 一次（全屏 showDock=false 只剩精简条的机器上
+            // DockWindow 构造期那次 Apply 不存在，精简条全靠应用级字典的 DynamicResource）。
+            _sharedTracker = new WindowTracker();
+            _sharedSmtc = new SmtcService();
+            _sharedMediaVm = new MediaViewModel(_sharedSmtc, Dispatcher);
+            ThemeManager.Apply(SettingsService.ThemeDefinitionOf(SettingsService.Current), Application.Current);
+            CreateDockSurfaces();
+
+            if (e.Args.Contains("--minimized", StringComparer.OrdinalIgnoreCase))
+                Logger.Info("--minimized（开机自启）：Dock 即主 UI，照常显示");
+            Logger.Info($"Dock 已显示（完整实例 {_docks.Count} 个 / 精简条 {_slimDocks.Count} 条）");
+
+            // 6.5 顶栏（Task 8）：同一受保护序列内创建（失败回滚链路覆盖它）。但它是附属表面，
+            // 创建异常仅记日志降级为"无顶栏运行"，不得连坐 Dock/任务栏策略整体退出。
+            if (SettingsService.Current.TopBarEnabled) EnsureTopBar();
+            else RestartFullscreenAvoidance();   // 顶栏关闭时也要为 Dock 启动全屏避让
+
+            // 6.55 温度监控（对标 MyDockFinder 温度显示）：默认关；只在开关开且顶栏在屏时启动后台轮询。
+            // 附属能力：探测/读取全程容错，没有数据源就保持芯片隐藏（优雅空态），绝不连坐主 UI。
+            if (SettingsService.Current.ThermalChipEnabled && SettingsService.Current.TopBarEnabled)
+                StartThermalMonitor();
+
+            // 6.6 切换器（Task 11）：Alt+Tab 接管。同样按"附属能力"处理——钩子装不上只是退回原生
+            // Alt+Tab，绝不能连坐主 UI；但退出时必须先卸钩（见 ExitApp/OnExit）。
+            // 启动器热键<b>共用</b>这一条 WH_KEYBOARD_LL（钩子回调里两条分支各判各的组合键，见 AltTabHook），
+            // 因此装配顺序是"先切器、后启动器"：切器一侧按 KeepHookForLauncher 决定钩子装不装，
+            // 启动器只接事件，绝不自己再装第二个全局钩子。
+            EnsureSwitcher();
+
+            // 6.7 启动器（v3 T7）：Spotlight 式搜索面板。索引在后台线程扫开始菜单，UI 不等待它。
+            EnsureLauncher();
+
+            // 6.8 通知中心数据服务（Phase 4-T5）：构造不碰 WinRT，首次打开面板才请求授权。
+            _notifications = new NotificationService(Dispatcher);
+            NotificationService.Current = _notifications;
+
+            // 6.9 音量 HUD（Phase 4-T7）：设置开启时接管媒体键（不吞则系统浮层与自家 HUD 会同时出现）
+            _volumeOsd = new VolumeOsdController(SettingsService.Current.VolumeOsdEnabled, Dispatcher);
+
+            // 6.10 屏幕圆角遮罩（对标 MyDockFinder ScreenRound）：每屏四角 topmost + 输入穿透的小窗，
+            // 默认关。附属表面：装配失败降级为"无遮罩"，绝不连坐主 UI（与顶栏/切换器同一处置）。
+            try
+            {
+                _screenCorners = new ScreenCorners.ScreenCornerService();
+                _screenCorners.ApplySettings();
+            }
+            catch (Exception ex)
+            {
+                try { _screenCorners?.Dispose(); } catch { /* 降级路径：Dispose 失败不掩盖原始异常 */ }
+                _screenCorners = null;
+                Logger.Warn($"屏幕圆角未启用（降级为无遮罩运行）: {ex.Message}");
+            }
+
+            // 6.11 台前调度（wp-macos-parity r5，macOS Stage Manager 等效）：左侧舞台条 + DWM 实况
+            // 缩略图，默认关（StageManagerEnabled）。附属表面：装配失败降级为"无台前调度"，
+            // 绝不连坐主 UI（与顶栏/切换器/屏幕圆角同一处置）；开关入口是 ApplySettings，
+            // 设置页的 UserControl 与这里共用它。
+            try
+            {
+                _stageManager = new StageManager.StageManagerService();
+                _stageManager.ApplySettings();
+            }
+            catch (Exception ex)
+            {
+                try { _stageManager?.Dispose(); } catch { /* 降级路径：Dispose 失败不掩盖原始异常 */ }
+                _stageManager = null;
+                Logger.Warn($"台前调度未启用（降级为无舞台条运行）: {ex.Message}");
+            }
+
+            // 新通知 → 右上角横幅（历史仍由通知中心保留；关掉横幅不影响历史）
+            _notifications.Arrived += (_, item) =>
+            {
+                if (SettingsService.Current.NotificationBannerEnabled)
+                {
+                    TopBar.NotificationBannerHost.Show(item);
+                }
+            };
+            // 7. --settings：设置窗口命令行入口（与托盘"设置"等效；窗口为单例）
+            if (e.Args.Contains("--settings", StringComparer.OrdinalIgnoreCase))
+                OpenSettings();
+            // 7.1 --about：关于本机卡（验证/截图入口；与 logo 菜单同一单例）
+            if (e.Args.Contains("--about", StringComparer.OrdinalIgnoreCase))
+                Shell.AboutWindow.ShowSingleton();
+            // 7.1 --control-center：控制中心面板（验证/截图入口；与顶栏按钮同一实例）
+            if (e.Args.Contains("--control-center", StringComparer.OrdinalIgnoreCase))
+            {
+                EnsureTopBar();
+                _topBar?.ShowControlCenterForDiagnostics();
+            }
+
+            // 7.01 --tray-probe：托盘真实像素的只读探针（P4-T8 第一步，不注入），跑完退出
+            if (e.Args.Contains("--tray-probe", StringComparer.OrdinalIgnoreCase))
+            {
+                var found = TrayProbe.Run();
+                Logger.Info($"托盘探针：可用按钮 {found} 个 → {(found > 0 ? "UIA 路径可行" : "UIA 读不到，需另找路径")}");
+                ExitApp();
+            }
+
+            // 7.03 --dock-autohide：开启自动隐藏并在 1.2s 后强制滑下（截图/验收"隐藏态"用）。
+            // 多屏实例打在主 Dock（第一块屏）上，与历史语义一致。
+            if (e.Args.Contains("--dock-autohide", StringComparer.OrdinalIgnoreCase))
+            {
+                _shotDock = true;
+                PrimaryDock()?.ApplyAutoHide(true, persist: false);   // 诊断不改用户设置
+                var hideTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(1200) };
+                hideTimer.Tick += (_, _) =>
+                {
+                    hideTimer.Stop();
+                    PrimaryDock()?.ForceAutoHideForDiagnostics();
+                };
+                hideTimer.Start();
+            }
+
+            // 7.008 --tray-capture <png>：把系统托盘区截成 PNG（P4-T8 不注入路线），跑完退出
+            var trayShot = ParseArgValue(e.Args, "--tray-capture");
+            if (!string.IsNullOrWhiteSpace(trayShot))
+            {
+                var saved = TrayCapture.CaptureToFile(trayShot!);
+                Logger.Info($"托盘截屏：结果={(saved is null ? "失败" : saved)}");
+                ExitApp();
+            }
+
+            // 7.02 --dock-edge left|right|bottom：停靠边实验入口（截图/验收用，不写设置）
+            var dockEdge = ParseArgValue(e.Args, "--dock-edge");
+            if (!string.IsNullOrWhiteSpace(dockEdge))
+            {
+                _shotDock = true;
+                PrimaryDock()?.ApplyEdge(dockEdge!, persist: false);
+            }
+
+            // 7.04 --dock-shot：把 --shot 的目标固定为 Dock 窗口（验图标/角标/进度用）
+            if (e.Args.Contains("--dock-shot", StringComparer.OrdinalIgnoreCase))
+            {
+                _shotDock = true;
+            }
+
+            // 7.05 --dock-badge <text>：Dock 角标截图入口（把角标打到第一个条目，不读真实未读）
+            var dockBadge = ParseArgValue(e.Args, "--dock-badge");
+            if (!string.IsNullOrWhiteSpace(dockBadge))
+            {
+                _shotDock = true;
+                PrimaryDock()?.ApplyBadgeForDiagnostics(dockBadge!);
+            }
+
+            // 7.06 --dock-progress <0..1>：Dock 进度条截图入口（示例值，不改系统）
+            var dockProgress = ParseArgValue(e.Args, "--dock-progress");
+            if (!string.IsNullOrWhiteSpace(dockProgress)
+                && double.TryParse(dockProgress, System.Globalization.NumberStyles.Float,
+                    System.Globalization.CultureInfo.InvariantCulture, out var progressFraction))
+            {
+                _shotDock = true;
+                PrimaryDock()?.ApplyProgressForDiagnostics(progressFraction);
+            }
+
+            // 7.07 --progress-probe：读一次 Explorer 拷贝对话框进度（不存在就报没找到），跑完退出
+            if (e.Args.Contains("--progress-probe", StringComparer.OrdinalIgnoreCase))
+            {
+                var (found, fraction) = TaskbarProgressService.Probe();
+                Logger.Info($"进度探针：found={found} fraction={fraction:0.###}");
+                ExitApp();
+            }
+
+            // 7.10 --banner-test：通知横幅截图入口（用固定示例内容，不读真实通知）
+            if (e.Args.Contains("--banner-test", StringComparer.OrdinalIgnoreCase))
+            {
+                TopBar.NotificationBannerHost.Show(
+                    new Core.Notifications.NotificationItem(
+                        900001, string.Empty, "示例应用", "这是一条演示通知",
+                        "用于截图验证横幅样式与排版，不包含任何真实通知内容。",
+                        DateTimeOffset.Now),
+                    TimeSpan.FromSeconds(40));
+            }
+
+            // 7.11 --osd-volume <0..100> / --osd-mute：音量 HUD 截图入口（不改系统音量）
+            var osdVolume = ParseArgValue(e.Args, "--osd-volume");
+            if (!string.IsNullOrWhiteSpace(osdVolume) && int.TryParse(osdVolume, out var osdPercent))
+            {
+                _volumeOsd?.ShowDiagnostic(osdPercent, muted: false);
+            }
+
+            if (e.Args.Contains("--osd-mute", StringComparer.OrdinalIgnoreCase))
+            {
+                _volumeOsd?.ShowDiagnostic(0, muted: true);
+            }
+
+            // 7.12 --notification-center：通知中心面板（验证/截图入口；与顶栏时钟点击同一实例）
+            if (e.Args.Contains("--notification-center", StringComparer.OrdinalIgnoreCase))
+            {
+                TopBar.NotificationCenterWindow.ShowOrToggle(_notifications);
+            }
+
+            // 7.15 --spotlight：Spotlight 搜索面板（验证/截图入口；与全局热键同一实例）
+            if (e.Args.Contains("--spotlight", StringComparer.OrdinalIgnoreCase))
+                _launcher?.Toggle();
+            // 7.2 --launchpad：启动台（验证/截图入口；与 F4 同一窗口）
+            if (e.Args.Contains("--launchpad", StringComparer.OrdinalIgnoreCase))
+                Launcher.LaunchpadWindow.ShowOrToggle(_launcher);
+            // 7.21 --switcher：切换器面板（alpha.29 取证/截图入口）：走呼出热键同一条"无状态打开"
+            // 路径（无键盘会话，鼠标点选提交），不写设置、不接管 Alt+Tab。面板未装配（接管开关关着）
+            // 时如实记录而不是静默吞掉——取证入口的失败必须可 grep。
+            if (e.Args.Contains("--switcher", StringComparer.OrdinalIgnoreCase))
+            {
+                if (_switcher is { } switcherForProbe) switcherForProbe.OpenForHotkey();
+                else Logger.Warn("--switcher：切换器服务未装配，面板无法打开");
+            }
+
+            // 文件夹诊断入口要等启动台 Loaded + 索引就绪，延后一拍再开（否则窗口还没载入，调了也没用）。
+            var launchpadFolder = ParseArgValue(e.Args, "--launchpad-folder");
+            var wantDemoFolder = e.Args.Contains("--launchpad-folder-demo", StringComparer.OrdinalIgnoreCase);
+            if (wantDemoFolder || !string.IsNullOrWhiteSpace(launchpadFolder))
+            {
+                var attempts = 0;
+                var timer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(700) };
+                timer.Tick += (_, _) =>
+                {
+                    attempts++;
+                    var done = wantDemoFolder
+                        ? Launcher.LaunchpadWindow.ShowDemoFolderForDiagnostics()
+                        : true;
+                    if (!wantDemoFolder)
+                    {
+                        Launcher.LaunchpadWindow.OpenFolderForDiagnostics(launchpadFolder!);
+                    }
+
+                    // 索引可能还没扫完：最多重试 8 次（约 5.6s），之后放弃并记一行日志
+                    if (done || attempts >= 8)
+                    {
+                        timer.Stop();
+                        if (!done)
+                        {
+                            Logger.Warn("启动台文件夹诊断入口：索引未就绪，放弃打开覆盖层");
+                        }
+                    }
+                };
+                timer.Start();
+            }
+            // 7.3 --finder：访达窗口（Phase 6-a 骨架；单例，关闭后可再次打开）
+            //     --view list|columns|icons|gallery：直接以指定视图打开（截图/验收入口，不写回该文件夹的持久化选项）
+            //     --path <dir>：直接打开指定目录（截图/验收入口；正常启动始终用该标签记住的目录）
+            if (e.Args.Contains("--finder", StringComparer.OrdinalIgnoreCase))
+            {
+                Finder.FinderWindow.ShowSingleton(
+                    ParseArgValue(e.Args, "--path"),
+                    ParseViewArg(e.Args),
+                    ParseArgValue(e.Args, "--select"));
+            }
+            // 7.4 --quicklook <path>：Quick Look 预览（Phase 6-b 起步；验证/截图入口，单例）
+            var quickLookIndex = Array.FindIndex(e.Args,
+                arg => string.Equals(arg, "--quicklook", StringComparison.OrdinalIgnoreCase));
+            if (quickLookIndex >= 0)
+            {
+                if (quickLookIndex + 1 < e.Args.Length)
+                    Finder.QuickLookWindow.ShowFor(e.Args[quickLookIndex + 1]);
+                else
+                    Logger.Warn("--quicklook 缺少路径参数，已忽略");
+            }
+
+            // 7.45 --tabs a,b,c：为已打开的访达窗口追加标签（验证/截图入口）
+            var tabsArg = ParseArgValue(e.Args, "--tabs");
+            if (!string.IsNullOrWhiteSpace(tabsArg))
+            {
+                Finder.FinderWindow.OpenTabs(tabsArg!
+                    .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries));
+            }
+
+            // 7.46 --search <query>：在已打开的访达窗口里跑一次"这台 Mac"搜索（验证/截图入口）
+            var searchArg = ParseArgValue(e.Args, "--search");
+            if (!string.IsNullOrWhiteSpace(searchArg))
+            {
+                Finder.FinderWindow.RunSearchForDiagnostics(searchArg);
+            }
+
+            // 7.5 --info <path>：显示简介卡（验证/截图入口；与 ⌘I 同一单例）
+            var infoPath = ParseArgValue(e.Args, "--info");
+            if (!string.IsNullOrWhiteSpace(infoPath))
+            {
+                Finder.FinderInfoWindow.ShowFor(infoPath);
+            }
+
+            // 8. 托盘最后就位（SMTC 已随 Dock 构造期异步初始化，失败仅记日志）
+            _tray = new TrayIconManager(
+                openSettings: OpenSettings,
+                reloadDock: ReloadDock,
+                exit: ExitApp,
+                applyTheme: ApplyTheme,
+                currentTheme: () => SettingsService.Current.Theme);
+            Logger.Info("托盘就绪，启动完成");
+
+            // 9. 诊断证据：--shot <file> [--shot-delay <ms>]（截图后自动退出；不参与产品逻辑）
+            ScheduleDiagnosticShot(e.Args);
+
+            // 9.1 文件操作自检：--fileop-smoke <dir>（跑完打印结果并退出）
+            var smokeDir = ParseArgValue(e.Args, "--fileop-smoke");
+            if (!string.IsNullOrWhiteSpace(smokeDir))
+            {
+                _ = RunFileOperationSmokeAsync(smokeDir!);
+            }
+
+            // 9.2 通知读取探针：--notif-probe（只写授权/条数等元信息，绝不写正文；跑完退出）
+            if (e.Args.Contains("--notif-probe", StringComparer.OrdinalIgnoreCase))
+            {
+                _ = RunNotificationProbeAsync();
+            }
+        }
+        catch (Exception ex)
+        {
+            Logger.Error("启动失败：回滚任务栏策略并退出（防僵尸进程）", ex);
+            if (_tray is not null)
+            {
+                _tray.Dispose();
+                _tray = null;
+            }
+            _taskbar?.Restore(); // 隐藏策略已落地时必须还原（OnExit 兜底重复调用，幂等）
+            Shutdown();          // Dock 已创建时随关停走 OnClosing/OnClosed 清理链路
+            return;
+        }
+    }
+
+    protected override void OnExit(ExitEventArgs e)
+    {
+        // 兜底路径（系统会话结束、显式 Shutdown 等）也要清理；与 ExitApp 重复调用均幂等
+        SystemAppearance.Changed -= OnSystemAppearanceChanged;
+        SystemAppearance.Stop();
+        _fullscreenAvoidance?.Dispose();
+        _fullscreenAvoidance = null;
+        _hotCorners?.Dispose();
+        _hotCorners = null;
+        _screenCorners?.Dispose();   // 屏幕圆角遮罩（幂等；ExitApp 已走过一次则 no-op）
+        _screenCorners = null;
+        _stageManager?.Dispose();    // 台前调度：撤舞台条 + 停跟踪（幂等；缩略图句柄随窗口注销）
+        _stageManager = null;
+        _launchpadHotkey?.Dispose();
+        _launchpadHotkey = null;
+        StopThermalMonitor();   // 温度轮询兜底停表（ExitApp 已走过则 no-op，幂等）
+        _wallpaperTint?.Dispose();   // 墙纸取色兜底停服务（退订广播/停定时器，幂等）
+        _wallpaperTint = null;
+        _tray?.Dispose();
+        _tray = null;
+        _animator?.Dispose();   // WinEvent 钩子必须卸载（幂等）
+        _animator = null;
+        SharedAnimator = null;
+        _transitionGuard?.Dispose();   // 解斗篷/还原 DWM 属性（幂等）
+        _transitionGuard = null;
+        Services.WindowEligibility.ManagedCloakOverride = null;
+        _animSuppressor?.Dispose();   // SPI_SETANIMATION 必须还原成用户原值（幂等）
+        _animSuppressor = null;
+        DestroyLauncher();  // 覆盖层是瞬态弹层：兜底路径也要收（Dispose 幂等，ExitApp 已走过一次则 no-op）
+        DestroySwitcher(); // 键盘钩子必须卸载（幂等）：残留的 WH_KEYBOARD_LL 会在进程退出时由系统回收，
+                           // 但显式 Shutdown 而未走 ExitApp 的路径若卡在非 UI 线程，卸载会失败 → 这里至少留日志
+        // 多屏实例化：Dock 实例随 ExitApp/窗口关闭链路收掉（这里兜底残留），共享服务在进程退出时释放
+        //（N 实例共用一份 SMTC 订阅与 shell-hook 宿主窗，只能由组合根收）。快照循环：Close() 同步
+        // 走 OnClosed，Closed 处理器会从 _docks 移除实例，直接枚举会抛集合被修改。
+        foreach (var dock in _docks.ToList()) { try { if (dock.IsLoaded) dock.Close(); } catch { /* 幂等兜底 */ } }
+        _docks.Clear();
+        foreach (var slim in _slimDocks.ToList()) { try { if (slim.IsLoaded) slim.Close(); } catch { /* 幂等兜底 */ } }
+        _slimDocks.Clear();
+        _sharedTracker?.Dispose();
+        _sharedTracker = null;
+        _sharedMediaVm?.Dispose();
+        _sharedMediaVm = null;
+        _sharedSmtc?.Dispose();
+        _sharedSmtc = null;
+        _taskbar?.Restore(); // Hide/AutoHide 策略下退出必须还原系统任务栏（T16 起保留）
+        ReleaseMutex();
+        Logger.Info($"退出完成 (ExitCode={e.ApplicationExitCode})");
+        base.OnExit(e);
+    }
+
+    // ---------- 单实例 ----------
+
+    /// <summary>WaitOne(0) 探测互斥体：false=已有实例；AbandonedMutexException=前实例崩溃遗留，视为可获得。</summary>
+    private bool AcquireSingleInstanceMutex()
+    {
+        _mutex = new Mutex(initiallyOwned: false, MutexName);
+        try
+        {
+            _ownsMutex = _mutex.WaitOne(TimeSpan.Zero);
+            return _ownsMutex;
+        }
+        catch (AbandonedMutexException)
+        {
+            _ownsMutex = true; // 抛出该异常即代表所有权已转移给本线程
+            return true;
+        }
+    }
+
+    private void ReleaseMutex()
+    {
+        try
+        {
+            if (_ownsMutex) _mutex?.ReleaseMutex();
+        }
+        catch { /* 所有权竞态等：进程即将终止，忽略 */ }
+        _mutex?.Dispose();
+        _mutex = null;
+        _ownsMutex = false;
+    }
+
+    // ---------- 托盘动作 ----------
+
+    /// <summary>打开设置窗口（单例：已打开则激活前置）。VM 锚定主 Dock（多屏时=第一块屏的实例；
+    /// 媒体 VM 是进程级共享单例，全部实例同一份）。</summary>
+    private void OpenSettings()
+    {
+        var dock = PrimaryDock();
+        if (dock is null || _taskbar is null) return;
+        if (_settingsWindow is { IsLoaded: true })
+        {
+            BringToFront(_settingsWindow);
+            return;
+        }
+        var win = new Settings.SettingsWindow(_taskbar, dock.Vm, dock.MediaVm);
+        win.Closed += (_, _) => _settingsWindow = null;
+        _settingsWindow = win;
+        win.Show();
+        // Windows 前台锁：只 Show() 时窗口可能被当前最大化的前台窗口压在下面——日志写着"已打开"，
+        // 屏幕上却一个窗口都没有，用户看到的就是"点了设置没反应"。临时置顶一次把 z-order 提到
+        // 前台，立刻恢复原值（不覆盖用户自己开的"保持置顶"），之后窗口不再常驻顶层。
+        BringToFront(win);
+        Logger.Info("设置窗口已打开");
+    }
+
+    /// <summary>
+    /// 把窗口从"最大化窗口盖住"的处境里提到前台，且不改变它长期的置顶状态。
+    /// <para>Topmost 脉冲是绕开前台激活锁（<c>SetForegroundWindow</c> 对后台进程常直接失败）的
+    /// 最小手段：置 true 的那一刻 WPF 会立刻 <c>SetWindowPos(HWND_TOPMOST)</c>，随后恢复原值只会
+    /// 把它落回普通层，不会掉到那个最大化的窗口后面。</para>
+    /// </summary>
+    private static void BringToFront(System.Windows.Window window)
+    {
+        var wasTopmost = window.Topmost;
+        window.Topmost = true;
+        window.Activate();
+        if (window.WindowState == System.Windows.WindowState.Minimized)
+        {
+            window.WindowState = System.Windows.WindowState.Normal;
+        }
+        window.Topmost = wasTopmost;
+    }
+
+    /// <summary>
+    /// 外观模式（dark/light/auto）：落盘 + 只重写 token 键（不重建窗口）。
+    /// 设置页与控制中心共用这一条路径。
+    /// </summary>
+    public static void ApplyAppearance(string appearance)
+    {
+        var next = SettingsService.Current with { Appearance = appearance };
+        SettingsService.UpdateAndSave(next);
+        ThemeManager.ApplyAppearance(SettingsService.Current.Appearance, Application.Current);
+    }
+
+    /// <summary>强调色板（macOS 12 色）：落盘 + 重写 token 键（ThemeAccent/MacAccent 即时换色）。</summary>
+    public static void ApplyAccentColor(string accentId)
+    {
+        var next = SettingsService.Current with { AccentColor = accentId };
+        SettingsService.UpdateAndSave(next);
+        ThemeManager.ApplyAppearance(SettingsService.Current.Appearance, Application.Current);
+    }
+
+    /// <summary>系统亮暗变化：只有 auto 模式需要动作；固定 dark/light 时用户的选择优先。</summary>
+    private static void OnSystemAppearanceChanged()
+    {
+        if (!string.Equals(SettingsService.Current.Appearance, Core.Design.AppearanceModes.Auto, StringComparison.Ordinal))
+            return;
+        ThemeManager.ApplyAppearance(SettingsService.Current.Appearance, Current);
+    }
+
+    /// <summary>
+    /// 主题落地的<b>唯一</b>入口：设置页、托盘子菜单、顶栏"主题"菜单都走这里
+    /// （以前三处各写一遍 UpdateAndSave + Apply，加一条主题线要同步改三个地方，必然漏）。
+    /// v4 起只剩 macOS 一条主题线；保留本入口是为了让三处调用点继续共用同一条落盘/应用路径。
+    /// </summary>
+    public static void ApplyTheme(string id)
+    {
+        var next = SettingsService.Current with { Theme = id };
+        Logger.Info($"主题切换: {id}");
+        SettingsService.UpdateAndSave(next);
+        ThemeManager.Apply(SettingsService.ThemeDefinitionOf(SettingsService.Current), Application.Current);
+        // 策略不随主题变化；Apply 内部对"策略没变"是幂等的
+        (Current as App)?._taskbar?.Apply(SettingsService.PolicyOf(SettingsService.Current));
+    }
+
+    // ---------- Dock 表面的组合根（多屏 Dock 实例化） ----------
+
+    /// <summary>
+    /// 按当前设置装配全部 Dock 表面（完整 Dock + 精简条），幂等地从零开始。
+    /// <para>
+    /// 【单屏零回归】在屏显示器 ≤1 时走旧单实例路径：一个 DockWindow、monitorSelector 不传
+    /// （条带落位跟随全局 <c>DockMonitor</c>，含 auto=启动光标屏的语义）——与多屏化前逐字节一致。
+    /// 多屏时按 <see cref="MonitorGeometry.Surfaces"/> 枚举序逐屏解析
+    /// <see cref="Core.Dock.DockMonitorProfiles"/> 计划：Full → 完整 Dock（序号选择器钉住本屏），
+    /// Slim → 精简条，None → 该屏不放表面（都记日志，行为可 grep）。
+    /// </para>
+    /// <para>
+    /// 【异常边界】单屏路径保持既有语义（异常上抛，由 OnStartup 的整体 try/catch 回滚退出）；
+    /// 多屏路径逐屏降级——一块屏的 Dock 创建失败只损失该屏，不连坐其他屏与主 UI。
+    /// </para>
+    /// </summary>
+    private void CreateDockSurfaces()
+    {
+        var screens = MonitorGeometry.Surfaces();
+        if (screens.Count <= 1)
+        {
+            CreateSingleDockSurfaces();
+            return;
+        }
+
+        var s = SettingsService.Current;
+        foreach (var surface in screens)
+        {
+            // 序号取 Identify 的同一口径（枚举序 1 基，与每屏覆盖配置的下拉/键同源）。
+            if (MonitorGeometry.Identify(surface.Handle) is not { } identity) continue;
+            var plan = Core.Dock.DockMonitorProfiles.Resolve(s.DockMonitorProfiles, identity.Index,
+                identity.IsPrimary, s.DockHideMode, s.DockEdge, s.DockIconSize);
+            var kind = Core.Dock.DockMonitorProfiles.SurfaceKindOf(plan.ShowDock, plan.Slim);
+            var selector = identity.Index.ToString(System.Globalization.CultureInfo.InvariantCulture);
+            try
+            {
+                switch (kind)
+                {
+                    case Core.Dock.DockSurfaceKind.Full:
+                        CreateAndWireDock(selector);
+                        break;
+                    case Core.Dock.DockSurfaceKind.Slim:
+                        var slim = new SlimDockWindow(_sharedTracker!, selector);
+                        _slimDocks.Add(slim);
+                        try
+                        {
+                            slim.Show();
+                        }
+                        catch
+                        {
+                            // 与完整 Dock 同一兜底纪律：Show 半途失败 → 摘除 + Close（ABM_REMOVE/解 hook）。
+                            _slimDocks.Remove(slim);
+                            try { slim.Close(); } catch { /* 自愈路径：Close 失败不掩盖原始异常 */ }
+                            throw;
+                        }
+                        break;
+                    default:   // None
+                        Logger.Info($"显示器 {identity.Index}：每屏覆盖判定不放 Dock 表面（showDock=false）");
+                        break;
+                }
+            }
+            catch (Exception ex)
+            {
+                // 逐屏降级：该屏缺席即可，其他屏照常（完整 Dock 的 Close 兜底见 WireDockEvents）。
+                Logger.Error($"显示器 {identity.Index} 的 Dock 表面创建失败（该屏降级为无 Dock）", ex);
+            }
+        }
+        _docksCreatedOnce = true;
+    }
+
+    /// <summary>单屏路径（多屏化前的行为，零回归裁定）：单实例、共享服务注入、无钉屏选择器。
+    /// 创建失败直接上抛（OnStartup 整体 try/catch 回滚退出）；_docksCreatedOnce 不置位，
+    /// ReloadDock 的守卫会挡住无效重载。</summary>
+    private void CreateSingleDockSurfaces()
+    {
+        CreateAndWireDock(monitorSelector: null);
+        _docksCreatedOnce = true;
+    }
+
+    /// <summary>构造一个完整 DockWindow（共享服务注入）并接线后显示；异常向上传播由调用方定夺。
+    /// Show() 半途抛异常时本方法自己兜底：从 _docks 摘除 + Close（走 OnClosing/OnClosed 的
+    /// ABM_REMOVE 与事件解绑），避免半构造实例泄漏条带与订阅（与 EnsureTopBar 同一纪律）。</summary>
+    private void CreateAndWireDock(string? monitorSelector)
+    {
+        var dock = new DockWindow(_taskbar, _animator, _sharedTracker, _sharedSmtc, _sharedMediaVm,
+            monitorSelector);
+        WireDockEvents(dock);
+        _docks.Add(dock);
+        try
+        {
+            dock.Show();
+        }
+        catch
+        {
+            _docks.Remove(dock);
+            try { dock.Close(); } catch { /* 自愈路径：Close 失败不掩盖原始异常 */ }
+            throw;
+        }
+    }
+
+    /// <summary>
+    /// Dock 实例的事件接线（原 DockWindow 静态事件链的实例化改造）：只接 Dock→App 方向的
+    /// 启动台请求；反向的"启动台关闭 → 复位放大场"由 DockWindow 自己订阅
+    /// <see cref="Launcher.LaunchpadWindow.Dismissed"/>（每实例各复位各的）。
+    /// 解绑在 <see cref="DockWindow.Closed"/> 上对称执行（本仓库的长命事件泄漏教训都栽在"不对称"上）。
+    /// </summary>
+    private void WireDockEvents(DockWindow dock)
+    {
+        dock.LaunchpadRequested += OnDockLaunchpadRequested;
+        dock.Closed += (_, _) =>
+        {
+            dock.LaunchpadRequested -= OnDockLaunchpadRequested;
+            _docks.Remove(dock);
+        };
+    }
+
+    /// <summary>启动台常驻格点击（任一 Dock 实例）：<see cref="Launcher.LaunchpadWindow.ShowOrToggle"/>。</summary>
+    private void OnDockLaunchpadRequested() => Launcher.LaunchpadWindow.ShowOrToggle(_launcher);
+
+    /// <summary>重载 Dock：旧实例完整释放（ABM_REMOVE；共享服务不随实例销毁）后
+    /// 新建。先关后开：AppBar 底边条带先归还再申请，避免双 AppBar 同边竞争导致新 Dock 被顶高。
+    /// 顶栏随 Dock 一并重建（brief 接口：App 持有其生命周期，重载即按当前设置重放）。
+    /// 设置窗口持有旧 Dock 的 VM 引用，一并关闭（下次打开自动基于新 Dock 重建）。</summary>
+    private void ReloadDock()
+    {
+        if (!_docksCreatedOnce || _exiting) return;
+        Logger.Info("重载 Dock：开始");
+        _settingsWindow?.Close();
+        DestroyTopBar(); // 先归还顶部条带再重建（同"先关后开"理由）
+        // 切换面板随 Dock 一并重建：背板 tint 只在 HWND 初始化时读一次主题，重载（含换主题）后
+        // 必须换新实例才能拿到新的 tint；同时保证重载瞬间屏幕上不留任何旧面板。
+        DestroySwitcherWindow();
+        // 先关后开：旧实例（完整 Dock + 精简条）全部关闭。Closed 处理器已把实例从 _docks 移除，
+        // 这里先摘下列表再 Close，避免重建循环把旧实例混进新列表。
+        var oldDocks = _docks.ToList();
+        _docks.Clear();
+        var oldSlim = _slimDocks.ToList();
+        _slimDocks.Clear();
+        foreach (var old in oldDocks) old.Close(); // 同步走完 OnClosing（ABM_REMOVE）/ OnClosed
+        foreach (var old in oldSlim) old.Close();
+        try
+        {
+            // 【终审 I-6】重建必须有就地兜底：此刻旧 Dock/顶栏/面板都已销毁，若创建抛异常且无人接住，
+            // 常驻进程只剩托盘图标，而"重载"与"设置"全部静默 no-op，用户没有任何恢复手段。
+            // catch 后至少恢复顶栏与切换面板这两个不依赖 Dock 的表面，保证屏幕上有可用入口。
+            // 共享服务（tracker/smtc/mediaVm）不重建：进程级单例，随进程走。
+            CreateDockSurfaces();
+            if (SettingsService.Current.TopBarEnabled) EnsureTopBar();
+            EnsureSwitcherWindow();
+            RestartFullscreenAvoidance();
+        }
+        catch (Exception ex)
+        {
+            // Show() 已走完 OnSourceInitialized（AppBar 已注册、ThemeChanged 已订阅）而其后抛异常时，
+            // 引用即将丢弃——CreateDockSurfaces 的多屏分支已逐屏 Close 兜底；单屏分支重建失败时
+            // 这里兜底关掉半构造实例（走 OnClosing/OnClosed：ABM_REMOVE + 解绑），否则条带泄漏。
+            // 快照循环：Close() 同步走 OnClosed → Closed 处理器从 _docks 移除，直接枚举会抛。
+            foreach (var half in _docks.ToList()) { try { half.Close(); } catch { /* 自愈路径不掩盖原始异常 */ } }
+            _docks.Clear();
+            Logger.Error("重载 Dock 失败：新实例创建异常，旧 Dock 已释放。正在恢复顶栏/切换面板以保留可用界面（可再次重载或退出）", ex);
+            try { if (SettingsService.Current.TopBarEnabled) EnsureTopBar(); } catch { /* 逐表面尽力恢复，单点失败不再连坐 */ }
+            try { EnsureSwitcherWindow(); } catch { /* 同上 */ }
+            if (_topBar is null && _switcherWindow is null)
+                MessageBox.Show("Beautiful 重载界面失败，屏幕已无可操作窗口。\n请从系统托盘图标再次“重载”或“退出”，详情见 logs 日志。",
+                    "Beautiful", MessageBoxButton.OK, MessageBoxImage.Warning);
+            return;
+        }
+        Logger.Info($"重载 Dock：完成（完整实例 {_docks.Count} 个 / 精简条 {_slimDocks.Count} 条）");
+    }
+
+    // ---------- 顶栏生命周期（Task 8） ----------
+
+    /// <summary>按设置确保顶栏存在（幂等）。创建/显示失败仅记日志降级——顶栏是附属表面，
+    /// 不得拖垮 Dock 与任务栏策略（与启动序整体回滚区分：那条保护的是主 UI 链路）。</summary>
+    private void EnsureTopBar()
+    {
+        if (_topBar is not null || _exiting) return;
+        TopBarWindow? bar = null; // 提升出 try：catch 需能 Close 已创建实例（Task 8 泄漏修复，见下）
+        try
+        {
+            bar = new TopBarWindow(BuildTopBarContext());
+            bar.Show();
+            _topBar = bar;
+            Logger.Info("顶栏已显示");
+            RestartFullscreenAvoidance();
+        }
+        catch (Exception ex)
+        {
+            _topBar = null;
+            // Show() 已完成 OnSourceInitialized（ABE_TOP 条带已申请、ThemeChanged 已订阅、WinEventHook/定时器已装），
+            // 但若其后 ApplyTheme/StartForegroundTracking 抛异常，句柄即将随局部变量丢弃——必须 Close() 走 OnClosing
+            // （ABM_REMOVE + 停 timer + 解 hook + 解订阅），否则顶部条带永久预留且静态订阅泄漏。Close 幂等且异常安全。
+            try { bar?.Close(); } catch { /* 降级路径：Close 失败不掩盖原始异常 */ }
+            Logger.Warn($"顶栏创建失败（降级为无顶栏运行）: {ex.Message}");
+        }
+    }
+
+    /// <summary>组合根：顶栏依赖注入（窗口跟踪器/媒体 VM/系统动作回调均转接到主 Dock 与 App 生命周期方法）。
+    /// 用闭包取 PrimaryDock() 现值——重载 Dock 后旧顶栏已随 ReloadDock 销毁重建，捕获的始终是当时的
+    /// 主 Dock；Tracker/MediaVm 是进程级共享单例，N 实例下任意实例返回同一份。</summary>
+    private TopBarContext BuildTopBarContext() => new()
+    {
+        Tracker = () => PrimaryDock()?.Tracker,
+        Media = () => PrimaryDock()?.MediaVm,
+        OpenMediaPanel = () => PrimaryDock()?.OpenMediaPanelFromTopBar(),
+        OpenSettings = OpenSettings,
+        OpenLauncher = () => _launcher?.Toggle(),
+        ReloadDock = ReloadDock,
+        Exit = ExitApp,
+        ApplyTheme = ApplyTheme,
+        CurrentTheme = () => SettingsService.Current.Theme,
+    };
+
+    /// <summary>销毁顶栏并归还 ABE_TOP 条带（幂等；OnClosing 内 ABM_REMOVE）。</summary>
+    private void DestroyTopBar()
+    {
+        if (_topBar is null) return;
+        var old = _topBar;
+        _topBar = null;
+        old.Close();
+        Logger.Info("顶栏已销毁（条带已归还）");
+        RestartFullscreenAvoidance();
+    }
+
+    /// <summary>重建全屏避让服务（Dock/顶栏实例变化时调用；幂等）。多屏实例化后服务持全部
+    /// Dock 实例的列表逐屏避让；触发角用共享跟踪器（进程内一份，签名未变）。</summary>
+    private void RestartFullscreenAvoidance()
+    {
+        _fullscreenAvoidance?.Dispose();
+        _fullscreenAvoidance = null;
+        _hotCorners?.Dispose();
+        _hotCorners = null;
+        if (_docks.Count > 0 && !_exiting)
+        {
+            // Window 列表快照：服务只做 Show/Hide 与矩形读取，重载 Dock 时本方法会被重建调用。
+            _fullscreenAvoidance = new FullscreenAvoidanceService(_docks.ToList<Window>(), _topBar);
+            // _docks 非空 ⟹ CreateDockSurfaces 已跑过 ⟹ _sharedTracker 已就位（进程级单例）。
+            _hotCorners = new HotCornerService(_sharedTracker!);
+        }
+    }
+
+    /// <summary>设置页开关的即时生效入口（Task 16 设置 UI 接线用）：落盘 + 显示/隐藏，无需重启。</summary>
+    public static void SetTopBarEnabled(bool enabled)
+    {
+        SettingsService.UpdateAndSave(SettingsService.Current with { TopBarEnabled = enabled });
+        (Current as App)?.ApplyTopBarEnabled();
+    }
+
+    /// <summary>
+    /// 设置页改动 DockIconSize / MagnificationStrength / ReflectionEnabled 后的即时生效入口（Task 16）。
+    /// 值的写入与规范化由调用方（SettingsService.Update / UpdateAndSave）负责，本方法只把当前设置
+    /// 重新落到运行中的 Dock（重排条目几何 + 覆盖图标尺寸遮罩 + 按需重排条带），无需重启。
+    /// Dock 尚未创建时静默跳过（下次创建时 ApplyTheme 会读取同一设置）。
+    /// </summary>
+    public static void ApplyDockLayout()
+    {
+        var app = Current as App;
+        if (app is null) return;
+        foreach (var dock in app._docks) dock.RefreshLayoutFromSettings();
+    }
+
+    /// <summary>
+    /// 设置页改动 <c>TopBarMonitor</c> 后的即时生效入口（v3 T1）：按新的目标显示器重新协商 ABE_TOP
+    /// 条带并把顶栏窗口搬过去。顶栏未启用/未创建时静默跳过（下次创建时 OnSourceInitialized 读同一设置）。
+    /// </summary>
+    public static void ApplyTopBarGeometry() => (Current as App)?._topBar?.RefreshLayoutFromSettings();
+
+    /// <summary>
+    /// 把一扇外部窗口带到前台（Dock 右键菜单"切到该窗口"用，v3.1）。
+    /// 【为什么开这个口子】前台切换在这台机器上是条多步链路（SetForegroundWindow → 前台锁被压制时
+    /// AttachThreadInput → 再不行合成一次 Alt 抬起），已经在切换器里被真机打磨过一份。
+    /// Dock 菜单再写一条 SetForegroundWindow 就是第二条激活路径——本仓库栽过的"两条路径各自漂移"
+    /// 正是这类重复。这里只把切换器那次尝试借出去，返回它自己的成败判定。
+    /// 切换器未装配（启动降级/重载窗口那一刻）时返回 false，由调用方退回 <c>WindowTracker</c> 的既有路径。
+    /// </summary>
+    public static bool CommitWindowForeground(IntPtr hwnd) => (Current as App)?._switcher?.Commit(hwnd) ?? false;
+
+    /// <summary>
+    /// 设置页改动<b>顶栏时钟形态</b>（秒/日期/星期/12 小时制）后的即时生效入口（v3.1 缺陷 3）：
+    /// 重算文本并按新形态重排定时器步长（显示秒=对齐秒边界，关秒=对齐分边界）。
+    /// 顶栏未启用/未创建时静默跳过——下次创建走 OnSourceInitialized 里的同一个入口读当前设置。
+    /// </summary>
+    public static void ApplyTopBarClock() => (Current as App)?._topBar?.ApplyClockSettings();
+
+    /// <summary>设置页切换 PreviewEnabled 后的即时生效入口：关闭时立即收起正在显示的预览
+    /// （开启无需动作——下一次悬停按新值放行）。让该开关不再是死控件。</summary>
+    public static void ApplyPreviewEnabled()
+    {
+        var app = Current as App;
+        if (app is null) return;
+        foreach (var dock in app._docks) dock.ApplyPreviewSetting();
+    }
+
+    // ---------- 控制中心的落地入口（v3 T7） ----------
+    //
+    // 【为什么是 App 的静态入口而不是面板自己接线】这些开关的"真值 + 落地目标"都只在 App 手里
+    //（TaskbarManager 实例、Dock 的媒体 VM），而设置窗口早已用同一形状（SetTopBarEnabled /
+    // SetSwitcherEnabled / ApplyDockLayout）。控制中心与设置页因此共用一条写入路径：
+    // 值只经 QuickSettings 的纯函数折算一次（有单测），落盘只经 SettingsService.UpdateAndSave 一次，
+    // 不会出现"从控制中心改的和从设置页改的行为不一样"。
+
+    /// <summary>
+    /// 系统任务栏策略：落盘 + <see cref="TaskbarManager.Apply"/>。
+    /// Dock 尚未创建/正在退出时策略照样落盘（下次创建时按 Current 重放），不静默丢弃用户的选择。
+    /// </summary>
+    public static void SetTaskbarPolicy(string policyId)
+    {
+        SettingsService.UpdateAndSave(QuickSettings.WithTaskbarPolicy(SettingsService.Current, policyId));
+        var app = Current as App;
+        app?._taskbar?.Apply(SettingsService.PolicyOf(SettingsService.Current));
+    }
+
+    /// <summary>悬停放大开关：强度在"下限 ×1.0（关）"与"默认倍率（开）"之间切换，落地走 Dock 布局重放。</summary>
+    public static void SetMagnification(bool on)
+    {
+        SettingsService.UpdateAndSave(QuickSettings.WithMagnification(SettingsService.Current, on));
+        ApplyDockLayout();
+    }
+
+    /// <summary>倒影开关：三态设置被这一次点击落成显式值，此后切主题不再冲掉（见 AppSettings.ReflectionEnabled）。</summary>
+    public static void SetReflection(bool on)
+    {
+        SettingsService.UpdateAndSave(QuickSettings.WithReflection(SettingsService.Current, on));
+        ApplyDockLayout();
+    }
+
+    /// <summary>媒体胶囊开关：落盘 + 即时改媒体 VM 的可见旗标（无 SMTC 会话时胶囊本来就隐藏）。
+    /// 多屏实例化后 MediaVm 是进程级共享单例，写一次全部实例同步（仍按实例遍历，幂等）。</summary>
+    public static void SetMediaCapsule(bool on)
+    {
+        SettingsService.UpdateAndSave(QuickSettings.WithMediaCapsule(SettingsService.Current, on));
+        var app = Current as App;
+        if (app is null) return;
+        foreach (var dock in app._docks) dock.MediaVm.CapsuleVisible = on;
+    }
+
+
+    // ---------- 切换器生命周期（Task 11） ----------
+
+    /// <summary>
+    /// 确保切换器服务与可见面板存在（幂等）。服务始终启动以预热 MRU 列表与图标缓存——运行中
+    /// 打开接管开关即刻有完整列表，不必在按键路径上冷启动 EnumWindows/磁盘 IO。
+    /// 如实说明：顶栏"窗口"菜单用的是 Dock 的 WindowTracker，**并不复用**本服务的 MRU，
+    /// 因此进程内存在两条各 2s 的 EnumWindows 对账（形态相同、快照独立，暂未合并）。
+    /// 是否吞 Alt+Tab 由 <c>SwitcherEnabled</c> 决定；钩子装不上仅记日志（退回原生行为）。
+    /// 面板（Task 12）只在开关打开时装配：关掉接管就没有事件源，面板自然不显示，
+    /// 但**不创建**更干净——少一个常驻 HWND，也不会因异常路径留下可见残留。
+    /// </summary>
+    private void EnsureSwitcher()
+    {
+        if (_switcher is not null || _exiting) return;
+        Switcher.SwitcherService? svc = null; // 提升出 try：catch 必须能 Dispose 半启动实例（见下）
+        try
+        {
+            svc = new Switcher.SwitcherService();
+            svc.Hook.EmergencyDisabled += OnSwitcherEmergencyDisabled;
+            // 启动器热键与 Alt+Tab **共用这条钩子**（AltTabHook 里两条分支各判各的组合键）。
+            // 事件接在组合根而不是让 LauncherService 自己去摸切换器：装/拆都在这个方法里看得见，
+            // DestroySwitcher 里有对称的一句解绑（本仓库的长命事件泄漏教训都栽在"不对称"上）。
+            svc.Hook.LauncherRequested += OnLauncherHotkey;
+            // 关掉 Alt+Tab 接管不等于可以摘钩：启动器还靠它收键。保活旗标必须在 Start 之前就位，
+            // 否则"接管关、启动器开"的机器上钩子压根不会装（热键成了死配置）。
+            svc.KeepHookForLauncher = SettingsService.Current.LauncherEnabled;
+            _switcher = svc;
+            svc.Start(SettingsService.Current.SwitcherEnabled);
+            // 呼出热键（alpha.29）：消息窗 RegisterHotKey，与低级钩子零接触；与面板装配同源
+            // （接管关着 = 面板与呼出热键一并摘除，不留"按了没反应"的死键）。
+            svc.ApplyOpenHotkey(SettingsService.Current.SwitcherEnabled);
+            EnsureSwitcherWindow();
+        }
+        catch (Exception ex)
+        {
+            _switcher = null;
+            // Start() 半途而废时 svc 已注册进静态 ForegroundWatcher.Handlers、2s 定时器已被 Dispatcher
+            // 持根，且若异常发生在 Hook.Start() 之后还挂着一条无主的 WH_KEYBOARD_LL（继续吞 Alt+Tab）。
+            // 只把字段置 null 等于制造一个永远无人 Dispose 的僵尸——必须先释放再丢弃（评审发现 I3）。
+            try { svc?.Dispose(); } catch { /* 释放失败不掩盖原始异常 */ }
+            Logger.Warn($"切换器启动失败（Alt+Tab 保持系统原生行为）: {ex.Message}");
+        }
+    }
+
+    /// <summary>
+    /// 装配可见切换面板（幂等）。面板构造时不创建 HWND、不显示——首次 OpenRequested 才 Show，
+    /// 因此常驻成本只是一个托管对象；关闭接管开关时不装配（原生 Alt+Tab 与原生观感一致）。
+    /// </summary>
+    private void EnsureSwitcherWindow()
+    {
+        if (_switcherWindow is not null || _switcher is null || _exiting) return;
+        if (!SettingsService.Current.SwitcherEnabled) return;
+        try
+        {
+            _switcherWindow = new Switcher.SwitcherWindow(_switcher);
+            Logger.Info($"切换面板已装配（样式={SettingsService.Current.SwitcherStyle}）");
+        }
+        catch (Exception ex)
+        {
+            _switcherWindow = null;
+            // 面板装不上只是回到"无界面切换"（Task 11 的状态），Alt+Tab 仍然可用；不得连坐服务
+            Logger.Warn($"切换面板装配失败（Alt+Tab 仍可用，但无可见界面）: {ex.Message}");
+        }
+    }
+
+    /// <summary>销毁面板（幂等）：先隐藏再 Close，Close 走 OnClosed 断开对服务与钩子的订阅。</summary>
+    private void DestroySwitcherWindow()
+    {
+        if (_switcherWindow is null) return;
+        var old = _switcherWindow;
+        _switcherWindow = null;
+        try { old.ForceClose(); } catch { /* 隐藏失败仍要 Close */ }
+        try { old.Close(); } catch (Exception ex) { Logger.Warn($"切换面板关闭失败: {ex.Message}"); }
+    }
+
+    /// <summary>销毁切换器：先收面板（不留残影）→ 卸钩 + 停跟踪（幂等）。必须在窗口关闭链路里最先执行，
+    /// 保证进程退出后不再有任何键盘拦截残留。</summary>
+    private void DestroySwitcher()
+    {
+        DestroySwitcherWindow();
+        if (_switcher is null) return;
+        var old = _switcher;
+        _switcher = null;
+        try { old.Hook.EmergencyDisabled -= OnSwitcherEmergencyDisabled; } catch { }
+        try { old.Hook.LauncherRequested -= OnLauncherHotkey; } catch { }
+        old.Dispose();
+        Logger.Info("切换器已销毁（键盘钩子已卸载、面板已关闭）");
+    }
+
+    // ---------- 启动器生命周期（v3 T7） ----------
+
+    /// <summary>
+    /// 确保启动器服务存在并预热索引（幂等）。与切器同档"附属能力"：装配失败只是没有启动器，
+    /// 绝不连坐 Dock/顶栏。热键本身挂在切器那条钩子上（见 <see cref="EnsureSwitcher"/>），
+    /// 所以这里失败时钩子照常工作，只是按下去没人接。
+    /// </summary>
+    private void EnsureLauncher()
+    {
+        if (_launcher is not null || _exiting) return;
+        if (!SettingsService.Current.LauncherEnabled)
+        {
+            Logger.Info("启动器：设置里已关闭，本次运行不装配");
+            return;
+        }
+        try
+        {
+            _launcher = new Launcher.LauncherService();
+            _launcher.PrewarmIndex();
+            RestartLaunchpadHotkey();
+            Logger.Info($"启动器已装配（热键={SettingsService.Current.LauncherHotkey}）");
+        }
+        catch (Exception ex)
+        {
+            _launcher = null;
+            Logger.Warn($"启动器装配失败（顶栏入口与热键都将无响应）: {ex.Message}");
+        }
+    }
+
+    /// <summary>热键回调（已由钩子投递到 UI 线程）：开/收两相。启动器被关掉时这一句就是 no-op。</summary>
+    private void OnLauncherHotkey() => _launcher?.Toggle();
+
+    /// <summary>销毁启动器（幂等）：先收面板再释放服务。</summary>
+    private void DestroyLauncher()
+    {
+        if (_launcher is null) return;
+        var old = _launcher;
+        _launcher = null;
+        _launchpadHotkey?.Dispose();
+        _launchpadHotkey = null;
+        Launcher.LaunchpadWindow.CloseCurrent();
+        try { old.Dispose(); }
+        catch (Exception ex) { Logger.Warn($"启动器销毁异常: {ex.Message}"); }
+    }
+
+    /// <summary>启动台 F4 热键：与启动器服务同生共死；注册失败只记日志。</summary>
+    private void RestartLaunchpadHotkey()
+    {
+        _launchpadHotkey?.Dispose();
+        _launchpadHotkey = null;
+        if (_launcher is null || _exiting) return;
+        _launchpadHotkey = new Launcher.LaunchpadHotkeyService();
+        _launchpadHotkey.Pressed += () => Launcher.LaunchpadWindow.ShowOrToggle(_launcher);
+        _launchpadHotkey.Start();
+    }
+
+    /// <summary>
+    /// 设置页"启用启动器"的即时生效入口：落盘 + 重定钩子保活策略 + 关掉时收面板。
+    /// <b>关功能即收界面</b>：留一个已经禁用的功能的面板在屏幕上，是本项目最忌的"假状态"。
+    /// </summary>
+    public static void SetLauncherEnabled(bool enabled)
+    {
+        SettingsService.UpdateAndSave(SettingsService.Current with { LauncherEnabled = enabled });
+        var app = Current as App;
+        // 关掉功能要**销毁服务**而不是只收面板：只 Close() 的话 _launcher 还活着，
+        // 于是顶栏那颗按钮与（若钩子仍在）热键都还能把"已关闭的功能"打开——正是本项目最忌的假状态。
+        // 重新打开时下面的 EnsureLauncher 会重建并按当前设置预热索引。
+        if (!enabled) app?.DestroyLauncher();
+        if (app?._switcher is { } svc)
+        {
+            svc.KeepHookForLauncher = enabled;
+            // 装/摘在这里统一决定：接管关、启动器开 → 钩子仍需在线（Enabled=false 不吞键，只投递热键）；
+            // 两个都关 → SetHookEnabled 内部会 StopHook 摘干净。
+            svc.SetHookEnabled(SettingsService.Current.SwitcherEnabled);
+        }
+        if (enabled) app?.EnsureLauncher();   // 从关到开时补装配（此前被关过就没建过服务）
+    }
+
+    /// <summary>
+    /// 设置页改启动器热键的即时生效入口：与 <see cref="ApplySwitcherHotkey"/> 同一条注册/自愈路径
+    /// （落盘 → 卸钩 → 重装），改完不需要重启也不需要重载 Dock。
+    /// </summary>
+    public static void ApplyLauncherHotkey(string hotkey)
+    {
+        SettingsService.UpdateAndSave(SettingsService.Current with { LauncherHotkey = hotkey });
+        var app = Current as App;
+        app?._switcher?.StopHook();
+        app?._switcher?.SetHookEnabled(SettingsService.Current.SwitcherEnabled);
+    }
+
+    /// <summary>
+    /// 应急停用（Win+Alt+K）落地：只关运行态、**不改用户设置**——
+    /// 把磁盘上的开关顺手写死会让用户以为"设置里明明开着却不生效"，排查更难。
+    /// 钩子已由 AltTabHook 自行请求卸载，这里只做状态同步与指引日志。
+    /// </summary>
+    private void OnSwitcherEmergencyDisabled()
+    {
+        // 应急停用的语义是"这条钩子立刻下线"。SetHookEnabled 现在会按 KeepHookForLauncher 决定
+        // 钩子是否留在场上（启动器热键共用它），若不先把保活旗标落下，这里就会在卸钩之后
+        // **当场把钩子装回去**，应急出口失效。用户按 Win+Alt+K 时要的是"全都回到系统原生"。
+        if (_switcher is { } svc) svc.KeepHookForLauncher = false;
+        _switcher?.SetHookEnabled(false);
+        // 钩子被摘时若面板正显示着，就再不会有人发 Commit/Cancel —— 必须就地收起（不提交，不切窗口）
+        _switcherWindow?.ForceClose();
+        Logger.Warn("切换器已应急停用：如需重新启用，请在设置中把“窗口切换器”开关**关一次再开**（重载 Dock 不会重挂钩子），或重启程序");
+    }
+
+    /// <summary>
+    /// 设置页切换器开关的即时生效入口（Task 16 接线用）：落盘 + 装/摘钩 + 装配/收起面板，无需重启。
+    /// </summary>
+    public static void SetSwitcherEnabled(bool enabled)
+    {
+        SettingsService.UpdateAndSave(SettingsService.Current with { SwitcherEnabled = enabled });
+        var app = Current as App;
+        app?._switcher?.SetHookEnabled(enabled);
+        // 呼出热键与面板装配同源：关开关连热键一起摘（面板都没了，热键就是"按了没反应"的死键）。
+        app?._switcher?.ApplyOpenHotkey(enabled);
+        if (enabled) app?.EnsureSwitcherWindow();
+        else app?.DestroySwitcherWindow(); // 关接管即收起面板：不留任何自绘界面在屏幕上
+    }
+
+    /// <summary>
+    /// 设置页热键/全屏直通变更的即时生效入口（Task 16 接线用）：落盘 + 重注册触发组合。
+    /// 钩子在线时按新热键重装（改的是回调内的修饰键要求，不重装钩子本身也能生效，
+    /// 但重装可顺带清掉左右键状态位，避免改键瞬间的会话残留）。
+    /// </summary>
+    public static void ApplySwitcherHotkey(string hotkey, bool fullscreenPassthrough)
+    {
+        SettingsService.UpdateAndSave(SettingsService.Current with
+        {
+            SwitcherHotkey = hotkey,
+            FullscreenPassthrough = fullscreenPassthrough
+        });
+        var app = Current as App;
+        app?._switcher?.StopHook();
+        app?._switcher?.SetHookEnabled(SettingsService.Current.SwitcherEnabled);
+    }
+
+    /// <summary>
+    /// 设置页改切换器<b>呼出</b>热键的即时生效入口（alpha.29）：落盘 + 消息窗热键重注册。
+    /// 与 <see cref="ApplySwitcherHotkey"/>（Alt+Tab 触发组合，低级钩子侧）是两条互不相干的注册；
+    /// 非法值已由 Normalized 收敛为默认 Ctrl+`，注册被占用时只记日志（SwitcherHotkeyService）。
+    /// </summary>
+    public static void ApplySwitcherOpenHotkey(string hotkey)
+    {
+        SettingsService.UpdateAndSave(SettingsService.Current with { SwitcherOpenHotkey = hotkey });
+        (Current as App)?._switcher?.ApplyOpenHotkey(SettingsService.Current.SwitcherEnabled);
+    }
+
+    /// <summary>把 SettingsService.Current.TopBarEnabled 应用到运行中的实例（创建/销毁，均幂等）。
+    /// 温度芯片的载体是顶栏：开关顶栏必须连带对账轮询（开顶栏补启动，关顶栏停表收芯片）。</summary>
+    private void ApplyTopBarEnabled()
+    {
+        if (SettingsService.Current.TopBarEnabled) EnsureTopBar();
+        else DestroyTopBar();
+        ApplyThermalChip();
+    }
+
+    /// <summary>
+    /// 向在跑的实例发一条注册消息：按标题找它的常驻顶层窗口。
+    /// 先找 Dock 再退回顶栏——Dock 是主 UI，只要应用在跑它必然存在；顶栏是用户可关的设置项，
+    /// 只认顶栏会让"关掉顶栏"的用户失去 <c>--exit</c> 这条通道（安装器就会在文件被占用时硬装）。
+    /// </summary>
+    private static bool PostToRunningInstance(ushort message)
+    {
+        if (message == 0) return false;   // 注册消息号拿不到 = 没有这条通道
+        foreach (var title in new[] { "Beautiful Dock", "Beautiful TopBar" })
+        {
+            var hwnd = NativeMethods.FindWindowByTitle(title);
+            if (hwnd != IntPtr.Zero && NativeMethods.PostMessage(hwnd, message, IntPtr.Zero, IntPtr.Zero))
+                return true;
+        }
+        return false;
+    }
+
+    private static bool RequestExitOfRunningInstance() => PostToRunningInstance(NativeMethods.ExitRequestMessage);
+
+    /// <summary>外部（本进程的另一个窗口 / 第二个 exe 实例）请求干净退出。日志由调用点发，避免两处各写一份。</summary>
+    internal static void ExitFromExternal() => (Current as App)?.ExitApp();
+
+    /// <summary>外部请求打开设置窗口。<see cref="OpenSettings"/> 自己是单例的，重复请求只会激活。</summary>
+    internal static void OpenSettingsFromExternal() => (Current as App)?.OpenSettings();
+
+    /// <summary>设置页切换 Dock 隐藏方式：off / auto / dim，立即生效（多屏实例逐个落地）。</summary>
+    internal static void ApplyDockHideMode(string mode)
+    {
+        if (Current is App app)
+        {
+            foreach (var dock in app._docks) dock.ApplyHideMode(mode);
+        }
+    }
+
+    /// <summary>设置页切换 Dock 停靠边（实验）：左右边走竖排面板并释放底部 AppBar。</summary>
+    internal static void ApplyDockEdge(string edge)
+    {
+        if (Current is App app)
+        {
+            foreach (var dock in app._docks) dock.ApplyEdge(edge);
+        }
+    }
+
+    /// <summary>设置页切换 Dock 自动隐藏：立即生效（只动窗口滑入滑出，不重注册 AppBar）。</summary>
+    internal static void ApplyDockAutoHide(bool enabled)
+    {
+        if (Current is App app)
+        {
+            foreach (var dock in app._docks) dock.ApplyAutoHide(enabled);
+        }
+    }
+
+    /// <summary>
+    /// 设置页改动自动隐藏的唤出方式：唤出门立即换模式（延迟项由 TickAutoHide 每拍读 Current，
+    /// 下一拍自然按新值生效，不需要专门入口）。
+    /// </summary>
+    internal static void ApplyDockAutoHideOptions()
+    {
+        if (Current is App app)
+        {
+            foreach (var dock in app._docks)
+                dock.ApplyAutoHideReveal(SettingsService.Current.DockAutoHideReveal);
+        }
+    }
+
+    /// <summary>设置页切换屏幕圆角遮罩 / 改半径：立即对账（遮罩窗按需建/撤/重摆，无需重启）。</summary>
+    internal static void ApplyScreenCorners() => (Current as App)?._screenCorners?.ApplySettings();
+
+    /// <summary>设置页切换台前调度：立即生效（开 = 启动跟踪 + 显出贴边小条；关 = 撤窗 + 停跟踪，无残留）。</summary>
+    internal static void ApplyStageManager() => (Current as App)?._stageManager?.ApplySettings();
+
+    /// <summary>设置页切换 Dock 小组件：直接让 Dock 重排行尾（不需要重启，也不重建窗口）。</summary>
+    internal static void ApplyDockWidget(bool enabled)
+    {
+        if (Current is App app)
+        {
+            foreach (var dock in app._docks) dock.Vm.ApplyWidgetEnabled(enabled);
+        }
+
+        Logger.Info($"Dock 小组件已{(enabled ? "启用" : "停用")}");
+    }
+
+    /// <summary>设置页切换启动台常驻格：直接让 Dock 重排行首（同 ApplyDockWidget 的最小差异路径）。</summary>
+    internal static void ApplyDockLaunchpad(bool enabled)
+    {
+        if (Current is App app)
+        {
+            foreach (var dock in app._docks) dock.Vm.ApplyLaunchpadEnabled(enabled);
+        }
+
+        Logger.Info($"Dock 启动台格已{(enabled ? "启用" : "停用")}");
+    }
+
+    /// <summary>
+    /// 设置页切换/移动 Dock 托盘收纳列（5.0.0 未闭合项④）：落盘 + 让各 Dock 实例立即重排行尾
+    /// （同 ApplyDockWidget/ApplyDockLaunchpad 路径）。开关与挂点两个键总是一起喂——位置在开关
+    /// 关闭时也被规范化收敛，先开开关后挪位置两条路径都幂等。
+    /// </summary>
+    internal static void ApplyDockTray(bool enabled, string position)
+    {
+        SettingsService.UpdateAndSave(SettingsService.Current with
+        {
+            DockTrayEnabled = enabled,
+            DockTrayPosition = position
+        });
+        if (Current is App app)
+        {
+            foreach (var dock in app._docks)
+            {
+                dock.Vm.ApplyTrayEnabled(enabled);
+                dock.Vm.ApplyTrayPosition(position);
+            }
+        }
+
+        Logger.Info($"Dock 托盘收纳列已{(enabled ? "启用" : "停用")}，挂点={SettingsService.Current.DockTrayPosition}");
+    }
+
+    /// <summary>
+    /// 设置页切换 Dock 运行指示形态（dot/pill）：DockWindow 窗口级样式覆写立即生效——
+    /// 不重排行、不重建条目容器，DynamicResource 随覆写键即时重解析。
+    /// </summary>
+    internal static void ApplyDockIndicatorStyle()
+    {
+        if (Current is App app)
+        {
+            foreach (var dock in app._docks) dock.ApplyIndicatorStyle();
+        }
+        Logger.Info($"Dock 运行指示：{SettingsService.Current.DockIndicatorStyle}");
+    }
+
+    // ---------- 温度监控（对标 MyDockFinder 温度显示；默认关） ----------
+
+    /// <summary>按当前设置启动温度轮询（幂等；只在"开关开且顶栏在屏"时调用）。
+    /// 附属能力：装配失败仅记日志降级为"无温度芯片"，不连坐主 UI。</summary>
+    private void StartThermalMonitor()
+    {
+        if (_thermal is not null || _exiting) return;
+        try
+        {
+            _thermal = new ThermalMonitorService(SettingsService.Current.ThermalRefreshSeconds, Dispatcher);
+            _thermal.Start();
+        }
+        catch (Exception ex)
+        {
+            try { _thermal?.Dispose(); } catch { /* 降级路径：Dispose 失败不掩盖原始异常 */ }
+            _thermal = null;
+            Logger.Warn($"温度监控未启用（降级为无温度芯片）: {ex.Message}");
+        }
+    }
+
+    /// <summary>停表（幂等）：Dispose 内部会停轮询并把 <see cref="ThermalMonitorService.Current"/> 置空。</summary>
+    private void StopThermalMonitor()
+    {
+        if (_thermal is null) return;
+        var old = _thermal;
+        _thermal = null;
+        old.Dispose();
+        Logger.Info("温度监控已停止");
+    }
+
+    /// <summary>
+    /// 设置页温度开关/间隔变更后的即时生效入口：按当前设置重建或停掉轮询；
+    /// 关闭时顺手收起顶栏芯片（<b>关功能即收界面</b>，不留一个不再更新的假状态）。
+    /// 间隔没变且在跑时是 no-op（不重建、不清已有读数）。
+    /// </summary>
+    internal static void ApplyThermalChip()
+    {
+        if (Current is not App app) return;
+        bool enabled = SettingsService.Current.ThermalChipEnabled && SettingsService.Current.TopBarEnabled;
+        if (!enabled)
+        {
+            app.StopThermalMonitor();
+            app._topBar?.HideThermalChip();
+            return;
+        }
+
+        // 顶栏关着时芯片没有载体：不跑轮询（WMI 一拍也不读），开顶栏时由 EnsureTopBar → 启动序重建。
+        if (!SettingsService.Current.TopBarEnabled) return;
+        app._topBar?.EnsureThermalChip();   // 运行中顶栏即时长出芯片（首次开启时 BuildRightRegion 装配被跳过）
+        if (app._thermal is { IntervalSeconds: var running } && running == SettingsService.Current.ThermalRefreshSeconds)
+        {
+            return;   // 开关已开、间隔没变：现有轮询照常工作
+        }
+
+        app.StopThermalMonitor();
+        app.StartThermalMonitor();
+    }
+
+    /// <summary>设置卡片写入口（落盘 + 即时生效，供独立设置控件 ThermalSettingsCard 调用）。</summary>
+    public static void SetThermalChip(bool enabled, int refreshSeconds)
+    {
+        SettingsService.UpdateAndSave(SettingsService.Current with
+        {
+            ThermalChipEnabled = enabled,
+            ThermalRefreshSeconds = refreshSeconds
+        });
+        ApplyThermalChip();
+    }
+
+    /// <summary>
+    /// 设置页墙纸取色开关/强度变更后的即时生效入口（接线契约与 SetThermalChip 同形）：
+    /// 落盘（Normalized 钳强度）+ 通知运行中的服务——关 = 撤 tint 回主题原生玻璃；
+    /// 开 = 清缓存强制重提（强度变了缓存的旧 tint 必须作废）。服务未启动（启动早期）时静默跳过。
+    /// </summary>
+    public static void SetWallpaperTint(bool enabled, int strength)
+    {
+        SettingsService.UpdateAndSave(SettingsService.Current with
+        {
+            WallpaperTintEnabled = enabled,
+            WallpaperTintStrength = strength
+        });
+        (Current as App)?._wallpaperTint?.ApplySettings();
+    }
+
+    /// <summary>设置页切换音量 HUD：重建控制器（关掉时连钩子都不装，媒体键立刻回到系统行为）。</summary>
+    internal static void ApplyVolumeOsd(bool enabled)
+    {
+        if (Current is not App app)
+        {
+            return;
+        }
+
+        app._volumeOsd?.Dispose();
+        app._volumeOsd = new VolumeOsdController(enabled, app.Dispatcher);
+        Logger.Info($"音量 HUD 已{(enabled ? "启用" : "停用")}");
+    }
+
+    /// <summary>托盘"退出"：完整清理链路后显式关停（退出路径幂等，_exiting 防重入）。
+    /// 清理全程 try/finally：任何一步抛异常都必须走到 Shutdown（T19 QA）——否则 _exiting 卡死、
+    /// 后续退出尝试全部被吞；finally 兜底后 OnExit 仍会幂等重放剩余清理。</summary>
+    /// <summary>
+    /// <c>--view list|columns|icons|gallery</c> → 访达初始视图。缺省或无法识别返回 <c>null</c>，
+    /// 表示沿用该文件夹上次记住的视图（正常启动路径）。
+    /// </summary>
+    private static FinderViewMode? ParseViewArg(string[] args)
+    {
+        var index = Array.FindIndex(args,
+            arg => string.Equals(arg, "--view", StringComparison.OrdinalIgnoreCase));
+        if (index < 0 || index + 1 >= args.Length)
+        {
+            return null;
+        }
+
+        return args[index + 1].Trim().ToLowerInvariant() switch
+        {
+            "list" => FinderViewMode.List,
+            "columns" or "column" => FinderViewMode.Columns,
+            "icons" or "icon" => FinderViewMode.Icons,
+            "gallery" => FinderViewMode.Gallery,
+            _ => null
+        };
+    }
+
+    /// <summary>取 <c>--xxx value</c> 形式参数的值；缺参数返回 null。</summary>
+    private static string? ParseArgValue(string[] args, string name)
+    {
+        var index = Array.FindIndex(args, arg => string.Equals(arg, name, StringComparison.OrdinalIgnoreCase));
+        return index >= 0 && index + 1 < args.Length ? args[index + 1] : null;
+    }
+
+    /// <summary>
+    /// <c>--shot &lt;file&gt; [--shot-delay &lt;ms&gt;]</c>：延时截主屏到文件后自动退出。
+    /// 这是证据采集入口（真机目视验收/回归截图），不是产品功能：只在命令行显式要求时生效，
+    /// 截完即走，不改变任何设置、不驻留进程。
+    /// </summary>
+    private void ScheduleDiagnosticShot(string[] args)
+    {
+        var index = Array.FindIndex(args,
+            arg => string.Equals(arg, "--shot", StringComparison.OrdinalIgnoreCase));
+        if (index < 0 || index + 1 >= args.Length)
+        {
+            return;
+        }
+
+        var file = args[index + 1];
+        var delay = 2500;
+        var delayIndex = Array.FindIndex(args,
+            arg => string.Equals(arg, "--shot-delay", StringComparison.OrdinalIgnoreCase));
+        if (delayIndex >= 0 && delayIndex + 1 < args.Length
+            && int.TryParse(args[delayIndex + 1], out var requested))
+        {
+            delay = Math.Clamp(requested, 200, 30000);
+        }
+
+        var timer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(delay) };
+        timer.Tick += (_, _) =>
+        {
+            timer.Stop();
+
+            // 有访达窗口时只拍它（PrintWindow 与前台无关，编辑器抢焦点也不会拍错内容）；没有则整屏。
+            // 简介卡优先（它通常盖在访达之上，是本次要拍的证据）。
+            // 音量 HUD 最先（诊断入口打开时它就是要拍的东西），其次通知中心，再访达。
+            var handle = _volumeOsd?.DiagnosticsHandle ?? IntPtr.Zero;
+            if (handle == IntPtr.Zero && _shotDock)
+            {
+                handle = PrimaryDock()?.GetDiagnosticsHandle()
+                         ?? _slimDocks.FirstOrDefault()?.GetDiagnosticsHandle()
+                         ?? IntPtr.Zero;
+            }
+
+            if (handle == IntPtr.Zero)
+            {
+                handle = TopBar.NotificationBannerHost.DiagnosticsHandle;
+            }
+
+            if (handle == IntPtr.Zero)
+            {
+                handle = TopBar.NotificationCenterWindow.GetDiagnosticsHandle();
+            }
+            if (handle == IntPtr.Zero)
+            {
+                handle = Finder.FinderInfoWindow.GetDiagnosticsHandle();
+            }
+
+            if (handle == IntPtr.Zero)
+            {
+                handle = Finder.FinderWindow.GetDiagnosticsHandle();
+            }
+
+            if (handle == IntPtr.Zero)
+            {
+                FinishShot(file, IntPtr.Zero, fullScreen: true);
+                return;
+            }
+
+            // 置前后等 400ms 让窗口完成重绘（DWM 圆角与阴影也在这一拍到位）。
+            var settle = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(400) };
+            settle.Tick += (_, _) =>
+            {
+                settle.Stop();
+                FinishShot(file, handle, fullScreen: false);
+            };
+            settle.Start();
+        };
+        timer.Start();
+        Logger.Info($"诊断截图已排期：{delay}ms 后写入 {file}");
+    }
+
+    /// <summary>
+    /// <c>--notif-probe</c>：请求授权并枚举一次系统通知，把**不含正文**的汇总写日志后退出。
+    /// 这是通知中心的可行性证据入口（授权是否可用、枚举多少条），不是产品功能。
+    /// </summary>
+    private async Task RunNotificationProbeAsync()
+    {
+        try
+        {
+            var line = await _notifications!.ProbeAsync();
+            Logger.Info($"通知探针结果：{line}");
+        }
+        catch (Exception ex)
+        {
+            Logger.Error("通知探针未完成", ex);
+        }
+        finally
+        {
+            ExitApp();
+        }
+    }
+
+    /// <summary>
+    /// <c>--fileop-smoke &lt;dir&gt;</c>：在真实目录上跑一遍 IFileOperation 链路（建/拷/改名/回收站），
+    /// 结果进日志后退出。互操作层的 vtable 错误只有真跑才会暴露，因此这一步不能省。
+    /// </summary>
+    private async Task RunFileOperationSmokeAsync(string directory)
+    {
+        try
+        {
+            var ok = await Finder.FileOperationSmoke.RunAsync(directory);
+            Logger.Info($"文件操作自检结果：{(ok ? "PASS" : "FAIL")}");
+        }
+        catch (Exception ex)
+        {
+            Logger.Error("文件操作自检未完成", ex);
+        }
+        finally
+        {
+            ExitApp();
+        }
+    }
+
+    /// <summary>执行一次截图并退出（<c>--shot</c> 的最后一步）。</summary>
+    private void FinishShot(string file, IntPtr window, bool fullScreen)
+    {
+        var ok = fullScreen
+            ? ScreenCapture.TryCapturePrimary(file, out var error)
+            : ScreenCapture.TryCaptureWindow(window, file, out error);
+        if (ok)
+        {
+            Logger.Info($"诊断截图已保存：{file}（{(fullScreen ? "整屏" : "访达窗口")}）");
+        }
+        else
+        {
+            Logger.Warn($"诊断截图失败：{error}");
+        }
+
+        ExitApp();
+    }
+
+    private void ExitApp()
+    {
+        if (_exiting) return;
+        _exiting = true;
+        Logger.Info("退出：开始清理");
+        try
+        {
+            _settingsWindow?.Close();
+            DestroyLauncher();           // 先收覆盖层：它和控制中心同为瞬态弹层，退出流程里不该还有窗口在屏幕上
+            DestroySwitcher();         // 先收面板 + 卸键盘钩子：退出过程中任何一次 Alt+Tab 都不该被吞，
+                                       // 也绝不能在屏幕上留下一块永不消失的切换面板（Task 12）
+            DestroyTopBar();           // 顶栏 OnClosing：ABE_TOP ABM_REMOVE（hwnd 销毁前）
+            _notifications?.Stop();   // 通知中心：退订系统事件并停轮询（不留后台回调）
+            _notifications = null;
+            _volumeOsd?.Dispose();    // 音量 HUD：卸媒体键钩子，恢复系统音量键行为
+            _volumeOsd = null;
+            StopThermalMonitor();     // 温度轮询：停后台表（退出后不再读 WMI）
+            _wallpaperTint?.Dispose();   // 墙纸取色：退订系统广播 + 停定时器（不留后台回调）
+            _wallpaperTint = null;
+            _screenCorners?.Dispose();   // 屏幕圆角遮罩：撤除全部置顶小窗（幂等）
+            _screenCorners = null;
+            _stageManager?.Dispose();    // 台前调度：撤舞台条 + 停跟踪（屏上不留常驻小条）
+            _stageManager = null;
+            TopBar.NotificationBannerHost.CloseAll();
+            // 快照循环：Close() 同步走完 OnClosed，而 Closed 处理器会从 _docks 移除该实例——
+            // 直接枚举 _docks 关闭会在第一扇窗关闭瞬间抛 InvalidOperationException。
+            foreach (var dock in _docks.ToList())
+            {
+                try { dock.Close(); } catch (Exception ex) { Logger.Warn($"Dock 实例关闭失败（继续退出）: {ex.Message}"); }
+            }
+            _docks.Clear();
+            foreach (var slim in _slimDocks.ToList())
+            {
+                try { slim.Close(); } catch (Exception ex) { Logger.Warn($"精简条关闭失败（继续退出）: {ex.Message}"); }
+            }
+            _slimDocks.Clear();
+            _animator?.Dispose();    // WinEvent 钩子：退出过程中任何一次最小化都不该再起动画
+            _animator = null;
+            SharedAnimator = null;
+            _transitionGuard?.Dispose();   // 解斗篷/还原 DWM 属性必须在这里完成（幂等，二次调用 no-op）
+            _transitionGuard = null;
+            Services.WindowEligibility.ManagedCloakOverride = null;
+            _animSuppressor?.Dispose();   // 系统动画还原必须在退出链里完成（红线：全局状态全挂 ExitApp）
+            _animSuppressor = null;
+            _taskbar?.Restore();     // Hide/AutoHide 还原系统任务栏
+            _tray?.Dispose();        // 移除托盘图标（防幽灵图标）
+            _tray = null;
+            SettingsService.Save();  // 兜底落盘（防抖尾写/未走设置窗口的变更一并刷盘）
+        }
+        finally
+        {
+            Shutdown();
+        }
+    }
+
+    // ---------- 全局异常兜底 ----------
+
+    private void OnDispatcherUnhandledException(object sender, DispatcherUnhandledExceptionEventArgs e)
+    {
+        // 【OOM 单独处理】alpha.21 真机日志：位图分配风暴 → DUCE 通道 SyncFlush 连环 OOM（40 秒 20+ 次），
+        // 旧逻辑每次都弹一个模态 MessageBox → 堆叠的模态框把 UI 线程锁死 = 用户看到的"一堆报错+卡死"。
+        // 内存不足时弹框本身还要分配内存，只会火上浇油：OOM 一律静默自愈（清缓存 + 强制 GC），不弹框。
+        if (e.Exception is OutOfMemoryException)
+        {
+            e.Handled = true;
+            SelfHealMemory();
+            return;
+        }
+
+        Logger.Error("UI 线程未处理异常", e.Exception);
+        e.Handled = true; // 尽力存活（真正致命的场景仍可经托盘"退出"干净收尾）
+        if (++_exceptionDialogs <= MaxExceptionDialogs)
+            MessageBox.Show(
+                $"发生界面异常，Beautiful 将继续运行。\n详情见 logs 目录日志。\n\n{e.Exception.Message}",
+                "Beautiful", MessageBoxButton.OK, MessageBoxImage.Error);
+    }
+
+    /// <summary>最近一次 OOM 自愈的时刻（毫秒）。自愈含强制 GC，本身不便宜：30 秒防抖。</summary>
+    private long _lastSelfHealMs;
+
+    /// <summary>
+    /// OOM 自愈：清位图缓存（图标提取 LRU / 前台帧缓存）+ 暂停前台采样两分钟 + 强制 GC。
+    /// frozen BitmapSource 的像素缓冲在非托管堆，要等 GC/finalizer 才释放——主动
+    /// Collect + WaitForPendingFinalizers 能立刻把断头位图收掉，DUCE 通道的下一次提交才有机会成功。
+    /// </summary>
+    private void SelfHealMemory()
+    {
+        var now = Stopwatch.GetTimestamp() * 1000L / Stopwatch.Frequency;
+        var first = now - Interlocked.Read(ref _lastSelfHealMs) > 30_000;
+        Interlocked.Exchange(ref _lastSelfHealMs, now);
+        Logger.Error($"内存不足（OOM）——已触发自愈{(first ? "" : "（30 秒内重复，跳过重复 GC）")}：清图标/帧缓存 + 暂停前台采样 2 分钟");
+        try
+        {
+            Interop.IconExtractor.ClearCache();
+            Launcher.MsixLogoImage.ClearCache();
+            _animator?.ClearFrameCache();
+            _animator?.PauseSampling(TimeSpan.FromMinutes(2));
+        }
+        catch (Exception ex)
+        {
+            Logger.Warn($"OOM 自愈清理异常（忽略）：{ex.GetType().Name}");
+        }
+        if (!first) return;
+        try
+        {
+            GC.Collect(GC.MaxGeneration, GCCollectionMode.Forced, blocking: true, compacting: true);
+            GC.WaitForPendingFinalizers();
+            GC.Collect(GC.MaxGeneration, GCCollectionMode.Forced, blocking: true, compacting: true);
+        }
+        catch (Exception ex)
+        {
+            Logger.Warn($"OOM 自愈 GC 异常（忽略）：{ex.GetType().Name}");
+        }
+    }
+
+    private void OnAppDomainUnhandledException(object? sender, UnhandledExceptionEventArgs e)
+    {
+        var detail = e.ExceptionObject as Exception ?? new Exception(e.ExceptionObject?.ToString() ?? "null");
+        Logger.Error($"非 UI 线程未处理异常 (IsTerminating={e.IsTerminating})", detail);
+    }
+
+    private void OnUnobservedTaskException(object? sender, UnobservedTaskExceptionEventArgs e)
+    {
+        Logger.Error("未观察的任务异常（已吞掉，不影响运行）", e.Exception);
+        e.SetObserved();
+    }
+}

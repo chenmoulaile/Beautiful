@@ -22,11 +22,15 @@ namespace Beautiful.App.StageManager;
 /// 点击语义不变：缩略矩形在卡片/行 Border 内，点击本就走 WPF 的 Row_Click/卡片点击。
 /// </para>
 /// <para>
-/// 【画面新鲜度】1s 一拍（悬停预览 StillPreviewWindow 的 1.2s 同档）；展开/弹层打开的瞬间
-/// <see cref="Start"/> 先抓一拍，首帧不空等。抓帧在后台线程串行跑（PrintWindow 是同步 GDI 调用，
-/// N 张卡片顺序抓），每帧冻结后 <see cref="Dispatcher.BeginInvoke"/> 回 UI 线程落地——
-/// 与 StillPreviewWindow 的 <c>RefreshAsync</c> 同一条线程纪律。上一拍还没抓完时跳过本拍
-/// （<c>_busy</c>），绝不排队堆积。
+/// 【画面新鲜度（round7 缺陷 3 加固）】常态 1s 一拍（悬停预览 StillPreviewWindow 的 1.2s 同档）；
+/// 展开/弹层打开的瞬间 <see cref="Start"/> 先抓一拍，首帧不空等。抓帧在后台线程串行跑
+/// （PrintWindow 是同步 GDI 调用，N 张卡片顺序抓），每帧冻结后 <see cref="Dispatcher.BeginInvoke"/>
+/// 回 UI 线程落地——与 StillPreviewWindow 的 <c>RefreshAsync</c> 同一条线程纪律。
+/// 两条"首帧必发"的时序保证：① 上一拍还在抓（<c>_busy</c>）时新拍不再静默丢弃，短延迟补发，
+/// busy 一解除立刻补上——Start() 承诺的首拍不该被前拍的尾巴吞掉；② <b>首帧争夺期</b>（本次
+/// Start 起还没落地过任何一帧）里整拍抓空时 150ms 内快速补拍（上限 3 次）——首拍撞上目标窗口
+/// 的抓空过渡（DWM 未就绪/刚被遮挡/WinUI3 首帧 PrintWindow 纯色判废）时，等满一个节拍就是
+/// 肉眼可见的黑卡；补拍仍失败则回落常态节拍，目标真不可抓时不空转。
 /// </para>
 /// <para>
 /// 【失败语义】单张抓帧失败/判废 → 保留该卡片上一帧（位图引用还在行模型上）；行模型实例
@@ -42,10 +46,18 @@ internal sealed class StageFramePump : IDisposable
     /// <summary>一拍的目标集：源窗口句柄 + 该帧落地到哪个行模型（调用方每拍现场取，避免持有过期行）。</summary>
     public delegate IReadOnlyList<(IntPtr Hwnd, Action<BitmapSource?> Apply)> TargetProvider();
 
+    private const int BusyRetryMs = 120;        // busy 撞车后的补发延迟（展开首拍被前拍尾巴吞掉的时序修正）
+    private const int FirstFrameRetryMs = 150;  // 首帧争夺期的补拍间隔（1s 常态节拍下黑窗太长）
+    private const int MaxFastRetries = 3;       // 首帧补拍上限：目标真不可抓时回落常态节拍，不空转
+
     private readonly Dispatcher _dispatcher;
     private readonly TargetProvider _targets;
     private readonly DispatcherTimer _timer;
+    private readonly DispatcherTimer _retryTimer;   // 一次性重试（busy 补发/首帧补拍共用一支，防叠加）
+    private bool _pumping;                          // Start/Stop 语义旗：停拍后重试与收尾补拍一律不再发
     private bool _busy;
+    private bool _everLanded;                       // 本次 Start 起是否落地过至少一帧（首帧争夺期判定）
+    private int _fastRetries;                       // 争夺期内已补拍次数
     private bool _disposed;
 
     /// <param name="dispatcher">UI 泵（行模型只在它上面变更）。</param>
@@ -56,6 +68,11 @@ internal sealed class StageFramePump : IDisposable
         _dispatcher = dispatcher ?? throw new ArgumentNullException(nameof(dispatcher));
         _targets = targets ?? throw new ArgumentNullException(nameof(targets));
         _timer = new DispatcherTimer(interval, DispatcherPriority.Background, (_, _) => Tick(), dispatcher);
+        _retryTimer = new DispatcherTimer(DispatcherPriority.Background, dispatcher)
+        {
+            Interval = TimeSpan.FromMilliseconds(FirstFrameRetryMs)
+        };
+        _retryTimer.Tick += (_, _) => { _retryTimer.Stop(); Tick(); };
     }
 
     /// <summary>开跑（幂等）：先抓一拍（首帧不空等一个节拍周期），再挂常拍。</summary>
@@ -63,16 +80,23 @@ internal sealed class StageFramePump : IDisposable
     {
         _dispatcher.VerifyAccess();
         if (_disposed) return;
+        _everLanded = false;    // 每次开跑重新进入首帧争夺期：展开瞬间的黑窗不该等满一个节拍
+        _fastRetries = 0;
+        _retryTimer.Stop();
+        _pumping = true;
         _timer.Stop();      // 已在跑时重开 = 重置节拍相位，并保证展开瞬间的首帧必发
         _timer.Start();
         Tick();
     }
 
-    /// <summary>停拍（收起/让位/关窗）：进行中的一拍让它自然收尾（迟到帧落旧实例，无害）。</summary>
+    /// <summary>停拍（收起/让位/关窗）：进行中的一拍让它自然收尾（迟到帧落旧实例，无害），
+    /// 但收尾不再安排任何补拍。</summary>
     public void Stop()
     {
         _dispatcher.VerifyAccess();
+        _pumping = false;
         _timer.Stop();
+        _retryTimer.Stop();
     }
 
     public void Dispose()
@@ -80,18 +104,28 @@ internal sealed class StageFramePump : IDisposable
         _dispatcher.VerifyAccess();
         if (_disposed) return;
         _disposed = true;
+        _pumping = false;
         _timer.Stop();
+        _retryTimer.Stop();
     }
 
     private void Tick()
     {
-        if (_disposed || _busy) return;
+        if (_disposed || !_pumping) return;
+        if (_busy)
+        {
+            // 上一拍还在抓（PrintWindow 慢窗口/N 张卡时可能超过一个节拍）：绝不把"展开首拍"
+            // 静默吞掉，短延迟补发，busy 一解除立刻补上。
+            ScheduleRetry(BusyRetryMs);
+            return;
+        }
         var targets = _targets();
         if (targets.Count == 0) return;
 
         _busy = true;
         _ = System.Threading.Tasks.Task.Run(() =>
         {
+            int landed = 0;
             try
             {
                 foreach (var (hwnd, apply) in targets)
@@ -108,14 +142,43 @@ internal sealed class StageFramePump : IDisposable
                     }
 
                     if (frame is null) continue;
+                    landed++;
                     var captured = frame;
                     _dispatcher.BeginInvoke(new Action(() => apply(captured)));
                 }
             }
             finally
             {
-                _dispatcher.BeginInvoke(new Action(() => _busy = false));
+                _dispatcher.BeginInvoke(new Action(() => { _busy = false; TickCompleted(landed); }));
             }
         });
+    }
+
+    /// <summary>一拍收尾（UI 线程）：有帧落地清零争夺期；整拍抓空且首帧还没着落 → 快速补拍。</summary>
+    private void TickCompleted(int landed)
+    {
+        if (_disposed) return;
+        if (landed > 0)
+        {
+            _everLanded = true;
+            _fastRetries = 0;
+            return;
+        }
+        // 首帧争夺期：目标窗口可能正处抓空过渡，等下一个常态节拍就是肉眼可见的黑卡。
+        // 快速补拍几次（上限防"目标真不可抓"空转），仍失败就回落 1s 常态节拍。
+        if (_pumping && !_everLanded && _fastRetries < MaxFastRetries)
+        {
+            _fastRetries++;
+            ScheduleRetry(FirstFrameRetryMs);
+        }
+    }
+
+    /// <summary>安排一次延迟重试（UI 线程）；已有重试在途时不叠加（busy 补发与首帧补拍共用一支）。</summary>
+    private void ScheduleRetry(int delayMs)
+    {
+        if (_disposed || !_pumping) return;
+        if (_retryTimer.IsEnabled) return;
+        _retryTimer.Interval = TimeSpan.FromMilliseconds(delayMs);
+        _retryTimer.Start();
     }
 }

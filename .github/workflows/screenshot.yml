@@ -1,0 +1,40 @@
+name: screenshot
+# 运行期目视取证（alpha.15 路数，wp-borrow 收口整体移植）：windows-latest 真实会话里
+# 启动 Beautiful.exe，截 Dock/顶栏初始态 → 模拟点击时钟（通知中心开合取证）→
+# 收集 logs 判定无未处理异常 + Dock/顶栏就绪行在位。
+# 产物（截图 + 日志）作为 artifact 上传，供 agent 拉回查看观感并迭代。
+# 触发：agent 分支每次推送 + 手动（main 上每推都跑一次 20 分钟的截图太重，手动入口在 Actions 页）。
+on:
+  push:
+    branches: ['agent/**']
+  workflow_dispatch:
+
+jobs:
+  shot:
+    runs-on: windows-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup .NET 10
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.0.x
+
+      - name: Publish (self-contained，与 release.yml 同口径)
+        shell: pwsh
+        run: |
+          dotnet publish src/Beautiful.App -c Release -r win-x64 --self-contained true `
+            -p:PublishSingleFile=false -p:UseAppHost=true -o build/shot-app
+
+      - name: Run & capture
+        shell: pwsh
+        run: scripts/ci-screenshot.ps1 -AppDir "$PWD\build\shot-app" -OutDir "$PWD\build\shots"
+
+      - name: Upload shots
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: runtime-shots
+          path: build/shots/**
+          retention-days: 14

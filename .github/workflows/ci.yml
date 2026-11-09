@@ -1,0 +1,71 @@
+name: ci
+
+# 每次推送都要过的门禁（release.yml 只在打 v* 标签时才跑，日常验证靠本文件）。
+# windows-latest 是唯一权威门禁：native /W4 /WX、NativeSmoke、XAML 静态网、
+# sln 构建、测试全绿——与 README「构建与门禁」一节的口径一致，agent 在非
+# Windows 机器上开发时以此为准。
+# ubuntu 岗只做交叉编译哨兵（-p:EnableWindowsTargeting=true）：验证 WPF 在无桌面
+# 环境下仍可编译，不跑测试——Linux runner 的区域设置会让时钟/盘符类用例出现
+# 与产品无关的红。
+# 来源：整份移植自远端 agent/alpha.18-minfix 的 ci.yml（7 条 alpha 分支唯一「主线
+# 至今没有」的工程设施，分支上跑出过 1412/1412 全绿）；移植时删去 HookDll 探针
+# step（主线无 native/hook 产物），SDK 8→10 与 XAML 静态网两步按主线现状补齐。
+on:
+  push:
+    branches: ['**']
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  windows-gate:
+    runs-on: windows-latest
+    env:
+      DOTNET_CLI_TELEMETRY_OPTOUT: 1
+      DOTNET_NOLOGO: 1
+    steps:
+      - uses: actions/checkout@v4
+
+      # SDK 版本由仓库根 global.json 钉死（10.0.x latestFeature），setup-dotnet 负责安装。
+      - name: 安装 .NET 10 SDK
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: 编译 native（/W4 /WX，与 release.yml 同口径）
+        shell: cmd
+        run: scripts\build-native.cmd Release
+
+      - name: NativeSmoke（无桌面部分进 CI）
+        shell: cmd
+        run: tools\NativeSmoke\bin\Release\NativeSmoke.exe src\Beautiful.Native\bin\Release\Beautiful.Native.dll
+
+      # XAML ↔ 代码一致性静态网：x:Class 对齐 / 事件处理器在位 / StaticResource 键
+      # 可解析（断链=运行时 XamlParseException）/ 危险同步等待模式 / Window 上的
+      # RenderTransform 赋值。error 级退出码 1。零依赖纯 Python，runner 自带。
+      - name: XAML 静态网（xaml_check.py）
+        shell: pwsh
+        run: python tools/xaml-check/xaml_check.py "$env:GITHUB_WORKSPACE"
+
+      - name: 构建（0 警告 0 错误）
+        run: dotnet build Beautiful.sln -c Release
+
+      - name: 测试门禁
+        run: dotnet test tests/Beautiful.Core.Tests -c Release
+
+  linux-cross-build:
+    runs-on: ubuntu-latest
+    env:
+      DOTNET_CLI_TELEMETRY_OPTOUT: 1
+      DOTNET_NOLOGO: 1
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 安装 .NET 10 SDK
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: 交叉编译 WPF 解决方案（EnableWindowsTargeting 哨兵）
+        run: dotnet build Beautiful.sln -c Release -p:EnableWindowsTargeting=true

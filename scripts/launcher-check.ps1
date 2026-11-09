@@ -100,7 +100,7 @@ public static class W32L {
 
 # ---------- 1. 起进程 ----------
 if (-not (Get-Process -Name Beautiful -EA SilentlyContinue)) {
-  $exe = Join-Path $root "src\Beautiful.App\bin\Release\net8.0-windows10.0.19041.0\Beautiful.exe"
+  $exe = Join-Path $root "src\Beautiful.App\bin\Release\net10.0-windows10.0.19041.0\Beautiful.exe"
   Start-Process -FilePath $exe -WorkingDirectory (Split-Path $exe)
   Write-Output "STARTED $exe"
 }

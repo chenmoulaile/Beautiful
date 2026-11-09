@@ -1,20 +1,26 @@
 @echo off
 setlocal EnableExtensions
-chcp 65001 >nul
+rem ±¾ÎÄ¼şÒÔ GBK ´æ´¢£¨ÖĞÎÄ Windows cmd µÄ 936 Ô­ÉúÂëÒ³£©£ºUTF-8 ÖĞÎÄ×¢ÊÍÔÚ 936 ¿ØÖÆÌ¨»á±»
+rem Ë«×Ö½Ú½âÎöÍÌĞĞ£¬UTF-8+chcp 65001 ÓÖ²È cmd Åú´¦Àí¶ÁÈ¡Æ÷µÄÆ«ÒÆ bug£¨round7 Êµ²â³¤ÖĞÎÄ rem
+rem ±»²ğËé³ÉÎ´ÖªÃüÁî£©¡ª¡ªÓë publish.cmd Í¬Ò»´æ´¢¼ÍÂÉ¡£
 
 rem scripts\install-local.cmd -- publish Beautiful into a fixed runnable folder:
 rem   <repo>\dist\Beautiful\Beautiful.exe   (self-contained win-x64)
 rem Double-click to run; re-running wipes dist\Beautiful first (idempotent).
 rem Publish arguments are copied verbatim from .github\workflows\release.yml
-rem ("å‘å¸ƒè‡ªåŒ…å«äº§ç‰©"), only -o differs, so dist\Beautiful and the Release zip
+rem ("·¢²¼×Ô°üº¬²úÎï"), only -o differs, so dist\Beautiful and the Release zip
 rem are the same artifact.
 
 cd /d "%~dp0.."
 set "REPO_ROOT=%CD%"
 set "OUT=%REPO_ROOT%\dist\Beautiful"
 
-rem Repo-local SDK + NuGet cache stay on this drive (never C:)
-if exist "%REPO_ROOT%\.dotnet\dotnet.exe" set "DOTNET_ROOT=%REPO_ROOT%\.dotnet"
+rem Repo-local SDK + NuGet cache stay on this drive (never C:)¡£net10 Æğ global.json Ëø
+rem 10.0.100£¨rollForward=latestFeature£©£ºÈ«¾Ö PATH ÓĞ 10.x SDK ¾Í×ßÈ«¾Ö£»ÄÚÖÃ .dotnet Èô
+rem »¹Í£ÔÚ 8.0.x ¾ÍÂú×ã²»ÁË global.json£¬²»ÄÜ¶¥µ½ PATH ×îÇ°£¨round7 È±Ïİ 1 Í¬Ô´½ÌÑµ£©¡£
+set "GLOBAL_NET10="
+where dotnet >nul 2>nul && (dotnet --list-sdks 2>nul | findstr /B /C:"10." >nul) && set "GLOBAL_NET10=1"
+if not defined GLOBAL_NET10 if exist "%REPO_ROOT%\.dotnet\dotnet.exe" set "DOTNET_ROOT=%REPO_ROOT%\.dotnet"
 if defined DOTNET_ROOT set "PATH=%DOTNET_ROOT%;%PATH%"
 set "NUGET_PACKAGES=%REPO_ROOT%\.nuget"
 set "DOTNET_CLI_TELEMETRY_OPTOUT=1"
@@ -23,58 +29,60 @@ set "DOTNET_NOLOGO=1"
 where dotnet >nul 2>nul
 if errorlevel 1 goto nodotnet
 
-echo [1/4] æ¸…ç†æ—§ç›®å½•ï¼š%OUT%
+echo [1/4] ÇåÀí¾ÉÄ¿Â¼£º%OUT%
 if exist "%OUT%" rmdir /s /q "%OUT%"
 if not exist "%REPO_ROOT%\dist" mkdir "%REPO_ROOT%\dist"
 
-echo [2/4] ç¼–è¯‘ nativeï¼ˆVC BuildTools v143ï¼›ç¼ºå¤±åˆ™ç»§ç»­çº¯ C# å½¢æ€ï¼‰...
+echo [2/4] ±àÒë native£¨VC BuildTools v143£»È±Ê§Ôò¼ÌĞø´¿ C# ĞÎÌ¬£©...
 call "%REPO_ROOT%\scripts\build-native.cmd" Release
-if errorlevel 1 echo [warn] native ç¼–è¯‘å¤±è´¥ï¼šç»§ç»­å‘å¸ƒçº¯ C# äº§ç‰©ï¼ˆBEAUTIFUL_NONATIVE å½¢æ€ï¼‰
+if errorlevel 1 echo [warn] native ±àÒëÊ§°Ü£º¼ÌĞø·¢²¼´¿ C# ²úÎï£¨BEAUTIFUL_NONATIVE ĞÎÌ¬£©
 
-echo [3/4] æ­£åœ¨å‘å¸ƒï¼ˆè‡ªåŒ…å« win-x64ï¼Œçº¦ 1-3 åˆ†é’Ÿï¼‰...
+echo [3/4] ÕıÔÚ·¢²¼£¨×Ô°üº¬ win-x64£¬Ô¼ 1-3 ·ÖÖÓ£©...
 dotnet publish "src\Beautiful.App" -c Release -r win-x64 --self-contained true -p:PublishSingleFile=false -p:UseAppHost=true -o "%OUT%"
 if errorlevel 1 goto fail
 
 if not exist "%OUT%\Beautiful.exe" goto missing
 
-rem äº§ç‰©è‡ªæ£€ï¼šçœŸæœº r4 éªŒæ”¶æ›¾å› "bin\Release æ„å»ºè¾“å‡ºç›–æ‹·è¿›å‘å¸ƒç›®å½•"æ··å‡º framework-dependent çš„
-rem runtimeconfigï¼ˆå®‰è£…ç‰ˆåŒå‡»å³ "No frameworks were found"ï¼‰ã€‚è¿™é‡ŒæŠŠä¸‰ä»¶å¥—é’‰æ­»ï¼Œåäº†å°±å¤§å£°å¤±è´¥ã€‚
+rem ²úÎï×Ô¼ì£ºÕæ»ú r4 ÑéÊÕÔøÒò"bin\Release ¹¹½¨Êä³ö¸Ç¿½½ø·¢²¼Ä¿Â¼"»ì³ö framework-dependent µÄ
+rem runtimeconfig£¨°²×°°æË«»÷¼´ "No frameworks were found"£©¡£ÕâÀï°ÑÈı¼şÌ×¶¤ËÀ£¬»µÁË¾Í´óÉùÊ§°Ü¡£
 findstr /C:"includedFrameworks" "%OUT%\Beautiful.runtimeconfig.json" >nul 2>nul
 if errorlevel 1 goto badartifact
 findstr /C:"runtimepack" "%OUT%\Beautiful.deps.json" >nul 2>nul
 if errorlevel 1 goto badartifact
 if not exist "%OUT%\hostfxr.dll" goto badartifact
+rem round7 r3: write SC-STAMP.txt (self-contained shape marker) for the iss compile-time gate.
+> "%OUT%\SC-STAMP.txt" echo self-contained %DATE% %TIME%
 
 for %%F in ("%OUT%\Beautiful.exe") do set "EXE_SIZE=%%~zF"
-echo [4/4] å‘å¸ƒå®Œæˆã€‚
+echo [4/4] ·¢²¼Íê³É¡£
 echo.
-echo çœŸæ­£å¯è¿è¡Œçš„è½¯ä»¶ç›®å½•ï¼š%OUT%
-echo å…¥å£ç¨‹åºï¼š           %OUT%\Beautiful.exe
-echo Beautiful.exe å¤§å°ï¼š %EXE_SIZE% å­—èŠ‚
-echo è‡ªåŒ…å«äº§ç‰©ï¼Œä¸éœ€è¦å†å®‰è£… .NET è¿è¡Œæ—¶ï¼ŒåŒå‡»å³å¯è¿è¡Œã€‚
+echo ÕæÕı¿ÉÔËĞĞµÄÈí¼şÄ¿Â¼£º%OUT%
+echo Èë¿Ú³ÌĞò£º           %OUT%\Beautiful.exe
+echo Beautiful.exe ´óĞ¡£º %EXE_SIZE% ×Ö½Ú
+echo ×Ô°üº¬²úÎï£¬²»ĞèÒªÔÙ°²×° .NET ÔËĞĞÊ±£¬Ë«»÷¼´¿ÉÔËĞĞ¡£
 echo.
 pause
 exit /b 0
 
 :nodotnet
-echo [é”™è¯¯] æ‰¾ä¸åˆ° dotnetï¼šè¯·å®‰è£… .NET 8 SDKï¼Œæˆ–æŠŠä»“åº“å†…ç½® SDK æ”¾åˆ° %REPO_ROOT%\.dotnet\
+echo [´íÎó] ÕÒ²»µ½ dotnet£ºÇë°²×° .NET 10 SDK£¨global.json Ëø 10.0.100£©£¬»ò°Ñ 10.x SDK ·Åµ½ %REPO_ROOT%\.dotnet\
 pause
 exit /b 1
 
 :fail
-echo [é”™è¯¯] dotnet publish å¤±è´¥ï¼Œè¯·æŸ¥çœ‹ä¸Šé¢çš„ dotnet è¾“å‡ºã€‚
+echo [´íÎó] dotnet publish Ê§°Ü£¬Çë²é¿´ÉÏÃæµÄ dotnet Êä³ö¡£
 pause
 exit /b 1
 
 :missing
-echo [é”™è¯¯] å‘å¸ƒæµç¨‹ç»“æŸä½†æ²¡æœ‰æ‰¾åˆ° %OUT%\Beautiful.exe
+echo [´íÎó] ·¢²¼Á÷³Ì½áÊøµ«Ã»ÓĞÕÒµ½ %OUT%\Beautiful.exe
 pause
 exit /b 1
 
 :badartifact
-echo [é”™è¯¯] å‘å¸ƒäº§ç‰©è‡ªæ£€å¤±è´¥ï¼šruntimeconfig/deps.json ä¸æ˜¯è‡ªåŒ…å«å½¢æ€ï¼ˆç¼º includedFrameworks/runtimepackï¼‰æˆ–ç¼º hostfxr.dllã€‚
-echo        è¿™æ ·çš„äº§ç‰©åŒå‡»å¯åŠ¨ä¼šæŠ¥ "No frameworks were found"ï¼ˆçœŸæœº r4 éªŒæ”¶ç¼ºé™· 1 çš„æ ¹å› ï¼‰ã€‚
-echo        æ’æŸ¥ï¼šå‘å¸ƒå‘½ä»¤å¿…é¡»å¸¦ --self-contained true -r win-x64ï¼›%OUT% å¿…é¡»æ˜¯å¹²å‡€çš„å‘å¸ƒç›®å½•ï¼Œ
-echo        ç»ä¸è¦æŠŠ bin\Release æ„å»ºè¾“å‡ºæ‰‹å·¥æ‹·è¿›å‘å¸ƒç›®å½•ã€‚
+echo [´íÎó] ·¢²¼²úÎï×Ô¼ìÊ§°Ü£ºruntimeconfig/deps.json ²»ÊÇ×Ô°üº¬ĞÎÌ¬£¨È± includedFrameworks/runtimepack£©»òÈ± hostfxr.dll¡£
+echo        ÕâÑùµÄ²úÎïË«»÷Æô¶¯»á±¨ "No frameworks were found"£¨Õæ»ú r4 ÑéÊÕÈ±Ïİ 1 µÄ¸ùÒò£©¡£
+echo        ÅÅ²é£º·¢²¼ÃüÁî±ØĞë´ø --self-contained true -r win-x64£»%OUT% ±ØĞëÊÇ¸É¾»µÄ·¢²¼Ä¿Â¼£¬
+echo        ¾ø²»Òª°Ñ bin\Release ¹¹½¨Êä³öÊÖ¹¤¿½½ø·¢²¼Ä¿Â¼¡£
 pause
 exit /b 1

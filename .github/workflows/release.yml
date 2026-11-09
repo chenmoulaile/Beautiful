@@ -19,10 +19,10 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: 安装 .NET 8 SDK
+      - name: 安装 .NET 10 SDK
         uses: actions/setup-dotnet@v4
         with:
-          dotnet-version: '8.0.x'
+          dotnet-version: '10.0.x'
 
       - name: 编译 native（v4 Phase 2，/W4 /WX）
         shell: pwsh
@@ -76,18 +76,70 @@ jobs:
             build.log
             test.log
             publish.log
+            publish-lite.log
             native-build.log
           if-no-files-found: ignore
 
-      - name: 压缩
-        run: Compress-Archive -Path publish/* -DestinationPath Beautiful-win-x64-${{ github.ref_name }}.zip
+      # 验收清单随包发布（alpha.25 的好做法，主线此前只在仓库留档）：拿到包的用户
+      # 知道该验收什么、哪些是已知限制。清单随 tag 在仓库根维护（测试清单.md），CI 只做拷贝。
+      - name: 随包验收清单
         shell: pwsh
+        run: |
+          Copy-Item "测试清单.md" publish/测试清单.md
+          if (-not (Test-Path 'publish\测试清单.md')) { throw "验收清单未拷入 publish" }
+
+      # lite 形态（alpha.25 独有产物，可选第二资产）：framework-dependent 极简包，
+      # 只适合已装 .NET Desktop Runtime 10 的用户。alpha.25 前科：csproj 的 Content 声明
+      # 是 Exists 条件（native 未编进构建序就静默缺 dll，包里只剩托管链路）——所以这里
+      # 加**原生 dll 存在性门禁**：缺了宁可不出 lite 资产也不出残包。
+      - name: 发布 lite 产物（framework-dependent）
+        shell: pwsh
+        run: |
+          $out = dotnet publish src/Beautiful.App -c Release -r win-x64 --self-contained false -p:PublishSingleFile=false -p:UseAppHost=true -o publish-lite 2>&1 | Tee-Object -FilePath publish-lite.log
+          $out | ForEach-Object { Write-Host $_ }
+          exit $LASTEXITCODE
+
+      - name: 压缩
+        run: |
+          # zip 打包前形态门禁（round7 r3）：与安装包门禁同口径——混合产物（FDD runtimeconfig +
+          # app-local host + partial runtime 件）装完双击必死，出不了 zip。
+          if (-not (Test-Path "$PWD\publish\SC-STAMP.txt")) { throw 'publish 缺 SC-STAMP.txt（非脚本产出的发布目录）→ 拒绝打 zip' }
+          $rc = Get-Content "$PWD\publish\Beautiful.runtimeconfig.json" -Raw
+          if ($rc -notmatch 'includedFrameworks') { throw 'publish\Beautiful.runtimeconfig.json 不是自包含形态 → 拒绝打 zip' }
+          Compress-Archive -Path publish/* -DestinationPath Beautiful-win-x64-${{ github.ref_name }}.zip
+        shell: pwsh
+
+      - name: lite 原生 dll 门禁与压缩
+        shell: pwsh
+        run: |
+          foreach ($dll in 'Beautiful.Native.dll', 'Beautiful.TrayBridge.dll') {
+            if (-not (Test-Path "publish-lite\$dll")) {
+              Write-Host "WARN: lite 包缺 $dll（alpha.25 静默部分发布的教训）→ 跳过 lite 资产，只出标准 zip/安装包"
+              "missing" | Out-File lite-skip.txt
+              exit 0
+            }
+          }
+          Copy-Item "测试清单.md" publish-lite/测试清单.md
+          # lite 是 framework-dependent 形态：防呆说明随包（round7 缺陷 1——覆盖解压进旧
+          # self-contained 目录会混装 8.0 宿主，双击即 "No frameworks were found"）。
+          Copy-Item "installer/lite-readme.txt" publish-lite/lite-readme.txt
+          if (-not (Test-Path 'publish-lite\lite-readme.txt')) { throw "lite 防呆说明未拷入 publish-lite" }
+          Write-Host "lite 原生 dll 门禁通过（Beautiful.Native.dll / Beautiful.TrayBridge.dll 在位）"
+          Compress-Archive -Path publish-lite/* -DestinationPath Beautiful-win-x64-lite-${{ github.ref_name }}.zip
 
       # 安装程序：与 zip 是同一件产物（同一个 publish 目录），只是多了卸载器、开始菜单与"装前请退出旧实例"。
       # 版本号要剥掉 tag 的前导 v：Inno 的 VersionInfoVersion 只收纯数字。
       - name: 打安装程序（Inno Setup）
         shell: pwsh
         run: |
+          # 打包前形态门禁（round7 r2 教训）：混合产物（FDD runtimeconfig + app-local host +
+          # partial runtime 件）装完双击即死（app-local hostfxr 锁死框架查找根）。
+          # publish 目录必须自包含——不是就大声失败，绝不打残包。
+          $rc = Get-Content "$PWD\publish\Beautiful.runtimeconfig.json" -Raw
+          if ($rc -notmatch 'includedFrameworks') { throw 'publish\Beautiful.runtimeconfig.json 不是自包含形态（缺 includedFrameworks）→ 拒绝打安装包' }
+          foreach ($dll in 'hostfxr.dll','coreclr.dll','System.Private.CoreLib.dll') {
+            if (-not (Test-Path "$PWD\publish\$dll")) { throw "publish 缺 $dll（疑似 partial 形态）→ 拒绝打安装包" }
+          }
           $ver = "${{ github.ref_name }}".TrimStart('v')
           $iscc = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe"
           if (-not (Test-Path $iscc)) {
@@ -97,20 +149,31 @@ jobs:
           & $iscc "/DAppVersion=$ver" "/DSourceDir=$PWD\publish" "/DOutputDir=$PWD\installer-out" installer\Beautiful.iss
           if ($LASTEXITCODE -ne 0) { throw "ISCC 失败（退出码 $LASTEXITCODE）" }
 
+      # lite 资产是条件产物（原生 dll 门禁可跳过），上传列表必须自适应：
+      # 统一汇进 assets/ 再整目录上传，lite 缺席时 Release 只少一个文件、不会红。
+      - name: 汇集 Release 资产
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path assets | Out-Null
+          Move-Item Beautiful-win-x64-*.zip assets/
+          Copy-Item installer-out/Beautiful-Setup-*.exe assets/
+          if (Test-Path 'assets\Beautiful-win-x64-lite-*.zip') { Write-Host 'lite 资产在位' }
+          else { Write-Host 'WARN: lite 资产缺席（原生 dll 门禁跳过）→ 本次 Release 只有标准 zip 与安装包' }
+          Get-ChildItem assets | ForEach-Object { Write-Host "  $($_.Name) ($([math]::Round($_.Length/1MB,1)) MB)" }
+
       - name: 创建 Release 并上传
         uses: softprops/action-gh-release@v2
         with:
-          files: |
-            Beautiful-win-x64-${{ github.ref_name }}.zip
-            installer-out/Beautiful-Setup-*.exe
+          files: assets/*
           body: |
-            Beautiful ${{ github.ref_name }} — Windows 11 桌面美化套件：macOS/Linux/鸿蒙三主题悬浮 Dock + macOS 顶栏 + SMTC 媒体控制与双语歌词 + Alt+Tab 替换切换器 + macOS 式 genie 最小化动画。
+            Beautiful ${{ github.ref_name }} — Windows 11 桌面还原壳：macOS/Aurora 双主题悬浮 Dock + macOS 顶栏 + SMTC 媒体控制与双语歌词 + Alt+Tab 替换切换器 + macOS 式 genie 最小化动画 + 台前调度 + 墙纸取色 + 多屏 Dock。
 
-            **两种拿法，内容是同一件产物：**
+            **三种拿法：**
             - `Beautiful-Setup-v*.exe` — 安装程序（按用户安装、免管理员；开始菜单快捷方式 + 控制面板可卸载）
-            - `Beautiful-win-x64-v*.zip` — 免安装压缩包，解压后直接运行 `Beautiful.exe`
+            - `Beautiful-win-x64-v*.zip` — 免安装压缩包（自包含），解压后直接运行 `Beautiful.exe`
+            - `Beautiful-win-x64-lite-v*.zip` — 极简压缩包（framework-dependent，体积小一个量级）：**需要先装 [.NET Desktop Runtime 10](https://dotnet.microsoft.com/download/dotnet/10.0)** 才能运行；**解压到全新空目录，勿覆盖旧版安装目录**（包内附 lite-readme.txt 说明）；没装运行时请用上面两种
 
-            两者都是自包含的，不需要另装 .NET 运行时。
+            标准与安装包都是自包含的，不需要另装 .NET 运行时。zip 内随附《测试清单.md》验收单。
           make_latest: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

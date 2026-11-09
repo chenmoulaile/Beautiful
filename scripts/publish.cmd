@@ -1,30 +1,51 @@
 @echo off
 setlocal
-rem scripts\publish.cmd -- è‡ªåŒ…å«å‘å¸ƒåˆ° <repo>\publish\ï¼ˆCI release.yml ç”¨åŒä¸€ç»„å‚æ•°ï¼‰ã€‚
-rem ä»“åº“æ ¹ = æœ¬è„šæœ¬ä¸Šä¸€çº§ï¼šè„šæœ¬éšä»“åº“èµ°ï¼Œä¸å†™æ­»ç›˜ç¬¦ï¼ˆæ—§ç‰ˆå†™æ­» E:\Beautifulï¼Œä»“åº“æ¬å®¶åå³å¤±æ•ˆï¼‰ã€‚
+rem scripts\publish.cmd -- ×Ô°üº¬·¢²¼µ½ <repo>\publish\£¨CI release.yml ÓÃÍ¬Ò»×é²ÎÊı£©¡£
+rem ²Ö¿â¸ù = ±¾½Å±¾ÉÏÒ»¼¶£º½Å±¾Ëæ²Ö¿â×ß£¬²»Ğ´ËÀÅÌ·û£¨¾É°æĞ´ËÀ E:\Beautiful£¬²Ö¿â°á¼Òºó¼´Ê§Ğ§£©¡£
+rem ±¾ÎÄ¼şÓë install-local.cmd ÒÔ GBK ´æ´¢£¨ÖĞÎÄ Windows cmd µÄ 936 Ô­ÉúÂëÒ³£©£ºUTF-8 ÖĞÎÄ
+rem ×¢ÊÍÔÚ 936 ¿ØÖÆÌ¨»á±»Ë«×Ö½Ú½âÎöÍÌĞĞ£¬UTF-8+chcp 65001 ÓÖ²È cmd Åú´¦Àí¶ÁÈ¡Æ÷µÄÆ«ÒÆ bug
+rem £¨round7 Êµ²â£º³¤ÖĞÎÄ rem ±»²ğËé³ÉÎ´ÖªÃüÁî£©¡ª¡ªÅú´¦Àí½Å±¾´æ GBK ÊÇÎ¨Ò»Á½Í·¶¼ÎÈµÄĞÎÌ¬¡£
 set "REPO_ROOT=%~dp0.."
 set "NUGET_PACKAGES=%REPO_ROOT%\.nuget"
-if exist "%REPO_ROOT%\.dotnet\dotnet.exe" set "DOTNET_ROOT=%REPO_ROOT%\.dotnet"
+rem ²Ö¿âÄÚÖÃ SDK£¨.dotnet£©µ±ÄêÎª"²»Õ¼ C ÅÌ"ÉèÎªÓÅÏÈ£»net10 Æğ global.json Ëø 10.0.100
+rem £¨rollForward=latestFeature£©£¬ÄÚÖÃÄ¿Â¼Èô»¹Í£ÔÚ 8.0.x ¾ÍÂú×ã²»ÁË global.json¡ª¡ªÏÈÌ½È«¾Ö
+rem PATH ÓĞÃ»ÓĞ 10.x SDK£¬ÓĞ¾Í×ßÈ«¾Ö£»Ã»ÓĞ²ÅÖ¸ÄÚÖÃ£¨ÄÚÖÃÒ²²»Âú×ãÊ± SDK ½âÎö»á´óÉùÊ§°Ü£¬
+rem ¾ø²»¾²Ä¬ÓÃ¾É SDK ¹¹½¨´í°æ²úÎï£©¡£
+set "GLOBAL_NET10="
+where dotnet >nul 2>nul && (dotnet --list-sdks 2>nul | findstr /B /C:"10." >nul) && set "GLOBAL_NET10=1"
+if not defined GLOBAL_NET10 if exist "%REPO_ROOT%\.dotnet\dotnet.exe" set "DOTNET_ROOT=%REPO_ROOT%\.dotnet"
 if defined DOTNET_ROOT set "PATH=%DOTNET_ROOT%;%PATH%"
 cd /d "%REPO_ROOT%"
+
+rem ·¢²¼Ä¿Â¼ÏÈÇå¿ÕÔÙ·¢²¼£ºdotnet publish Ö»×öÍ¬Ãû¸²¸Ç£¬¾ÉĞÎÌ¬²ĞÁô£¨ÉÏÒ»ÂÖ self-contained µÄ
+rem runtime ¼ş¡¢ÊÖ¹¤ÊÔÑé¿½½øÀ´µÄ bin Êä³ö£©»áÕûÅú»ì½ø zip/°²×°°ü¡ª¡ªround7 Õæ»úÈ±Ïİ 1 µÄ
+rem ¡°8.0 hostfxr + net10 Ó¦ÓÃÎÄ¼ş¡±»ì×°¼´´ËÀ´Ô´¡£Óë install-local.cmd ¶Ô dist\Beautiful µÄ
+rem ¡°ÏÈ rmdir ºó·¢²¼¡±Í¬Ò»¼ÍÂÉ¡£Çå²»µô£¨¾ÉÊµÀı»¹ÔÚÅÜËø×¡ÎÄ¼ş£©¾Í´óÉùÊ§°Ü£¬¾ø²»´ø²Ğ·¢²¼¡£
+if exist "%REPO_ROOT%\publish" rmdir /s /q "%REPO_ROOT%\publish"
+if exist "%REPO_ROOT%\publish" (
+    echo [´íÎó] %REPO_ROOT%\publish ÇåÀíÊ§°Ü£ºÄ¿Â¼±»Õ¼ÓÃ£¨ÊÇ·ñÓĞ Beautiful.exe ÕıÔÚÔËĞĞ£¿£©¡£
+    exit /b 1
+)
 
 dotnet publish src\Beautiful.App -c Release -r win-x64 --self-contained true -p:PublishSingleFile=false -o "%REPO_ROOT%\publish"
 if errorlevel 1 exit /b 1
 
-rem äº§ç‰©è‡ªæ£€ï¼ˆä¸ install-local.cmd åŒä¸€å¥—ï¼‰ï¼šåäº§ç‰©å®å¯å¤±è´¥ä¹Ÿä¸è¦å‘å‡ºå»ã€‚
-rem äº‹æ•…èƒŒæ™¯ï¼šbin\Release æ„å»ºè¾“å‡ºè¢«æ‰‹å·¥ç›–æ‹·è¿›å‘å¸ƒç›®å½•ï¼Œä¼šæŠŠ runtimeconfig é€€å› framework-dependent
-rem å½¢æ€ï¼ˆ"frameworks"ï¼‰ï¼Œå®‰è£…ç‰ˆåŒå‡»å³æŠ¥ "No frameworks were found"ã€‚
+rem ²úÎï×Ô¼ì£¨Óë install-local.cmd Í¬Ò»Ì×£©£º»µ²úÎïÄş¿ÉÊ§°ÜÒ²²»Òª·¢³öÈ¥¡£
+rem ÊÂ¹Ê±³¾°£ºbin\Release ¹¹½¨Êä³ö±»ÊÖ¹¤¸Ç¿½½ø·¢²¼Ä¿Â¼£¬»á°Ñ runtimeconfig ÍË»Ø
+rem framework-dependent ĞÎÌ¬£¬°²×°°æË«»÷¼´±¨ No frameworks were found¡£
 findstr /C:"includedFrameworks" "%REPO_ROOT%\publish\Beautiful.runtimeconfig.json" >nul 2>nul
 if errorlevel 1 goto badartifact
 findstr /C:"runtimepack" "%REPO_ROOT%\publish\Beautiful.deps.json" >nul 2>nul
 if errorlevel 1 goto badartifact
 if not exist "%REPO_ROOT%\publish\hostfxr.dll" goto badartifact
+rem round7 r3: write SC-STAMP.txt (self-contained shape marker) for the iss compile-time gate.
+> "%REPO_ROOT%\publish\SC-STAMP.txt" echo self-contained %DATE% %TIME%
 
-echo å®Œæˆï¼š%REPO_ROOT%\publish\Beautiful.exe
+echo Íê³É£º%REPO_ROOT%\publish\Beautiful.exe
 exit /b 0
 
 :badartifact
-echo [é”™è¯¯] å‘å¸ƒäº§ç‰©è‡ªæ£€å¤±è´¥ï¼šruntimeconfig/deps.json ä¸æ˜¯è‡ªåŒ…å«å½¢æ€ï¼ˆç¼º includedFrameworks/runtimepackï¼‰æˆ–ç¼º hostfxr.dllã€‚
-echo        è¿™æ ·çš„äº§ç‰©åŒå‡»å¯åŠ¨ä¼šæŠ¥ "No frameworks were found"ã€‚è¯·ç¡®è®¤å‘å¸ƒå‘½ä»¤å¸¦ --self-contained trueï¼Œ
-echo        ä¸”å‘å¸ƒç›®å½•å¹²å‡€â€”â€”ä¸è¦æŠŠ bin\Release æ„å»ºè¾“å‡ºæ‰‹å·¥æ‹·è¿›å‘å¸ƒç›®å½•ã€‚
+echo [´íÎó] ·¢²¼²úÎï×Ô¼ìÊ§°Ü£ºruntimeconfig/deps.json ²»ÊÇ×Ô°üº¬ĞÎÌ¬£¨È± includedFrameworks/runtimepack£©»òÈ± hostfxr.dll¡£
+echo        ÕâÑùµÄ²úÎïË«»÷Æô¶¯»á±¨ "No frameworks were found"¡£ÇëÈ·ÈÏ·¢²¼ÃüÁî´ø --self-contained true£¬
+echo        ÇÒ·¢²¼Ä¿Â¼¸É¾»¡ª¡ª²»Òª°Ñ bin\Release ¹¹½¨Êä³öÊÖ¹¤¿½½ø·¢²¼Ä¿Â¼¡£
 exit /b 1

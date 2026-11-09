@@ -4,7 +4,7 @@
 # 用法: powershell -NoProfile -ExecutionPolicy Bypass -File scripts/frametime.ps1
 $ErrorActionPreference = 'Stop'
 $root = Split-Path -Parent $PSScriptRoot
-$bin  = Join-Path $root 'src\Beautiful.App\bin\Debug\net8.0-windows10.0.19041.0'
+$bin  = Join-Path $root 'src\Beautiful.App\bin\Debug\net10.0-windows10.0.19041.0'
 $exe  = Join-Path $bin 'Beautiful.exe'
 if (-not (Test-Path $exe)) { Write-Output "EXE_NOT_FOUND: 先跑 dotnet build"; exit 1 }
 

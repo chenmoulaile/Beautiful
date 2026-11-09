@@ -55,8 +55,8 @@ public sealed class AppSettingsStore
             report($"设置自愈：SwitcherStyle={raw.SwitcherStyle} → {normalized.SwitcherStyle}（v4 只保留 macOS 卡片）");
         if (!string.Equals(raw.TaskbarPolicy, normalized.TaskbarPolicy, StringComparison.Ordinal))
             report($"设置自愈：TaskbarPolicy={raw.TaskbarPolicy} → {normalized.TaskbarPolicy}");
-        if (!string.Equals(raw.DockPosition, normalized.DockPosition, StringComparison.Ordinal))
-            report($"设置自愈：DockPosition={raw.DockPosition} → {normalized.DockPosition}");
+        // DockPosition 自愈行已随死键删除（2026-11-10）：该字段 App 侧零消费，
+        // 再报"自愈"会制造它生效的假象；真正的停靠边在 DockEdge（无运行语义外的白名单见 Normalized）。
         if (!string.Equals(raw.GenieEngine, normalized.GenieEngine, StringComparison.Ordinal))
             report($"设置自愈：GenieEngine={raw.GenieEngine} → {normalized.GenieEngine}");
         if (!string.Equals(raw.IconTreatment, normalized.IconTreatment, StringComparison.Ordinal))

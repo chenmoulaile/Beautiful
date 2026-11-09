@@ -520,11 +520,18 @@ public sealed class DockViewModel
                Label: w.Title,
                Icon: icon,
                // alpha.24：最小化窗口换种类 → 驻留在分隔符右侧的最小化区（macOS 语义），
-               // 渲染同模板，但指示点不亮、不可拖拽；点击仍走还原。
+               // 渲染同模板、不可拖拽；点击仍走还原。
                Kind: w.IsMinimized ? DockItemKind.MinimizedWindow : DockItemKind.Window,
                LaunchPath: w.ExePath,
                WindowHandle: w.Handle,
-               IconSource: w.ExePath);   // 跟踪器就是按 exe 路径取图并缓存的，键与它同源
+               IconSource: w.ExePath,   // 跟踪器就是按 exe 路径取图并缓存的，键与它同源
+               // round7 r3（Dock 运行指示缺陷）：最小化条目也亮运行指示。alpha.24 的"最小化
+               // 区指示点不亮"在台前调度时代成了真实误读——最小化区整排无点，看起来就像
+               // 应用没在跑（真机取证 docs/evidence/round7/91/98/99：备忘录×3 全部无 dot，
+               // 对照 102 未最小化实例 dot 在）。macOS 的最小化窗口同样是"运行中"；
+               // IsRunning 是三处指示触发器（两主题 dot + pill 覆写）的共同数据源，
+               // 这一处理 true 后各指示形态自动跟随，渲染端零改动。
+               IsRunning: w.IsMinimized);
     }
 
     private void OnWindowsChanged(object? sender, NotifyCollectionChangedEventArgs e)

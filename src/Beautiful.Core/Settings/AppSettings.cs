@@ -209,7 +209,7 @@ public sealed record AppSettings
     /// <summary>是否接管 Alt+Tab（安装低阶键盘钩子）。</summary>
     public bool SwitcherEnabled { get; init; } = true;
 
-    /// <summary>切换器样式："macos" | "linux" | "harmonyos"。</summary>
+    /// <summary>切换器样式：只剩 "macos"（KnownSwitcherStyles 已收敛为单值；旧 linux/harmonyos 分支已删）。</summary>
     public string SwitcherStyle { get; init; } = "macos";
 
     /// <summary>切换器触发键组合（小写规范形，如 "alt+tab" / "ctrl+alt+tab"）。</summary>
@@ -238,9 +238,6 @@ public sealed record AppSettings
 
     /// <summary>悬停放大强度倍率（1.0..2.5，加载时钳制）。默认值与 <see cref="DefaultMagnificationStrength"/> 同源。</summary>
     public double MagnificationStrength { get; init; } = DefaultMagnificationStrength;
-
-    /// <summary>Dock 停靠边："bottom" | "top" | "left" | "right"。</summary>
-    public string DockPosition { get; init; } = "bottom";
 
     /// <summary>悬停是否显示 DWM 缩略图预览。</summary>
     public bool PreviewEnabled { get; init; } = true;
@@ -275,8 +272,10 @@ public sealed record AppSettings
     /// </summary>
     public string LauncherHotkey { get; init; } = "ctrl+alt+space";
 
-    /// <summary>Dock 是否自动收起。</summary>
-    public bool AutoHideDock { get; init; }
+    // 【AppSettings.AutoHideDock 已删（wp-borrow 收口，2026-11-10）】App 侧零消费的死键：
+    // 真正的自动隐藏在 <see cref="DockAutoHide"/> + <see cref="DockHideMode"/>。
+    // 旧 settings.json 里的 "autoHideDock" 字段走 System.Text.Json 未知键静默忽略，
+    // 下次 Save 全量序列化后自然消失。
 
     /// <summary>
     /// 首次运行（还没有 <c>dock.json</c>）时，是否把 Windows 原生任务栏上已固定的应用接进 Dock。
@@ -449,8 +448,10 @@ public sealed record AppSettings
     /// <summary>合法切换器样式标识（小写，与主题标识同名，供设置面板下拉复用）。</summary>
     public static IReadOnlyList<string> KnownSwitcherStyles { get; } = ["macos"];
 
-    /// <summary>合法 Dock 停靠边标识（小写，供设置面板下拉复用）。</summary>
-    public static IReadOnlyList<string> KnownDockPositions { get; } = ["bottom", "top", "left", "right"];
+    // 【AppSettings.DockPosition 已删（wp-borrow 收口，2026-11-10）】App 侧零消费的死键：
+    // 真正的停靠边在 <see cref="DockEdge"/>（bottom|left|right，消费方 DockWindow.ApplyEdge /
+    // DockMonitorProfiles）。旧 settings.json 里的 "dockPosition" 字段走 System.Text.Json
+    // 未知键静默忽略，下次 Save 全量序列化后自然消失。
 
     /// <summary>
     /// 合法图标处理方式标识（小写，v3 T6；白名单与解释器同源，避免设置面板和 Core 各写一份 switch）。
@@ -538,7 +539,6 @@ public sealed record AppSettings
         AccentColor = Design.MacAccents.Canonical(AccentColor),
         TaskbarPolicy = Canonical(TaskbarPolicy, "hide", KnownTaskbarPolicies),
         SwitcherStyle = Canonical(SwitcherStyle, "macos", KnownSwitcherStyles),
-        DockPosition = Canonical(DockPosition, "bottom", KnownDockPositions),
         SwitcherHotkey = HotkeyOrDefault(SwitcherHotkey, "alt+tab"),
         // 呼出热键与启动器热键同一套硬约束（至少一个修饰键 + 可识别主键；含 grave=反引号），
         // 非法值自愈为各自的默认（CanonicalizeWithFallback：呼出热键的默认是 ctrl+grave 而非启动器的
@@ -557,6 +557,11 @@ public sealed record AppSettings
         DockModifierKey = Canonical(DockModifierKey, "ctrl", KnownDockModifierKeys),
         DockIndicatorStyle = Canonical(DockIndicatorStyle, "dot", KnownDockIndicatorStyles),
         DockTrayPosition = Canonical(DockTrayPosition, Dock.DockTrayPlacement.PositionWidget, KnownDockTrayPositions),
+        // DockEdge 是唯一有运行语义却曾漏出 Normalized 的枚举串（wp-borrow 收口补齐，2026-11-10）：
+        // 手改 JSON 写 "top" 或垃圾值此前会原样落盘并透传给 DockMonitorProfiles.Resolve，
+        // 靠 DockWindow.ApplyEdge 的 `_ => "bottom"` 兜底才无害——自愈日志与白名单机制都被绕过。
+        // 白名单直接复用 Core DockMonitorProfiles.KnownEdges（bottom|left|right），不另立两份名单。
+        DockEdge = Canonical(DockEdge, "bottom", Dock.DockMonitorProfiles.KnownEdges),
         DockMonitorProfiles = Dock.DockMonitorProfileList.Normalized(DockMonitorProfiles),
         ScreenCornerRadius = Math.Clamp(ScreenCornerRadius, MinScreenCornerRadius, MaxScreenCornerRadius),
         ScreenCornerMaskColor = Layout.ScreenCornerPlan.CanonicalMaskColor(ScreenCornerMaskColor),

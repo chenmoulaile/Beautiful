@@ -1,0 +1,14 @@
+{
+  // SDK 版本钉在 .NET 10（10.0.1xx 及以上 feature band）：主线已在 net10.0-windows10.0.19041.0
+  // 上全量施工（release.yml 的 setup-dotnet 10.0.x 同口径）。不钉的话 dotnet build 会选
+  // 最高版 SDK——本机同装 8.0.426 与 10.0.403，不钉就会按目录里最近的 global.json 或
+  // 最高 SDK 走，构建产物会依赖"哪台机器装了什么"（与 Directory.Build.props 的
+  // Deterministic=true 同一条纪律）。
+  // rollForward=latestFeature：同一 10.0 主次版本内允许更高 feature band（10.0.4xx、
+  // 10.0.5xx…都能跑），CI 与本机的小版本差不再造成门禁假红。
+  "sdk": {
+    "version": "10.0.100",
+    "rollForward": "latestFeature",
+    "allowPrerelease": false
+  }
+}

@@ -210,7 +210,8 @@ Write-Output '[当前 config\settings.json]'
 $cfgPath = Join-Path $appRoot 'config\settings.json'
 if (Test-Path $cfgPath) {
     $cfg = Get-Content -Path $cfgPath -Raw -Encoding UTF8 | ConvertFrom-Json
-    $keys = @('Theme', 'DockIconSize', 'TaskbarPolicy', 'DockMonitor', 'TopBarMonitor', 'DockPosition',
+    # DockPosition 键已随死键删除（2026-11-10）：App 侧零消费，列它只会误导排查。
+    $keys = @('Theme', 'DockIconSize', 'TaskbarPolicy', 'DockMonitor', 'TopBarMonitor',
               'MagnificationStrength', 'UseWallpaperAccent', 'TopBarEnabled', 'LauncherEnabled', 'SwitcherEnabled')
     foreach ($k in $keys) {
         $v = $cfg.PSObject.Properties[$k]

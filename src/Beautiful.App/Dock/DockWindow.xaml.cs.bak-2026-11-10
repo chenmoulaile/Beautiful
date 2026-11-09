@@ -1,0 +1,2431 @@
+using System.Collections.Generic;
+using System.Diagnostics;
+using System.ComponentModel;
+using System.IO;
+using System.Runtime.InteropServices;
+using System.Windows;
+using System.Windows.Controls;
+using System.Windows.Input;
+using System.Windows.Interop;
+using System.Windows.Media;
+using System.Windows.Media.Animation;
+using System.Windows.Threading;
+using Beautiful.App.Controls;
+using Beautiful.App.Interop;
+using Beautiful.App.MediaWidget;
+using Beautiful.App.Preview;
+using Beautiful.App.Services;
+using Beautiful.App.Themes;
+using Beautiful.Core.Design;
+using Beautiful.Core.Dock;
+using Beautiful.Core.Layout;
+using Beautiful.Core.Themes;
+using Application = System.Windows.Application;
+using Point = System.Windows.Point;
+using Rect = System.Windows.Rect;
+using MouseEventArgs = System.Windows.Input.MouseEventArgs;   // 与 System.Windows.Forms.MouseEventArgs 歧义（UseWindowsForms）
+using KeyEventArgs = System.Windows.Input.KeyEventArgs;       // Esc 收起托盘弹层（PreviewKeyDown）：消歧 System.Windows.Forms.KeyEventArgs
+using DragEventArgs = System.Windows.DragEventArgs;           // 拖放落位（v3 T5）：消歧 System.Windows.Forms.DragEventArgs
+using DragDropEffects = System.Windows.DragDropEffects;
+using DataFormats = System.Windows.DataFormats;
+
+namespace Beautiful.App.Dock;
+
+/// <summary>
+/// 底部居中悬浮 Dock：AppBar 注册（ABM_NEW → ABM_QUERYPOS → ABM_SETPOS，ABE_BOTTOM 全宽条带）
+/// + macOS 式放大（Task 6 重写）：条目交给 <see cref="DockSurface"/> 自绘——连续高斯放大场
+/// （真实物理光标坐标，非离散悬停索引）+ CompositionTarget.Rendering（vsync）驱动的指数阻尼，
+/// 逐帧只写 Canvas.Left/Top 与 RenderTransform，面板内零 Margin/LayoutTransform 改写。
+/// 条带几何（v3 T1）：<b>上报 shell 的预留带 = 可见面板高</b>，真实窗口矩形在其之上再多出
+/// <see cref="StripHeadroomDip"/> 的透明带（Background={x:Null} 分层窗口不参与命中 → 点击穿透），
+/// 放大后的图标才不被窗口上沿裁掉、而工作区只让出面板那么多。
+/// 主题由 ThemeManager 驱动（Task 13，订阅时序见终审 I-6 注释）：OnSourceInitialized 显式 ApplyTheme(当前)
+/// 起步并订阅 ThemeChanged 重设亚克力/间距/放大参数（IconSize、Spacing、MaxScale、ShowMagnification 写入 DockSurface）。
+/// </summary>
+public partial class DockWindow : AcrylicWindow
+{
+    // 面板可见高度与条带顶部透明余量随图标尺寸/主题几何/放大强度动态计算（见 VisiblePanelDip / StripHeadroomDip），
+    // 不再是固定常量——图标尺寸是设置项（32..96），macOS 放大后图标会向上生长，窗口必须容得下。
+    // 【v3 T4：竖向几何全部主题驱动】行内余量（DockSurface.RowInsetDip）与面板内边距取自 ThemeDefinition，
+    // 于是"面板贴图标"成为原生各自的值而不是统一 20+12：IconSize=44 时 macOS 行 54 / 面板 66 DIP
+    // （原 64 / 76；倒影显式开启时仍复原为 83.2 / 95.2，见 DockRowMath 推导）。
+    // 算术本体在 Core（Dock.DockRowMath，单测覆盖），本窗口只负责"把主题参数喂进去 + 读结果"：
+    // 条带预留 = 可见面板高、窗口 = 面板 + 放大余量、媒体面板锚定、点击穿透几何都读同一来源，
+    // 不允许出现第二条算术路径（v3 §1.C 的裁定，T1 刚建立的不变量）。
+    private const double MinStripHeadroomDip = 22;
+    private const double SigmaInPitches = 2.0;  // 高斯 σ（单位 = 一个图标间距；控制器裁定：不随主题变化）
+        // 尺度说明（评审发现：旧注释撒谎）：Core 的场是标准差形式 exp(-d²/(2σ²))，v1 的 Magnifier 是
+        // exp(-(d/σ)²)，同写 2.0 时本实现的实际影响半径比 v1 宽 √2 倍（底板鼓包约宽 26%）。
+        // 刻意保留 2.0：半径更宽 → 相邻项倍率差更小、斜率更缓，正是"放大别看起来粗糙"要的方向；
+        // 若要 1:1 复刻 v1 视觉尺度，把本常量改成 2.0/√2 ≈ 1.4142 即可（DockSurface.Sigma 同一口径）。
+
+
+    private readonly WindowTracker _tracker;
+    private readonly DockViewModel _vm;
+
+    /// <summary>角标服务（Phase 7-T2）：定时读白名单应用标题里的未读数。</summary>
+    private DockBadgeService? _badges;
+
+    /// <summary>进度条服务（Phase 7-T1）：轮询 Explorer 拷贝对话框的 UIA 进度。</summary>
+    private TaskbarProgressService? _progress;
+
+    /// <summary>回收站满/空轮询（alpha.29 残项清零）：满/空翻转驱动回收站槽图标 trash_empty↔trash_full。</summary>
+    private RecycleBinMonitor? _recycleBinMonitor;
+
+    /// <summary>小组件天气源（Phase 7-T3）：wttr.in，15 分钟缓存，失败静默。</summary>
+    private WeatherService? _weather;
+
+    /// <summary>小组件时钟定时器（每分钟刷新一次即可；10s 一拍是为了让分钟翻转更及时）。</summary>
+    private System.Windows.Threading.DispatcherTimer? _widgetTimer;
+    // 组合根（多屏 Dock 实例化改造）：WindowTracker / SmtcService / MediaViewModel 是**进程级单例**，
+    // 由 App 组合根创建一份后注入（多实例共享同一份：SMTC 是系统级单会话总线、WindowTracker 的
+    // shell-hook 宿主窗 + 2s 对账不该按实例翻倍）。三个参数传 null 时就地自建——行为与多屏化前
+    // 逐字节一致（自建者拥有，OnClosed 负责 Dispose；注入者不拥有，生命周期归 App）。
+    // MediaViewModel 构造期自启动 SMTC；MediaPanel 惰性创建（胶囊点击时）。
+    private readonly SmtcService _smtc;
+    private readonly MediaViewModel _mediaVm;
+    private readonly TaskbarManager? _taskbar; // App 注入：TaskbarCreated（explorer 重建）后重放策略
+    private readonly Animation.MinimizeAnimator? _animator; // App 注入：Dock 触发的最小化走"预抓帧"路径（见 ActivateItem）
+
+    /// <summary>
+    /// 共享服务（tracker/smtc/mediaVm）是否由本实例自建：自建 = 拥有（OnClosed Dispose，历史行为）；
+    /// 注入 = 不拥有（App 在进程退出时统一释放，重载 Dock 也不动它们）。
+    /// </summary>
+    private readonly bool _ownsSharedServices;
+
+    /// <summary>
+    /// 本实例钉住的显示器选择器（primary 或 1..16 序号串；null = 跟随全局 <c>DockMonitor</c>）。
+    /// 多实例下每个 Dock 必须钉住**一块**屏——N 个实例都读全局 auto/序号会全部挤到同一块屏上。
+    /// 单实例路径不传（null），落位语义与多屏化前逐字节一致。
+    /// </summary>
+    private readonly string? _monitorSelector;
+
+    /// <summary>光标最后一次扫过条带时的前台窗口（那时前台一定还是用户的）。
+    /// 点击条带会把前台换给 Dock 自己，判定"点的是不是前台"必须在悬停时就留样本。</summary>
+    private IntPtr _foregroundAtHover;
+    private MediaPanel? _mediaPanel;
+    /// <summary>托盘收纳列的展开弹层宿主（激活式 FluentPopupHost；null = 未打开）。一次只开一张：
+    /// 再次点击格子 = 收起（toggle 语义，与小组件点击开面板同款交互）。</summary>
+    private FluentPopupHost? _trayPanelHost;
+    private DateTime? _panelAutoHiddenAtUtc; // 面板最近一次"失焦自动收起"时刻（胶囊点击的 toggle 语义用）
+    // 图标尺寸/放大强度滑杆拖动时会连续触发排布刷新；条带重排（AppBar 协商 + SetWindowPos）成本较高，
+    // 用一次性防抖把拖动期间的多次请求合并成落定后的一次重排（排布参数本身每帧即时写入，图标视觉跟手）。
+    private DispatcherTimer? _repositionDebounce;
+    // v3 T6：图标烘焙参数（尺寸/DPI/主题/方式）变更后要重挂条目绑定（=重建容器 = 重烘一排图标）。
+    // 滑杆连续拖动时合并成一次，绝不让"每步重烘"进到帧预算里（P95 门）。
+    private DispatcherTimer? _iconRebindDebounce;
+
+    // ---------- 悬停实时预览（Task 13）----------
+    // _preview 惰性创建（首次悬停到窗口条目），随 Dock 关闭 Dispose（内部注销缩略图句柄 + 销毁宿主窗口）。
+    // _previewDwell 是 ~350ms 的一次性驻留计时器：悬停满 350ms 才弹预览，离开/点击即停。
+    // _previewPending 记录正在等待弹出的条目，用于"移动到新条目重置驻留""点击取消""tick 复核光标仍在该条目"。
+    private ThumbnailPreview? _preview;
+    private DispatcherTimer? _previewDwell;
+    private DockItem? _previewPending;
+
+    // ---------- 最小化区实况缩略图（alpha.26）----------
+    // 每条最小化条目一只纯 Win32 弹层（DWM 缩略图、输入全穿透），跟随条目物理矩形。
+    // 生命周期随 Dock：OnSourceInitialized 建，OnClosed 全量注销+销毁。
+    private MinimizedTileLayer? _minTiles;
+    private bool _minTilesSyncQueued;
+    private DispatcherTimer? _minTilesTimer;
+    private readonly List<(IntPtr hwnd, Rect rect)> _minTileScratch = new();
+
+    private IntPtr _hwnd;
+    private uint _appbarMsg;
+    private uint _taskbarCreatedMsg;
+
+    /// <summary>安装/卸载器的"干净退出"与第二实例的"--settings 转发"两个注册消息号（0 = 没有这条通道）。
+    /// Dock 是主 UI，应用在跑它就在，所以这两个进程间信号在这里也接一份——顶栏被关掉时不断链。</summary>
+    private readonly uint _exitRequestMsg = NativeMethods.ExitRequestMessage;
+    private readonly uint _settingsRequestMsg = NativeMethods.SettingsRequestMessage;
+    private NativeMethods.APPBARDATA _abd;
+    private NativeMethods.RECT _screenRect; // **窗口**物理矩形（含顶部放大余量），非 AppBar 预留带——物理光标校验用，见 IsCursorOutsideWindow
+    private PhysicalRect _windowTarget;     // 最近一次协商出的目标窗口矩形：shell 重排条带时用它重申落位（见 AssertWindowRect）
+    private PhysicalRect _monitorRect;      // 本 Dock 所在显示器的 rcMonitor（媒体面板水平钳制用，副屏原点可为负/非 0）
+    /// <summary>
+    /// 本 Dock 所在显示器的**有效缩放**（MDT_EFFECTIVE_DPI/96，与条带几何同一个来源）。
+    /// v3 T6 把它同时作为图标烘焙的 DPI 输入：位图边长 = IconSizeDIP·本值，所以"Dock 搬到 200% 的副屏"
+    /// 必须重烘一次，否则 150% 那套位图会被再次拉伸（正是"图标劣质"的第二条来源）。
+    /// </summary>
+    private double? _monitorScale;
+    private bool _appbarRegistered;
+    private bool _closing; // OnClosing 起置位：阻止关闭前挂起的 BeginInvoke 重注册在 ABM_REMOVE 后复活 AppBar
+
+    /// <summary>首现弹入是否已播（Aurora 主题一次性入场，窗口生命周期内只播一次）。</summary>
+    private bool _entrancePlayed;
+
+    /// <summary>自动隐藏开关（设置项 DockAutoHide）。</summary>
+    private bool _autoHide;
+
+    /// <summary>当前是否处于"已滑下去"的状态（true 时 AssertWindowRect 不得把窗口拉回来）。</summary>
+    private bool _autoHideHidden;
+
+    /// <summary>自动隐藏轮询（80ms：够跟手，又不会让 CPU 有感知）。</summary>
+    private System.Windows.Threading.DispatcherTimer? _autoHideTimer;
+
+    /// <summary>
+    /// 条件隐藏档（smart/fullscreen/maximized/edge/modifier/desktop）的轮询，与自动隐藏同一节奏。
+    /// 每拍采集事实（光标/前台/最大化/修饰键）→ Core <see cref="DockHideModeDecider"/> 判定 → 滑下/滑回；
+    /// auto 档不走这里（它有自己的延迟/唤出状态机）。
+    /// </summary>
+    private System.Windows.Threading.DispatcherTimer? _conditionTimer;
+
+    /// <summary>当前生效的隐藏模式（规范化串；Core <see cref="DockHideModes.Known"/> 白名单内）。</summary>
+    private string _hideMode = "off";
+
+    /// <summary>双击边缘切换档（edge）的状态：true = 已被双击唤出，false = 只留缝。</summary>
+    private bool _edgeToggleVisible;
+
+    /// <summary>本 Dock 所在显示器的句柄（每屏覆盖配置解析与"最大化在本屏"判据用）。</summary>
+    private IntPtr _monitorHandle;
+
+    /// <summary>每屏覆盖配置的解析结果与已生效值（Core <see cref="DockScreenPlan"/>，null = 尚未解析/已消费）。</summary>
+    private DockScreenPlan? _appliedPlan;
+    private DockScreenPlan? _pendingPlan;
+
+    /// <summary>
+    /// 隐藏延迟状态机（Core <see cref="AutoHideDelayState"/>，替代旧的 _cursorLeftAt + 硬编码 500ms）：
+    /// 光标离开满设置项 <c>DockAutoHideDelayMs</c> 才滑下。判定在 Core，时间由 TickAutoHide 传入。
+    /// </summary>
+    private readonly AutoHideDelayState _hideDelay = new();
+
+    /// <summary>
+    /// 唤出状态机（Core <see cref="AutoHideRevealState"/>）：Dock 已滑下后按设置项
+    /// <c>DockAutoHideReveal</c>（touch/dwell/double）判定这次触底要不要滑回。默认 touch = 历史行为。
+    /// </summary>
+    private readonly AutoHideRevealState _reveal = new();
+
+    /// <summary>滑下去后仍露在屏幕内的像素高度。</summary>
+    private const int AutoHideSliverPixels = 4;
+    private HwndSource? _source;
+    private NativeMaterialHost? _nativeMaterial;
+
+    public DockWindow(TaskbarManager? taskbar = null, Animation.MinimizeAnimator? animator = null,
+        WindowTracker? tracker = null, SmtcService? smtc = null, MediaViewModel? mediaVm = null,
+        string? monitorSelector = null)
+    {
+        _taskbar = taskbar;
+        _animator = animator;
+        _monitorSelector = string.IsNullOrWhiteSpace(monitorSelector) ? null : monitorSelector.Trim();
+        _ownsSharedServices = tracker is null;   // 全套注入或全套自建（App 只成套传），以 tracker 为代表判定
+        _tracker = tracker ?? new WindowTracker();
+        _smtc = smtc ?? new SmtcService();
+        _mediaVm = mediaVm ?? new MediaViewModel(_smtc, Dispatcher); // 先于 InitializeComponent：XAML 模板可能经 RelativeSource 绑定 MediaVm
+        InitializeComponent();
+        // 分隔符初值取**设置指向的那个主题**（与下面 ThemeManager.Apply 同一表达式），不读 ThemeManager.Current：
+        // 此刻本窗口还没应用主题，读 Current 会拿到上一/默认主题 → 首帧少画/多画一道细线。
+        _vm = new DockViewModel(_tracker,
+            separatorsEnabled: SettingsService.ThemeDefinitionOf(SettingsService.Current).DockSeparatorsEnabled,
+            importTaskbarPins: SettingsService.Current.ImportTaskbarPins,
+            frameProvider: hwnd => _animator?.LastFrameFor(hwnd));
+        DataContext = _vm;
+        WireSurface();
+        // alpha.26：最小化区实况 tile —— 条目集合一变就对齐（最小化/还原/关闭都经 Reconcile 写回 Items）
+        _vm.Items.CollectionChanged += (_, _) => QueueMinTileSync();
+        // 【终审 I-6】ThemeChanged 静态订阅移出构造函数（原 :94）：构造期任何一步抛异常都会留下
+        // 一个半构造、无 HWND 却永久挂在静态事件上的僵尸实例——与 TopBarWindow/EnsureTopBar、
+        // SwitcherService 已修过的同类泄漏一致。订阅移到 OnSourceInitialized（Show/Handle 生成时），
+        // 初值主题在那里显式 ApplyTheme(ThemeManager.Current)；解绑在 OnClosed，两者对称。
+        // 【终审 I-6 的同类残留】TaskbarPolicyApplied 原先订阅在**构造函数**里（本方法末尾），而解绑在 OnClosed：
+        // 构造期 ThemeManager.Apply / Loaded 接线若抛异常，这个半构造、无 HWND 的实例就永久挂在
+        // _taskbar（活得比窗口久的宿主）上——OnClosed 永远不会走，之后每次策略变更都对一个僵尸实例
+        // 执行 Reassert + PositionAsAppBar。与 ThemeChanged 那条已修的泄漏同型，故订阅一并移到
+        // OnSourceInitialized（Show/句柄生成时），与 OnClosed 的解绑对称。
+        // 任务栏策略切换/explorer 重启重放（TaskbarManager.Apply/Restore → PolicyApplied）后，
+        // AppBar 条带需重新协商：Hide 释放了底部条带预留 → Dock 贴真底；Keep → 让位在任务栏上方。
+        // 初始主题：设置项驱动（settings.json 的 Theme，缺省鸿蒙；设置窗口切换即持久化）
+        ThemeManager.Apply(SettingsService.ThemeDefinitionOf(SettingsService.Current), Application.Current);
+        Loaded += OnWindowLoaded;
+    }
+
+    /// <summary>Dock 数据源（设置窗口编辑固定应用后经此重载固定块）。</summary>
+    public DockViewModel Vm => _vm;
+
+    /// <summary>媒体 VM（XAML 媒体条目模板经 RelativeSource 绑定到本属性）。</summary>
+    public MediaViewModel MediaVm => _mediaVm;
+
+    /// <summary>窗口跟踪器（顶栏"窗口"菜单数据源/激活动作，Task 9）。</summary>
+    public WindowTracker Tracker => _tracker;
+
+    /// <summary>顶栏媒体迷你项点击：展开 Dock 媒体面板（无会话时面板自身按 HasSession 折叠，不展开）。
+    /// 复用既有 PositionMediaPanel 落位（面板锚在 Dock 胶囊上方），顶栏仅提供触发入口。</summary>
+    public void OpenMediaPanelFromTopBar()
+    {
+        if (!_mediaVm.HasSession) return;
+        ShowMediaPanel();
+    }
+
+    /// <summary>
+    /// 该运行窗口条目在<b>屏幕</b>上的物理像素矩形 —— genie 动画的落点（要的是图标那一格，
+    /// 不只是一个点：漏斗必须收到图标的真实宽度，收成一个点会看着像被吸尘器吸走）。
+    /// 找不到条目（窗口还没进 Dock、或刚被关掉）返回 null，调用方自己决定退路。
+    /// </summary>
+    public System.Windows.Rect? IconRectPhysical(IntPtr hwnd)
+    {
+        var item = _vm.Items.FirstOrDefault(i => i.WindowHandle == hwnd);
+        if (item is null) return null;
+        var bounds = Surface.GetItemBounds(item);
+        if (bounds is null) return null;
+        // PointToScreen 只搬左上角；宽高要按本窗口 DPI 换算成物理像素
+        var topLeft = PointToScreen(new System.Windows.Point(bounds.Value.X, bounds.Value.Y));
+        var dpi = PointToScreen(new System.Windows.Point(bounds.Value.X + bounds.Value.Width, bounds.Value.Y));
+        var dpiY = PointToScreen(new System.Windows.Point(bounds.Value.X, bounds.Value.Y + bounds.Value.Height));
+        return new System.Windows.Rect(topLeft.X, topLeft.Y, dpi.X - topLeft.X, dpiY.Y - topLeft.Y);
+    }
+
+    // ---------- 最小化区实况 tile（alpha.26）----------
+
+    /// <summary>去重排队：同一帧多次触发只跑一次（MouseMove 每帧都来，真活儿交给 Background 队列）。</summary>
+    private void QueueMinTileSync()
+    {
+        if (_minTiles is null || _minTilesSyncQueued) return;
+        _minTilesSyncQueued = true;
+        Dispatcher.BeginInvoke(() =>
+        {
+            _minTilesSyncQueued = false;
+            SyncMinTiles();
+        }, DispatcherPriority.Background);
+    }
+
+    /// <summary>把当前最小化条目集合与物理矩形交给 tile 层（增量对齐，可高频调用）。</summary>
+    private void SyncMinTiles()
+    {
+        if (_minTiles is null) return;
+        try
+        {
+            _minTileScratch.Clear();
+            foreach (var item in _vm.Items)
+            {
+                if (item.Kind != DockItemKind.MinimizedWindow) continue;
+                if (item.WindowHandle is not { } handle || handle == IntPtr.Zero) continue;
+                if (IconRectPhysical(handle) is not { } rect) continue;
+                _minTileScratch.Add((handle, rect));
+            }
+            _minTiles.Sync(_minTileScratch);
+        }
+        catch (Exception ex)
+        {
+            // tile 同步失败不影响 Dock 本体：记一条，下个 200ms 周期照常重试
+            Logger.Warn($"最小化 tile 同步异常（已隔离）：{ex.GetType().Name} {ex.Message}");
+        }
+    }
+
+    /// <summary>DockSurface 接线：光标取样 + 左键激活 + 右键条目菜单 + 悬停预览（Task 13）+ 拖放固定/排序（v3 T5）。</summary>
+    private void WireSurface()
+    {
+        Surface.Sigma = SigmaInPitches;
+        Surface.CursorProvider = SurfaceCursorXDip;   // 真实物理光标（含 AppBar 矩形守卫），见放大场注释
+        Surface.Activated = ActivateItem;
+        Surface.ContextRequested = OpenItemContextMenu;
+        // 悬停期前台快照：光标在条带上移动时前台必然还是用户的窗口（点击把前台换给 Dock 是
+        // 下一瞬间的事）。这条样本比 WinEvent 通知更贴近点击时刻，也不受事件送达时机影响。
+        Surface.MouseMove += SnapshotForegroundAtHover;
+        // 悬停预览：MouseMove 判定当前条目并起/重置 350ms 驻留；离开条目行即收起。
+        Surface.MouseMove += OnSurfaceMouseMove;
+        // alpha.26：放大场逐帧挪动条目，最小化区实况 tile 同步跟手（去重排队，一帧最多一次）
+        Surface.MouseMove += (_, _) => QueueMinTileSync();
+        Surface.MouseLeave += (_, _) => CancelPreview();
+
+        // 内部拖拽（排序 / 转固定 / 甩出取消固定）的完成回调：策略在窗口，几何与状态机在渲染器。
+        Surface.DragStarted = _ => CancelPreview();   // 拖动时绝不弹悬停预览
+        Surface.ItemDroppedInside = OnItemDroppedInside;
+        Surface.ItemDraggedOut = OnItemDraggedOut;
+
+        // 外部拖入（Explorer/桌面 → Dock）：Surface 是分层窗口里唯一实底可命中的元素，Drop 目标挂它。
+        // 分层 + topmost + 非激活窗口接 shell 拖放全程不 Activate（drop 不抢焦点，各处理器都不调激活）。
+        Surface.AllowDrop = true;
+        Surface.DragOver += OnSurfaceDragOver;
+        Surface.Drop += OnSurfaceDrop;
+        Surface.DragLeave += (_, _) => Surface.HideInsertionIndicator();
+    }
+
+    // ---------- 拖放固定 / 排序 / 取消固定（v3 T5）----------
+
+    /// <summary>
+    /// 外部拖过的连续事件：只做"取一次 FileDrop + 探针 + 移动指示条 + 设效果"，绝不重建条目列表、
+    /// 不每事件分配（GetData 跨进程可能抛或返残缺，全程守卫）。回收站格上恒为 None（Dock 不接删除动词）。
+    /// </summary>
+    private void OnSurfaceDragOver(object sender, DragEventArgs e)
+    {
+        e.Effects = DragDropEffects.None;
+        try
+        {
+            if (e.Data.GetDataPresent(DataFormats.FileDrop))
+            {
+                var probe = Surface.ProbeDrop(e.GetPosition(Surface));
+                if (probe.OverTrash) Surface.HideInsertionIndicator();
+                else
+                {
+                    Surface.ShowInsertionIndicator(probe.PinnedSlot);
+                    e.Effects = DragDropEffects.Copy;
+                }
+            }
+            else Surface.HideInsertionIndicator();
+        }
+        catch (Exception ex)
+        {
+            // 源进程在拖拽中途退出 / 数据不可达：静默降级为 None，绝不让拖放异常波及 AppBar 常驻窗口。
+            e.Effects = DragDropEffects.None;
+            Logger.Warn($"Dock 拖放 DragOver 取数据失败: {ex.Message}");
+        }
+        e.Handled = true;
+    }
+
+    /// <summary>外部放下：解析 FileDrop → 逐个落位固定；回收站格上丢弃为 no-op（不删除任何文件）。</summary>
+    private void OnSurfaceDrop(object sender, DragEventArgs e)
+    {
+        Surface.HideInsertionIndicator();
+        string[]? files = null;
+        try
+        {
+            if (e.Data.GetDataPresent(DataFormats.FileDrop))
+                files = e.Data.GetData(DataFormats.FileDrop) as string[];
+        }
+        catch (Exception ex)
+        {
+            Logger.Warn($"Dock 拖放 Drop 取数据失败: {ex.Message}");
+            return;
+        }
+        if (files is null || files.Length == 0) return;
+
+        var probe = Surface.ProbeDrop(e.GetPosition(Surface));
+        if (probe.OverTrash)
+        {
+            Logger.Info($"拖到回收站：{files.Length} 项，执行 no-op（设计：Dock 不调用 shell 删除动词）");
+            return;
+        }
+        var slot = probe.PinnedSlot;
+        foreach (var file in files)
+        {
+            switch (_vm.DropPinAt(file, slot, out var reason))
+            {
+                case DockViewModel.PinDropResult.Inserted:
+                    Logger.Info($"拖入固定：{file} → 固定块槽 {slot}"); slot++; break;
+                case DockViewModel.PinDropResult.MovedExisting:
+                    Logger.Info($"拖入重复：{file} 已固定 → 移到槽 {slot}（不加第二条）"); slot++; break;
+                default:
+                    Logger.Warn($"拖入被拒：{reason}"); break;
+            }
+        }
+    }
+
+    /// <summary>内部拖拽落在条带内：固定项→排序；运行窗口项→落在固定块区间才转固定，否则取消；回收站格→no-op。</summary>
+    private void OnItemDroppedInside(DockItem dragged, DockSurface.DropProbe probe)
+    {
+        if (probe.OverTrash)
+        {
+            Logger.Info($"拖到回收站：{dragged.Label}，执行 no-op（设计：不删除文件、不取消固定）");
+            return;
+        }
+        switch (dragged.Kind)
+        {
+            case DockItemKind.Pinned:
+                var from = Surface.PinnedIndexOf(dragged);
+                if (from >= 0 && _vm.MovePinned(from, probe.PinnedSlot))
+                    Logger.Info($"Dock 排序：{dragged.Label} 固定槽 {from} → {probe.PinnedSlot}");
+                break;
+
+            case DockItemKind.Window:
+                // 裁定（macOS 语义）：把运行窗口的图标拖进**固定块区间**即在该位置钉住它；
+                // 落在运行区/后缀区则取消——瞬时窗口的顺序由系统跟踪，重排无意义。
+                if (!probe.WithinPinnedRegion || dragged.LaunchPath.Length == 0)
+                {
+                    Logger.Info("拖拽运行窗口到固定块外：取消（不固定、不排序瞬时窗口）");
+                    break;
+                }
+                var r = _vm.DropPinAt(dragged.LaunchPath, probe.PinnedSlot, out var why);
+                Logger.Info(r switch
+                {
+                    DockViewModel.PinDropResult.Inserted => $"拖拽转固定：{dragged.LaunchPath} → 固定块槽 {probe.PinnedSlot}",
+                    DockViewModel.PinDropResult.MovedExisting => $"拖拽转固定：{dragged.Label} 已在固定块 → 移到槽 {probe.PinnedSlot}",
+                    _ => $"拖拽转固定被拒：{why}",
+                });
+                break;
+        }
+    }
+
+    /// <summary>甩出 Dock（释放点在条带外）：固定项→取消固定（macOS flick-out）；运行窗口项→无操作（本就没钉）。</summary>
+    private void OnItemDraggedOut(DockItem dragged)
+    {
+        if (dragged.Kind == DockItemKind.Pinned)
+        {
+            _vm.Unpin(dragged.LaunchPath);
+            Logger.Info($"甩出 Dock 取消固定：{dragged.Label}");
+        }
+    }
+
+    // ---------- 生命周期 / AppBar ----------
+
+    protected override void OnSourceInitialized(EventArgs e)
+    {
+        base.OnSourceInitialized(e);
+        _hwnd = new WindowInteropHelper(this).EnsureHandle();
+        _source = HwndSource.FromHwnd(_hwnd);
+        _source?.AddHook(WndProc);
+        _appbarMsg = NativeMethods.RegisterWindowMessage("AppBarMessage");
+        _taskbarCreatedMsg = NativeMethods.RegisterWindowMessage("TaskbarCreated");
+        RegisterAndPositionAppBar();
+        // 主题初值显式落地 + 静态订阅放最后（终审 I-6，与 OnClosed 解绑对称）：构造期 ThemeManager.Apply
+        // 只更新全局资源字典，本窗口的亚克力/间距/放大参数从这里开始由 ThemeChanged 驱动，不再硬编码。
+        EnsureNativeMaterial();
+        ApplyTheme(ThemeManager.Current);
+        ThemeManager.ThemeChanged += OnThemeChanged;
+        // 图标主题覆盖（编辑器/导入主题包）变更 → 重建条目容器让图标绑定按新覆盖重取（与 ThemeChanged
+        // 同一条时序纪律：句柄已生成才订阅，OnClosed 对称解绑；通知链在 IconThemeService.NotifyChanged）。
+        IconThemeService.Changed += OnIconThemeChanged;
+        // 策略重放订阅与上面的 ThemeChanged 同一条时序纪律：句柄已生成、构造已完成，
+        // OnClosed 里有对称的一句解绑（半构造实例绝不挂在宿主事件上）。
+        if (_taskbar is not null) _taskbar.PolicyApplied += OnTaskbarPolicyApplied;
+        // 启动台关闭 → 复位本实例的放大场（多屏实例化：每实例各订各的，关闭通知全员复位）。
+        Launcher.LaunchpadWindow.Dismissed += OnLaunchpadDismissed;
+
+        // 角标（Phase 7-T2）：标题解析是纯函数，服务只做定时采样；关窗口时在 OnClosed 里停掉。
+        _badges = new DockBadgeService(_vm, Surface, Dispatcher);
+        _progress = new TaskbarProgressService(Surface, Dispatcher);
+        // 回收站满/空轮询（alpha.29 残项清零）：构造即首拍校正，满/空翻转换回收站槽实例；
+        // 关窗口时在 OnClosed 里停掉（与 _badges/_progress 同一生命周期纪律）。
+        _recycleBinMonitor = new RecycleBinMonitor(_vm, Dispatcher);
+        InitWidget();
+        ApplyHideMode(SettingsService.Current.DockHideMode, persist: false);
+        ApplyEdge(SettingsService.Current.DockEdge, persist: false);
+        // alpha.26：最小化区实况 tile 宿主（DWM 缩略图、输入全穿透），宽高比取动画器的最后已知矩形
+        _minTiles = new MinimizedTileLayer(_hwnd, hwnd => _animator?.LastKnownRectPhysical(hwnd));
+        _minTilesTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(200) };
+        _minTilesTimer.Tick += (_, _) => SyncMinTiles();
+        _minTilesTimer.Start();
+        SyncMinTiles();
+        // Aurora 首现弹入：OnSourceInitialized 在 Show() 的首次绘制之前，先落 +12 DIP 初值再启动
+        // 弹簧，首帧就是"面板在下方"的起点（不会闪一帧最终位置）。非 Aurora 主题内部直接返回。
+        PlayPanelEntrance();
+    }
+
+    // ---------- 左右停靠（实验） ----------
+
+    /// <summary>当前停靠边：bottom / left / right（实验功能，默认 bottom）。</summary>
+    public string DockEdge { get; private set; } = "bottom";
+
+    /// <summary>
+    /// 切换停靠边（实验）。左右边用竖排面板，并释放底部 AppBar 预留带（浮在桌面上，不占工作区）。
+    /// <para>
+    /// 【为什么另起一块面板】DockSurface 的放大场、倒影、拖放槽位全按水平轴写死；
+    /// 在同一控件里加一个"垂直模式"要同时改布局/命中/缩放原点，风险是把默认底部停靠一起弄坏。
+    /// 实验版先给"能停到左右边且点击可用"，放大与倒影明确不做。
+    /// </para>
+    /// </summary>
+    public void ApplyEdge(string edge, bool persist = true)
+    {
+        var normalized = edge?.Trim().ToLowerInvariant() switch
+        {
+            "left" => "left",
+            "right" => "right",
+            _ => "bottom"
+        };
+
+        DockEdge = normalized;
+        if (persist)
+        {
+            SettingsService.UpdateAndSave(SettingsService.Current with { DockEdge = normalized });
+        }
+
+        var vertical = normalized != "bottom";
+        Surface.Visibility = vertical ? Visibility.Collapsed : Visibility.Visible;
+        VerticalList.Visibility = vertical ? Visibility.Visible : Visibility.Collapsed;
+
+        if (!vertical)
+        {
+            RegisterAndPositionAppBar();   // 回到底部：恢复 AppBar 预留带
+            Logger.Info("Dock 停靠边：底部（标准模式）");
+            return;
+        }
+
+        UnregisterAppBar();                // 左右边不占工作区：先释放底部条带
+        PositionAsVerticalEdge(normalized);
+        Logger.Info($"Dock 停靠边：{(normalized == "left" ? "左侧" : "右侧")}（实验：无放大/无倒影）");
+    }
+
+    /// <summary>把竖排面板贴到工作区左/右缘并垂直居中；尺寸按条目数算，超出时截到工作区高度。</summary>
+    private void PositionAsVerticalEdge(string edge)
+    {
+        if (!NativeMethods.GetCursorPos(out var cursor)) return;
+        var area = MonitorGeometry.AreaForPoint(cursor.X, cursor.Y);
+        if (area is null) return;
+
+        var monitor = area.Value;
+        var scale = monitor.DpiScale > 0 ? monitor.DpiScale : 1.0;
+
+        // 尺寸自己算，不等测量：刚把 Surface 收起来时 ItemsControl 的 ActualHeight 还是旧值（0），
+        // 用它定窗口高度会得到"只有第一个图标"的窄条（真机截图踩到过）。
+        var icon = Surface.IconSize > 0 ? Surface.IconSize : 44;
+        var itemHeight = icon + 30;                     // 图标 + 标签 + 间距
+        var count = Math.Max(1, _vm.Items.Count);
+        // 宽度要容下模板里的 112 DIP 内容（图标 + 名字）：窄了名字会被裁掉，只剩一排图标。
+        var widthDip = Math.Max(112, icon + 68);
+        var heightDip = Math.Min(count * itemHeight + 20, (monitor.Work.Height / scale) - 24);
+
+        VerticalList.Width = widthDip;
+        VerticalList.Height = heightDip;
+        Width = widthDip;
+        Height = heightDip;
+        UpdateLayout();
+
+        var heightPx = (int)Math.Round(heightDip * scale);
+        var widthPx = (int)Math.Round(widthDip * scale);
+        var topPx = monitor.Work.Top + Math.Max(0, (monitor.Work.Height - heightPx) / 2);
+        var leftPx = edge == "left"
+            ? monitor.Work.Left + 6
+            : monitor.Work.Right - widthPx - 6;
+
+        NativeMethods.SetWindowPos(_hwnd, IntPtr.Zero, leftPx, topPx, widthPx, heightPx,
+            NativeMethods.SwpNozorder | NativeMethods.SwpNoactivate);
+    }
+
+    /// <summary>当前被放大的竖排条目容器（null = 没有）。</summary>
+    private FrameworkElement? _verticalHovered;
+
+    /// <summary>
+    /// 竖排面板的悬停放大（实验）：鼠标下的条目放大到 1.12，其余保持原样。
+    /// <para>
+    /// 这里**不是** DockSurface 的连续高斯放大场——那套几何按水平行 + 前缀和推挤写的；
+    /// 实验版用最朴素的"当前条目放大"，保证不碰主路径，观感也够用。
+    /// </para>
+    /// </summary>
+    private void VerticalList_Move(object sender, System.Windows.Input.MouseEventArgs e)
+    {
+        var hit = (e.OriginalSource as FrameworkElement);
+        while (hit is not null and not System.Windows.Controls.ContentPresenter)
+        {
+            hit = System.Windows.Media.VisualTreeHelper.GetParent(hit) as FrameworkElement;
+        }
+
+        var container = hit as FrameworkElement;
+        if (ReferenceEquals(container, _verticalHovered))
+        {
+            return;
+        }
+
+        SetVerticalScale(_verticalHovered, 1.0);
+        _verticalHovered = container;
+        SetVerticalScale(_verticalHovered, 1.12);
+    }
+
+    private void VerticalList_Leave(object sender, System.Windows.Input.MouseEventArgs e)
+    {
+        SetVerticalScale(_verticalHovered, 1.0);
+        _verticalHovered = null;
+    }
+
+    private static void SetVerticalScale(FrameworkElement? element, double scale)
+    {
+        if (element is null) return;
+        if (element.RenderTransform is not ScaleTransform st || st.IsFrozen)
+        {
+            st = new ScaleTransform(1, 1);
+            element.RenderTransformOrigin = new Point(0.5, 0.5);
+            element.RenderTransform = st;
+        }
+
+        st.ScaleX = scale;
+        st.ScaleY = scale;
+    }
+
+    /// <summary>竖排面板左键：直接用 DataContext 找到条目（不经过 DockSurface 的命中表）。</summary>
+    private void VerticalList_Click(object sender, System.Windows.Input.MouseButtonEventArgs e)
+    {
+        if ((e.OriginalSource as FrameworkElement)?.DataContext is DockItem item)
+        {
+            ActivateItem(item);
+            e.Handled = true;
+        }
+    }
+
+    private void VerticalList_RightUp(object sender, System.Windows.Input.MouseButtonEventArgs e)
+    {
+        if ((e.OriginalSource as FrameworkElement)?.DataContext is DockItem item)
+        {
+            OpenItemContextMenu(item, e.GetPosition(Surface));
+            e.Handled = true;
+        }
+    }
+
+    /// <summary>
+    /// 自动隐藏（P3-T5 隐藏模式之一）：光标不在 Dock 上满 <c>DockAutoHideDelayMs</c>（默认 500ms）
+    /// 就滑下去只留 4px；唤回方式按 <c>DockAutoHideReveal</c>（touch/dwell/double，默认触底即回）。
+    /// <para>
+    /// 【为什么保留 AppBar 预留带】释放预留带要 ABM_REMOVE + 重注册，会触发 shell 重排；
+    /// 本机还叠着任务栏策略（隐藏/自动隐藏）与顶栏，反复注册最容易把布局搞乱。
+    /// 因此这一版是"视觉隐藏、空间保留"，代价与边界写进设置项注释，不假装是 macOS 的完整语义。
+    /// </para>
+    /// </summary>
+    public void ApplyAutoHide(bool enabled, bool persist = true)
+    {
+        _autoHide = enabled;
+        if (persist)
+        {
+            SettingsService.UpdateAndSave(SettingsService.Current with { DockAutoHide = enabled });
+        }
+
+        if (!enabled)
+        {
+            _autoHideTimer?.Stop();
+            _autoHideTimer = null;
+            _autoHideHidden = false;
+            _hideDelay.Reset();
+            _reveal.Reset();
+            AssertWindowRect();
+            Logger.Info("Dock 自动隐藏已关闭");
+            return;
+        }
+
+        // 唤出门按当前设置换模式（touch = 历史行为）；换模式内部会 Reset，防旧模式的会话残留串味。
+        _reveal.SetMode(AutoHidePlan.RevealModeOf(SettingsService.Current.DockAutoHideReveal));
+        _hideDelay.Reset();
+        _autoHideTimer ??= new System.Windows.Threading.DispatcherTimer(
+            TimeSpan.FromMilliseconds(80), System.Windows.Threading.DispatcherPriority.Background,
+            (_, _) => TickAutoHide(), Dispatcher);
+        _autoHideTimer.Start();
+        Logger.Info($"Dock 自动隐藏已开启（光标离开 {SettingsService.Current.DockAutoHideDelayMs}ms 后滑下，" +
+                    $"唤出方式 {SettingsService.Current.DockAutoHideReveal}）");
+    }
+
+    /// <summary>
+    /// 设置页改动唤出方式后的即时生效入口：只换唤出门的模式，不动隐藏状态与 AppBar。
+    /// 延迟项不需要专门入口——TickAutoHide 每拍读 Current，下一拍自然按新值生效。
+    /// </summary>
+    public void ApplyAutoHideReveal(string? reveal)
+    {
+        var mode = AutoHidePlan.RevealModeOf(reveal);
+        _reveal.SetMode(mode);
+        Logger.Info($"Dock 唤出方式：{mode}");
+    }
+
+    /// <summary>
+    /// 切换到指定隐藏模式（对标 MyDockFinder 共 9 档，白名单与判定在 Core
+    /// <see cref="DockHideModes"/>/<see cref="DockHideModeDecider"/>）：
+    /// <c>off</c> 总是显示、<c>auto</c> 自动隐藏（含可调延迟与 touch/dwell/double 唤出——
+    /// "悬停触发延迟（延迟可调）"落在这档）、<c>smart</c> 智能隐藏（窗口遮挡才让位）、
+    /// <c>fullscreen</c> 全屏应用时隐藏、<c>maximized</c> 窗口最大化时隐藏、<c>edge</c> 双击边缘切换、
+    /// <c>modifier</c> 按住修饰键临时显示、<c>desktop</c> 仅桌面时显示、<c>dim</c> 半透明。
+    /// 模式互斥，切换时先把上一种的副作用还原（不透明恢复、窗口归位、状态清零）。
+    /// </summary>
+    public void ApplyHideMode(string mode, bool persist = true)
+    {
+        var normalized = DockHideModes.CanonicalOf(mode);
+        if (persist)
+        {
+            SettingsService.UpdateAndSave(SettingsService.Current with
+            {
+                DockHideMode = normalized,
+                DockAutoHide = normalized == DockHideModes.Auto   // 旧布尔项跟随新模式，避免两处不一致
+            });
+        }
+
+        var kind = DockHideModes.KindOf(normalized);
+        _hideMode = normalized;
+
+        // 先回到"常显 + 不透明 + 窗口归位"，再按新模式生效：切模式不该留下上一种的残影。
+        // edge 档的切换状态随模式切换清零（重新进入从"藏"起步，双击才唤出）。
+        Opacity = 1.0;
+        _edgeToggleVisible = false;
+        ApplyAutoHide(kind == DockHideModeKind.AutoHide, persist: false);
+
+        StopDimTimer();
+        StopConditionTimer();
+        switch (kind)
+        {
+            case DockHideModeKind.Dim:
+                StartDimTimer();
+                break;
+
+            // 条件档共用一只轮询：每拍采事实 → Core 判定 → 滑下/滑回。
+            case DockHideModeKind.Smart:
+            case DockHideModeKind.Fullscreen:
+            case DockHideModeKind.Maximized:
+            case DockHideModeKind.EdgeToggle:
+            case DockHideModeKind.ModifierHold:
+            case DockHideModeKind.DesktopOnly:
+                StartConditionTimer();
+                break;
+        }
+
+        // 双击边缘档需要一条实底可落双击（滑下后窗口其余部分全是点击穿透区），其余模式不占命中。
+        EdgeHitStrip.Visibility = kind == DockHideModeKind.EdgeToggle && DockEdge == "bottom"
+            ? Visibility.Visible
+            : Visibility.Collapsed;
+
+        Logger.Info($"Dock 隐藏模式：{normalized}");
+    }
+
+    private System.Windows.Threading.DispatcherTimer? _dimTimer;
+
+    private void StartDimTimer()
+    {
+        _dimTimer ??= new System.Windows.Threading.DispatcherTimer(
+            TimeSpan.FromMilliseconds(120), System.Windows.Threading.DispatcherPriority.Background,
+            (_, _) => TickDim(), Dispatcher);
+        _dimTimer.Start();
+    }
+
+    private void StopDimTimer()
+    {
+        _dimTimer?.Stop();
+        _dimTimer = null;
+    }
+
+    private void StartConditionTimer()
+    {
+        _conditionTimer ??= new System.Windows.Threading.DispatcherTimer(
+            TimeSpan.FromMilliseconds(80), System.Windows.Threading.DispatcherPriority.Background,
+            (_, _) => TickConditionHide(), Dispatcher);
+        _conditionTimer.Start();
+    }
+
+    private void StopConditionTimer()
+    {
+        _conditionTimer?.Stop();
+        _conditionTimer = null;
+    }
+
+    /// <summary>半透明模式：光标不在 Dock 上时降到 45%，移上去立刻回 100%。
+    /// 仅底部停靠生效——竖排面板从未更新 _screenRect（那是底部 AppBar 的命中基准），拿它判"在不在 Dock 上"必然错。</summary>
+    private void TickDim()
+    {
+        if (_closing || DockEdge != "bottom" || !NativeMethods.GetCursorPos(out var cursor))
+        {
+            return;
+        }
+
+        var inside = cursor.X >= _screenRect.Left && cursor.X <= _screenRect.Right
+                     && cursor.Y >= _screenRect.Top && cursor.Y <= _screenRect.Bottom;
+        var target = inside ? 1.0 : 0.45;
+        if (Math.Abs(Opacity - target) > 0.01)
+        {
+            Opacity = target;
+        }
+    }
+
+    private void TickAutoHide()
+    {
+        // 竖排面板（左右停靠）不参与隐藏：它的落位不经 _screenRect/_windowTarget（底部 AppBar 专用基准），
+        // 在这里判"光标在不在"必然拿旧矩形算错。实验版左右停靠本就声明无隐藏语义。
+        if (_closing || !_autoHide || DockEdge != "bottom" || !NativeMethods.GetCursorPos(out var cursor))
+        {
+            return;
+        }
+
+        // 命中判据用窗口矩形（含顶部放大余量）：光标在放大后的图标上也算"在 Dock 上"。
+        var inside = cursor.X >= _screenRect.Left && cursor.X <= _screenRect.Right
+                     && cursor.Y >= _screenRect.Top && cursor.Y <= _screenRect.Bottom;
+        var now = Environment.TickCount64;
+
+        if (_autoHideHidden)
+        {
+            // 触底命中区与历史一致（留 2px 容差，鼠标贴边的手感不需要精确到像素）；
+            // 要不要立即滑回交给唤出门：touch=触底即回，dwell=停留 300ms，double=二次触发。
+            var hit = cursor.Y >= _screenRect.Bottom - AutoHideSliverPixels - 2 || inside;
+            if (_reveal.Update(hit, now))
+            {
+                ShowFromAutoHide();
+            }
+
+            return;
+        }
+
+        if (_hideDelay.Update(inside, now, SettingsService.Current.DockAutoHideDelayMs))
+        {
+            HideToAutoHide();
+        }
+    }
+
+    /// <summary>诊断入口：不等 500ms 计时，直接滑下去（截图验收用）。</summary>
+    public void ForceAutoHideForDiagnostics() => HideToAutoHide();
+
+    private void HideToAutoHide()
+    {
+        if (_autoHideHidden || _windowTarget.Width <= 0)
+        {
+            return;
+        }
+
+        _autoHideHidden = true;
+        _hideDelay.Reset();
+        _reveal.Reset();
+        var top = _windowTarget.Bottom - AutoHideSliverPixels;
+        NativeMethods.SetWindowPos(_hwnd, IntPtr.Zero, _windowTarget.Left, top,
+            _windowTarget.Width, _windowTarget.Height,
+            NativeMethods.SwpNozorder | NativeMethods.SwpNoactivate);
+        Logger.Info($"Dock 自动隐藏：滑下（露 {AutoHideSliverPixels}px）");
+    }
+
+    private void ShowFromAutoHide()
+    {
+        if (!_autoHideHidden)
+        {
+            return;
+        }
+
+        _autoHideHidden = false;
+        _hideDelay.Reset();
+        _reveal.Reset();
+        AssertWindowRect();
+        Logger.Info("Dock 自动隐藏：滑回");
+    }
+
+    // ---------- 条件隐藏档（smart/fullscreen/maximized/edge/modifier/desktop） ----------
+
+    /// <summary>
+    /// 条件档的每拍判定：这里<b>只做 Win32 取值与落地</b>（光标、前台、IsZoomed、修饰键，
+    /// smart 档再加一轮 EnumWindows 遮挡采样——窗口矩形集合经 DockHideFacts.OccludingBounds
+    /// 喂给 Core，背景窗口遮挡也让位），"这些事实意味着该不该藏"全在 Core
+    /// <see cref="DockHideModeDecider"/>（纯函数，单测穷举）。
+    /// 隐藏/还原复用自动隐藏的同一对原语（<see cref="HideToAutoHide"/>/<see cref="ShowFromAutoHide"/>），
+    /// 于是 _autoHideHidden 的几何护栏（AssertWindowRect/PositionAsAppBar 不拽回）对两种来源一致生效。
+    /// </summary>
+    private void TickConditionHide()
+    {
+        // 竖排面板不参与隐藏（同 TickAutoHide 的理由）；窗口未定位过时不判（没有可依据的矩形）。
+        if (_closing || DockEdge != "bottom" || !NativeMethods.GetCursorPos(out var cursor))
+        {
+            return;
+        }
+
+        // "光标在 Dock 上"判的是**可见面板带**（居中的那块玻璃，round5 缺陷 3 的根因修口），
+        // 不再拿整条全宽窗口矩形：那是 AppBar 机制的全宽条带（含左右两段不可见留白与顶部余量），
+        // 最大化窗口下用户常在底缘一带（滚动条/状态栏/文件列表尾部）操作，光标几乎总落在
+        // 这条带里 → RevealOrHide 恒判 Visible → maximized 档永远不藏、连一条滑下日志都没有
+        // （真机 03:09-03:12 会话 3 分钟零滑下日志的实锤）。贴边唤出口径不变：藏下后用户贴着
+        // 屏幕底边（全宽，露出的 4px 缝是全宽的）仍能唤回，与自动隐藏同一手感。
+        var panel = VisiblePanelScreenRect();
+        var inside = panel is { } p
+                     && cursor.X >= p.Left && cursor.X <= p.Right
+                     && cursor.Y >= p.Top && cursor.Y <= p.Bottom;
+        // 触底命中区与自动隐藏唤出同口径（留 2px 容差）：条件档藏下后用户贴边仍能唤回。
+        var atEdge = inside || cursor.Y >= _screenRect.Bottom - AutoHideSliverPixels - 2;
+
+        // 前台事实：与全屏避让同一个取值源（FullscreenProbe，只读 4~6 个查表式 API，80ms 轮询可承受）。
+        ForegroundWindow? foreground = null;
+        var maximizedOnDockMonitor = false;
+        var desktopOrNone = true;
+        if (FullscreenProbe.Read() is { } fg)
+        {
+            foreground = fg;
+            desktopOrNone = !fg.IsEligible || fg.IsShellOrDesktop;
+            if (fg.IsEligible && NativeMethods.IsZoomed(fg.Handle) && _monitorHandle != IntPtr.Zero)
+            {
+                // "窗口最大化时隐藏"只认 Dock 所在这块屏上的最大化（副屏最大化与本屏无关）。
+                maximizedOnDockMonitor = NativeMethods.MonitorFromWindow(
+                    fg.Handle, NativeMethods.MonitorDefaultToNearest) == _monitorHandle;
+            }
+        }
+
+        var mode = DockHideModes.KindOf(_hideMode);
+        var band = DockBandPhysical();
+
+        // 全量遮挡采样（alpha.29 残项清零，仅 smart 档）：EnumWindows 枚举可见顶层窗口，
+        // 与 Dock 面板带相交的合格窗口矩形作为 DockHideFacts.OccludingBounds 喂给 Core——
+        // 背景窗口压住 Dock 也让位（此前只看前台一扇，是代码注释自认的刻意近似）。
+        // 采样全程零 SEND 消息（OccludingWindowProbe），粗筛后多数窗口不进 DWM 查询；
+        // 其余档判定只看前台，不做这次扫描。
+        IReadOnlyList<PhysicalRect>? occluding = null;
+        if (mode == DockHideModeKind.Smart)
+        {
+            occluding = OccludingWindowProbe.CollectOverlappingBounds(band);
+        }
+
+        var decision = DockHideModeDecider.Evaluate(new DockHideFacts(
+            mode,
+            band,
+            _monitorRect,
+            foreground,
+            maximizedOnDockMonitor,
+            desktopOrNone,
+            IsModifierHeld(SettingsService.Current.DockModifierKey),
+            _edgeToggleVisible,
+            inside,
+            atEdge,
+            occluding));
+
+        if (decision == DockHideDecision.Hidden)
+        {
+            HideToAutoHide();
+        }
+        else if (decision == DockHideDecision.Visible && _autoHideHidden)
+        {
+            ShowFromAutoHide();
+        }
+        // Dimmed 不属于条件档的取值域（Dim 是独立模式）；万一出现按"不动"处理，下一拍重判。
+    }
+
+    /// <summary>可见面板带的物理矩形（窗口矩形减去顶部放大余量）：智能隐藏判"窗口盖住 Dock"的基准。
+    /// 与 AppBar 上报的预留带同源（<see cref="VisiblePanelDip"/> × 本屏缩放），不是整个窗口矩形。</summary>
+    private PhysicalRect DockBandPhysical()
+    {
+        if (_windowTarget.Width <= 0 || _windowTarget.Height <= 0) return default;
+        var scale = _monitorScale is { } s && s > 0 ? s : 1.0;
+        var panelPx = Math.Min((int)Math.Round(VisiblePanelDip() * scale), _windowTarget.Height);
+        return new PhysicalRect(_windowTarget.Left, _windowTarget.Bottom - panelPx,
+                                _windowTarget.Right, _windowTarget.Bottom);
+    }
+
+    /// <summary>
+    /// <b>可见玻璃面板</b>的屏幕物理矩形（<see cref="DockPanelRoot"/> 的实际渲染矩形，居中、
+    /// 真实面板宽）：条件档判"光标在 Dock 上"用。窗口矩形是 AppBar 机制的全宽条带，见
+    /// <see cref="TickConditionHide"/> 内注释（round5 缺陷 3）。面板没量出来（未完成一次布局 /
+    /// 窗口未定位）返回 null——调用方按"不在 Dock 上"处理，只损失一拍的唤出保持，无副作用。
+    /// </summary>
+    private (int Left, int Top, int Right, int Bottom)? VisiblePanelScreenRect()
+    {
+        if (DockPanelRoot.ActualWidth < 1 || DockPanelRoot.ActualHeight < 1) return null;
+        var tl = DockPanelRoot.PointToScreen(new Point(0, 0));
+        var br = DockPanelRoot.PointToScreen(new Point(DockPanelRoot.ActualWidth, DockPanelRoot.ActualHeight));
+        return ((int)tl.X, (int)tl.Y, (int)br.X, (int)br.Y);
+    }
+
+    /// <summary>临时显示修饰键此刻是否按住（左右键都算：用户不区分 L/R）。读异步键盘状态，无副作用。</summary>
+    private static bool IsModifierHeld(string key)
+    {
+        var (left, right) = key switch
+        {
+            "alt" => (NativeMethods.VkLMenu, NativeMethods.VkRMenu),
+            "shift" => (NativeMethods.VkLShift, NativeMethods.VkRShift),
+            "win" => (NativeMethods.VkLWin, NativeMethods.VkRWin),
+            _ => (NativeMethods.VkLControl, NativeMethods.VkRControl),
+        };
+        return (NativeMethods.GetAsyncKeyState(left) & 0x8000) != 0
+               || (NativeMethods.GetAsyncKeyState(right) & 0x8000) != 0;
+    }
+
+    /// <summary>
+    /// 双击边缘切换（edge 档）：双击 Dock 残留的边缘条带（滑下后 <see cref="EdgeHitStrip"/> 是窗口里
+    /// 唯一可命中的实底）或面板本体，在"显示 ↔ 只留缝"之间翻转。状态由本窗口持有，
+    /// 下一拍条件轮询按 <see cref="DockHideFacts.EdgeToggleVisible"/> 落地。
+    /// </summary>
+    protected override void OnPreviewMouseLeftButtonDown(MouseButtonEventArgs e)
+    {
+        base.OnPreviewMouseLeftButtonDown(e);
+        if (_hideMode != DockHideModes.Edge || DockEdge != "bottom" || e.ClickCount != 2) return;
+        _edgeToggleVisible = !_edgeToggleVisible;
+        if (_edgeToggleVisible) ShowFromAutoHide();
+        else HideToAutoHide();
+        e.Handled = true;
+        Logger.Info($"Dock 双击边缘切换：{(_edgeToggleVisible ? "显示" : "隐藏")}");
+    }
+
+    // ---------- 每显示器覆盖配置（对标 MyDockFinder 多屏；schema/解析在 Core DockMonitorProfiles） ----------
+
+    /// <summary>
+    /// 条带落位定下"在哪块屏"之后解析该屏的覆盖计划：序号精确匹配优先、主屏键其次、
+    /// 无匹配逐字段回落全局（单屏机器解析结果 == 全局值，行为零回归）。经 Dispatcher.Background
+    /// 落地——OnSourceInitialized 末尾还有全局的 ApplyHideMode/ApplyEdge 兜底初始化，
+    /// 每屏覆盖必须排在它们之后才能赢。
+    /// </summary>
+    private void QueueScreenPlanResolve(IntPtr monitor)
+    {
+        if (MonitorGeometry.Identify(monitor) is not { } identity) return;   // 拔屏瞬间：保持现有计划
+        var s = SettingsService.Current;
+        _pendingPlan = DockMonitorProfiles.Resolve(s.DockMonitorProfiles, identity.Index, identity.IsPrimary,
+            s.DockHideMode, s.DockEdge, s.DockIconSize);
+        Dispatcher.BeginInvoke(ApplyPendingScreenPlan, DispatcherPriority.Background);
+    }
+
+    /// <summary>把解析好的每屏计划落地（幂等：与已生效值相同即跳过）。只动运行态，不写设置文件。</summary>
+    private void ApplyPendingScreenPlan()
+    {
+        if (_closing || _pendingPlan is not { } plan) return;
+        _pendingPlan = null;
+        var previous = _appliedPlan;
+        if (previous is { } applied && applied == plan) return;
+        _appliedPlan = plan;
+
+        // 三项覆盖各自只在与当前值不同时落地，避免 ApplyEdge/ApplyHideMode 的重注册副作用空转。
+        if (plan.Edge != DockEdge)
+        {
+            ApplyEdge(plan.Edge, persist: false);
+        }
+        if (plan.HideMode != _hideMode)
+        {
+            ApplyHideMode(plan.HideMode, persist: false);   // 每屏自动隐藏开关只扳动 off↔auto（Core 规则）
+        }
+        ApplySurfaceLayoutParams();
+        Surface.Refresh();
+        // 图标尺寸覆盖会改面板高 → AppBar 预留带必须跟着重新协商（边变化的情形 ApplyEdge 自己已重排）。
+        // 防抖合并；重排里的再解析与本计划相等即跳过，不会来回振荡。
+        if (previous is { } priorPlan && priorPlan.IconSize != plan.IconSize) ScheduleReposition();
+        Logger.Info($"Dock 每屏计划生效：边={plan.Edge} 隐藏={plan.HideMode} 图标={plan.IconSize}（覆盖解析完成，全局设置未改写）");
+    }
+
+    /// <summary>
+    /// Dock 小组件（Phase 7-T3）：时钟由本地定时器驱动（不联网），天气走 <see cref="WeatherService"/>。
+    /// 天气事件在后台线程触发，这里必须回投 UI 线程再改集合——DockSurface 的条目替换不是线程安全的。
+    /// </summary>
+    private void InitWidget()
+    {
+        _vm.ApplyWidgetEnabled(SettingsService.Current.DockWidgetEnabled);
+        _vm.ApplyLaunchpadEnabled(SettingsService.Current.DockShowLaunchpad);
+        // 托盘收纳列（5.0.0 未闭合项④）：开关默认关、挂点语义在 Core DockTrayPlacement；
+        // 设置页变更走 App.ApplyDockTray 即时重放（同 ApplyDockWidget 路径，不需要重启 Dock）。
+        _vm.ApplyTrayEnabled(SettingsService.Current.DockTrayEnabled);
+        _vm.ApplyTrayPosition(SettingsService.Current.DockTrayPosition);
+        RefreshWidgetClock();
+
+        _widgetTimer = new System.Windows.Threading.DispatcherTimer(
+            TimeSpan.FromSeconds(10), System.Windows.Threading.DispatcherPriority.Background,
+            (_, _) => RefreshWidgetClock(), Dispatcher);
+        _widgetTimer.Start();
+
+        _weather = new WeatherService();
+        _weather.Updated += (_, _) => Dispatcher.BeginInvoke(new Action(() =>
+            _vm.UpdateWidget(detail: _weather?.Current?.Detail)));
+        _weather.RefreshIfStale();
+    }
+
+    private void RefreshWidgetClock()
+        => _vm.UpdateWidget(clock: Core.Dock.DockWidget.Clock(DateTimeOffset.Now));
+
+    /// <summary>小组件点击：打开通知中心（Big Sur 的时钟点击语义，面板里带月历）。</summary>
+    private void OpenWidgetPanel(DockItem item)
+    {
+        Point? anchor = null;
+        if (Surface.GetItemBounds(item) is { } bounds)
+        {
+            anchor = PointToScreen(new Point(bounds.X, bounds.Y));
+        }
+
+        TopBar.NotificationCenterWindow.ShowOrToggle(NotificationService.Current, anchor);
+    }
+
+    /// <summary>
+    /// 托盘收纳列点击（5.0.0 未闭合项④）：展开/收起托盘图标弹层（toggle）。弹层由激活式
+    /// <see cref="FluentPopupHost"/> 承载（Esc/失活即关），数据链与顶栏同源（TrayIconSource 两路 +
+    /// 注册表快照回填），展开才读——Dock 常驻表面不为它读托盘，不与顶栏常驻条叠加扫描。
+    /// </summary>
+    private void ToggleTrayPanel(DockItem item)
+    {
+        if (_trayPanelHost is { IsLoaded: true })
+        {
+            _trayPanelHost.Close();   // Closed 处理器清引用 + panel.Shutdown()
+            return;
+        }
+        _trayPanelHost = null;
+
+        // 锚点 = 格子下缘中点（surface 本地 DIP → 物理像素，用 Surface 自己转换避免窗口内偏移误差）。
+        // FluentPopupHost 的翻转规则：下方放不下（Dock 贴底必然放不下）时上翻，卡片底边停在
+        // 锚点上方 12px——正好贴在 Dock 面板上沿。
+        if (Surface.GetItemBounds(item) is not { } bounds) return;
+        var anchor = Surface.PointToScreen(new Point(bounds.X + bounds.Width / 2, bounds.Y + bounds.Height));
+
+        var host = new FluentPopupHost();
+        var panel = new TrayColumnPanel();
+        panel.AttachHost(host);
+        host.Content = panel;
+        host.KeepAliveProbe = () => host.IsActive || host.CursorInInflated(FluentPopupHost.RectInflate);
+        host.PreviewKeyDown += TrayPanelHost_PreviewKeyDown;
+        host.Closed += (_, _) =>
+        {
+            _trayPanelHost = null;
+            host.PreviewKeyDown -= TrayPanelHost_PreviewKeyDown;   // 与上面的订阅对称解绑（弹层是瞬态对象）
+            panel.Shutdown();                                      // 停 3s 自动重读 + 还掉 source（幂等）
+        };
+        _trayPanelHost = host;
+        host.ShowAt(anchor);
+        Logger.Info("托盘收纳列弹层已打开");
+    }
+
+    /// <summary>Esc 收起托盘弹层（激活式弹层的键盘语义，与控制中心面板同款）。</summary>
+    private void TrayPanelHost_PreviewKeyDown(object sender, KeyEventArgs e)
+    {
+        if (e.Key != Key.Escape) return;
+        e.Handled = true;
+        _trayPanelHost?.Close();
+    }
+
+    // ---------- 主题引擎（Task 13） ----------
+
+    private void OnThemeChanged(ThemeDefinition theme) => ApplyTheme(theme);
+
+    /// <summary>
+    /// 图标主题覆盖变更（编辑器改图 / 导入主题包 / 恢复默认）：缓存已由 <see cref="IconThemeService"/>
+    /// 在通知前清空（MacIconCatalog + IconBakeContext），这里走既有的「重建条目容器」出口——
+    /// 模板重实例化 → 图标绑定重新求值 → 新图标立即上屏，不重启（与图标尺寸变更同一出口）。
+    /// </summary>
+    private void OnIconThemeChanged()
+    {
+        if (_closing) return;
+        if (!Dispatcher.CheckAccess())
+        {
+            Dispatcher.BeginInvoke(OnIconThemeChanged);
+            return;
+        }
+        Surface.RebindIconContainers();
+        Surface.Refresh();
+    }
+
+    /// <summary>
+    /// 主题切换落地：窗口级底色策略 + 间距参数；放大开关与 MaxScale 由动画/悬停路径
+    /// 直读 ThemeManager.Current；底色/圆角/图标尺寸/字体/指示样式走字典 DynamicResource 即时生效。
+    /// <para>
+    /// 【v3 T2 裁定：常驻表面不做抓屏】本窗口的点击穿透依赖 XAML 的 <c>Background="{x:Null}"</c>
+    /// （未绘制区域不参与命中测试 → 面板两侧的条带空白可点到底下的桌面/图标），而 WPF 里"未绘制区域真的
+    /// 透明"只有 <c>AllowsTransparency=true</c>（分层窗口）能做到。Dock 又是常驻表面：实时抓屏会把已画好
+    /// 的面板像素抓进背板（鬼影），为抓屏先隐藏一帧又是可见闪烁，所以它不调用 <see cref="ScreenBlurBackdrop"/>，
+    /// "DockPanelRoot 自绘 ThemeDockBackground + 1px 亮边"就是**唯一可见底**；面板之外（条带两侧与放大
+    /// 余量）恒为真透明，点得穿、也看得见底下的桌面。
+    /// 真模糊的抓屏路径只给"显示一次"的瞬态表面（切换器 / 菜单弹层 / 媒体面板）。
+    /// </para>
+    /// <para>
+    /// 【v3.1 缺陷 1：旧的 best-effort 亚克力增强已删除】v3.0.0 在这里另发一次
+    /// <c>SetWindowCompositionAttribute(ACCENT_ENABLE_ACRYLICBLURBEHIND)</c>。Win11 24H2/25H2 上它不模糊，
+    /// 而是把 tint 平铺满**整个窗口矩形**（= 全显示器宽 × 面板+放大余量）→ 用户真机看到的"屏幕底边一条
+    /// 全宽黑带、遮住 qoder 窗口下一行"。现在 Dock 只可能通过 <see cref="AcrylicWindow.ClearLegacyAccent"/>
+    /// 与这个 API 打交道，而那一句写的是 Disabled（清除老版本留下的状态）。
+    /// </para>
+    /// </summary>
+    private void ApplyTheme(ThemeDefinition theme)
+    {
+        ClearLegacyAccent("Dock");
+        UpdateNativeMaterial();
+        // 排布参数：底色/圆角/字体走 DynamicResource，尺寸/间距/放大写入 DockSurface。
+        // IconSize/MaxScale 由设置项驱动（DockIconSize / MagnificationStrength），主题只提供"是否放大"与间距，
+        // 见 ApplySurfaceLayoutParams。尺寸变化会改条带高度 → 顺带重排 AppBar（若尚未注册则 no-op，
+        // OnSourceInitialized 的 RegisterAndPositionAppBar 会用同一套几何完成首帧定位）。
+        ApplySurfaceLayoutParams();
+        // 分隔符开关也是主题参数（macOS 有 / GNOME 与鸿蒙没有），"插在哪两块之间"由 Core 规则推导，
+        // 渲染器里没有任何 if (theme == mac) —— 这就是"不同风格的 dock 完美还原原生显示方式"的落点。
+        _vm.ApplySeparatorPolicy(theme.DockSeparatorsEnabled);
+        // Aurora 签名件随主题落地/切换重分派：面板描边的接地感与运行指示形态（内部按主题键存在性分派，
+        // 非 Aurora 主题自动回到 macOS 既有形态，切换零残留）。
+        ApplyPanelEdgeBrush();
+        ApplyIndicatorStyle();
+        Surface.Refresh();
+        ScheduleReposition();
+    }
+
+    /// <summary>native 背板（Phase 2 T3）：探针可用才建；不可用保留 XAML 静态面板底。</summary>
+    private void EnsureNativeMaterial()
+    {
+        if (_nativeMaterial is not null || _hwnd == IntPtr.Zero) return;
+        var tokens = MacTokens.For(ThemeManager.IsDark);
+        var dpi = VisualTreeHelper.GetDpi(this).DpiScaleX;
+        _nativeMaterial = new NativeMaterialHost(
+            this, MacTokenDictionary.ParseArgb(tokens.DockBackground), 1f,
+            (float)(18.0 * dpi), ThemeManager.IsDark, "dock");
+    }
+
+    private void UpdateNativeMaterial()
+    {
+        EnsureNativeMaterial();
+        if (_nativeMaterial is null) return;
+        var tokens = MacTokens.For(ThemeManager.IsDark);
+        _nativeMaterial.SetTheme(MacTokenDictionary.ParseArgb(tokens.DockBackground), 1f, ThemeManager.IsDark);
+        // 背板胜出时只让出 DockPanelRoot 的底色/描边；DockSurface（图标/指示点）保持可见。
+        DockPanelRoot.Opacity = _nativeMaterial.IsActive ? 0 : 1;
+    }
+
+    /// <summary>
+    /// 把当前设置（已规范化）落到 DockSurface 与主题字典：图标尺寸、放大强度、倒影开关。
+    /// 主题只决定"是否放大"（macOS 才有放大）与间距；强度与尺寸是用户配置。放大关闭时 MaxScale 归 1、
+    /// DockSurface 场恒回落 1（仍走阻尼，不冻结）。图标宽高 + 遮罩几何经 <see cref="ThemeManager.ApplyIconSize"/>
+    /// 覆盖主题字典的 ThemeIconSize/ThemeIconClip，使条目模板的图片随 DockIconSize 即时缩放。
+    /// <para>
+    /// 【v3 T6 的顺序有讲究】先 <see cref="ApplyIconBake"/>（落烘焙参数，其中包含"形状归位图还是归 XAML"）
+    /// 再 ThemeManager.ApplyIconSize（据此注入或移除 <c>ThemeIconClip</c>）。反过来就会用上一轮的属主决定
+    /// 这一轮的 clip，切换主题的同一帧里出现"双遮罩"或"没人遮罩"。
+    /// </para>
+    /// </summary>
+    private void ApplySurfaceLayoutParams()
+    {
+        var s = SettingsService.Current;
+        var theme = ThemeManager.Current;
+        // 图标尺寸：有已解析的每屏计划用计划值（无覆盖时 == 全局值），否则全局设置。
+        var icon = (double)(_appliedPlan?.IconSize ?? s.DockIconSize);
+        Surface.IconSize = icon;
+        Surface.Spacing = theme.ItemSpacing;
+        // 行内余量（主题 DockRowInsetDip）：面板贴不贴图标由它决定，写死 20 时三主题都是"半空黑框"。
+        Surface.RowInsetDip = theme.DockRowInsetDip;
+        Surface.ShowMagnification = theme.ShowMagnification;
+        Surface.MaxScale = theme.ShowMagnification ? s.MagnificationStrength : 1.0;
+        // 倒影：设置项是**三态**（null = 跟随主题默认，现代 macOS/GNOME/鸿蒙都关），用户显式开过的
+        // true/false 永远优先于主题——切主题不会把用户的选择冲掉，也不再让 macOS 默认长出 31 DIP 倒影带。
+        Surface.ReflectionEnabled = s.ReflectionEnabledFor(theme.ReflectionDefault);
+        // 面板内边距：XAML 里 Surface.Margin / DockPanelRoot.Padding 是同一组主题值，
+        // VisiblePanelDip() 算的也是它 —— 视觉与"上报 shell 的预留带"必须来自同一个数（v3 §1.C）。
+        var padding = new Thickness(theme.DockPanelPaddingXDip, theme.DockPanelPaddingYDip,
+                                    theme.DockPanelPaddingXDip, theme.DockPanelPaddingYDip);
+        Surface.Margin = padding;
+        DockPanelRoot.Padding = padding;
+        // 悬浮感（Big Sur）：面板距屏幕底边默认 4 DIP。PanelHost 整体上移 margin，
+        // VisiblePanelDip() 把 margin 计入 AppBar 预留带，于是"预留高度 = 面板 + 空隙"。
+        PanelHost.Margin = new Thickness(0, 0, 0, s.DockEdgeMargin);
+        // 烘焙参数（主题形状 / 尺寸 / DPI / IconTreatment）→ 决定 ThemeIconClip 的属主，必须在下面两步之前
+        ScheduleIconRebind();
+        // 图标宽高 + 遮罩 + 分隔符几何（线粗/高度/盒宽）随尺寸与主题重注入主题字典（冻结/数值，非逐帧路径）。
+        ThemeManager.ApplyIconSize(icon, Application.Current);
+    }
+
+    // ---------- Aurora 签名件（wp-aurora-dock：接地描边 / 首现弹入 / 运行指示形态） ----------
+    // 三件都遵守同一条纪律：本窗口只消费主题数据，不写 if (theme == "Aurora")——
+    // 主题是否生效由"主题字典里有没有 Aurora 签名键"回答，未来第二套主题自带同键即自动继承。
+
+    /// <summary>Aurora 签名标记键：仅 Aurora.xaml / AuroraTokenDictionary 写它（存在 = Aurora 生效中）。</summary>
+    private const string AurSignatureKey = "AurEaseSpring";
+
+    private bool IsAuroraActive => TryFindResource(AurSignatureKey) is not null;
+
+    /// <summary>
+    /// 面板描边的「接地感」（Aurora 材质规格）：DockPanelRoot 的 1px 描边换竖向渐变
+    /// 上 #33FFFFFF（== MacDockBorder 暗值）→ 下 #0D000000，不加大面积投影（AppBar 条带已占满
+    /// 窗口，真投影画不下）。macOS 等其它主题维持 MacDockBorder 的引用——亮暗/accent 变更继续由
+    /// 主题字典即时重解析。渐变与强调色无关 → 画刷可冻结（XAML 窗口资源 AurDockEdgeBrush）。
+    /// </summary>
+    private void ApplyPanelEdgeBrush()
+    {
+        // SetResourceReference 会覆盖 XAML 里写死的引用，所以两个分支都显式指回当前该用的键。
+        DockPanelRoot.SetResourceReference(Border.BorderBrushProperty,
+            IsAuroraActive ? "AurDockEdgeBrush" : "MacDockBorder");
+    }
+
+    /// <summary>
+    /// Dock 首次出现的弹入（Aurora 动效规格，唯一新增动效轨道）：面板自 +12 DIP 下方以
+    /// KeySpline(0.34,1.56,0.64,1)（AurEaseSpring 文档口径）在 180ms 内弹到位——y 超 1 的控制点
+    /// 给出微过冲回弹。仅 Aurora 主题且底部停靠播一次；只动 RenderTransform，AppBar 窗口矩形、
+    /// 命中几何与逐帧放大轨道一概不碰。其它主题维持既有"瞬间出现"。
+    /// </summary>
+    private void PlayPanelEntrance()
+    {
+        if (_entrancePlayed || _closing) return;
+        _entrancePlayed = true;
+        if (!IsAuroraActive || DockEdge != "bottom") return;
+
+        const double startOffsetDip = 12.0;  // Aurora 规格：面板自 +12 DIP 下方弹入
+        const int durationMs = 180;          // AurEaseSpring 落点时长（tokenTable【6】）
+        PanelEnterShift.Y = startOffsetDip;
+        var anim = new DoubleAnimationUsingKeyFrames
+        {
+            Duration = new Duration(TimeSpan.FromMilliseconds(durationMs)),
+        };
+        // KeySpline 只校验 x∈[0,1]，y 允许超 1 —— (0.34,1.56,0.64,1) 即"过冲后回弹"的弹簧。
+        anim.KeyFrames.Add(new SplineDoubleKeyFrame(0, KeyTime.FromTimeSpan(TimeSpan.FromMilliseconds(durationMs)),
+            new KeySpline(0.34, 1.56, 0.64, 1)));
+        PanelEnterShift.BeginAnimation(TranslateTransform.YProperty, anim);
+    }
+
+    /// <summary>
+    /// 运行指示形态（设置项 DockIndicatorStyle）：dot（默认——macOS 圆点 / Aurora 圆点+辉光，样式属
+    /// 各主题字典）与 pill（KDE 药丸：触发器同圆点，几何用模板现成的 16×3 胶囊，Fill=ThemeAccent）。
+    /// pill 档以窗口字典覆写 ThemeIndicatorDot/ThemeIndicatorUnderline 两键（元素查找先窗口后应用字典），
+    /// dot 档移除覆写回落主题字典——圆点样式始终归主题所有，换主题/换 accent 都即时跟随。
+    /// </summary>
+    public void ApplyIndicatorStyle()
+    {
+        const string dotKey = "ThemeIndicatorDot";
+        const string underlineKey = "ThemeIndicatorUnderline";
+        if (SettingsService.Current.DockIndicatorStyle == "pill")
+        {
+            Resources[dotKey] = (Style)Resources["AurIndicatorDotOff"];
+            Resources[underlineKey] = (Style)Resources["AurIndicatorPill"];
+        }
+        else
+        {
+            Resources.Remove(dotKey);
+            Resources.Remove(underlineKey);
+        }
+    }
+
+    // ---------- 图标烘焙（v3 T6） ----------
+
+    /// <summary>
+    /// 本 Dock 所在显示器的缩放（物理/DIP）。首选 <see cref="_monitorScale"/>（MonitorGeometry 按锚点屏
+    /// 取的 MDT_EFFECTIVE_DPI/96，与条带几何同源）；AppBar 还没协商过（构造期）时用 WPF 自己的 DPI，
+    /// 两者都拿不到才按 1.0 —— <see cref="IconBakeContext.Configure"/> 只在真的变化时动作，
+    /// 所以这里的兜底序列不会造成反复重烘。
+    /// </summary>
+    private double CurrentDpiScale()
+    {
+        if (_monitorScale is { } m && m > 0) return m;
+        if (_hwnd == IntPtr.Zero) return 1.0;
+        try
+        {
+            var dpi = VisualTreeHelper.GetDpi(this).PixelsPerDip;
+            return dpi > 0 ? dpi : 1.0;
+        }
+        catch (InvalidOperationException)
+        {
+            return 1.0;   // PresentationSource 尚未就绪
+        }
+    }
+
+    /// <summary>
+    /// 图标烘焙参数落地 + 需要时重挂条目绑定。
+    /// <para>
+    /// 【为什么把重建防抖】图标尺寸滑杆每步都会改 DPI·尺寸这一组键；立即重建 = 每步都重烘一排图标
+    /// （UI 线程几十毫秒），既浪费也会把 frametime 的 P95 顶起来。防抖到落定之后一次：
+    /// 拖动期间 <c>ThemeIconSize</c> 已即时改了方框大小，图片被高质量拉伸着看（观感略软但不是错的尺寸），
+    /// 松手后立刻换成 1:1 的烘焙位图。
+    /// </para>
+    /// </summary>
+    private void ScheduleIconRebind()
+    {
+        // 图块按"放大上限"一起放大烘焙：不放大时传 1，行为与过去完全一致；
+        // 放大开着时按 MaxScale 烘，1.7× 的悬停放大才是从大图向下采样而不是拉伸。
+        var magnification = Surface.ShowMagnification ? Surface.MaxScale : 1.0;
+        var changed = IconBakeContext.Configure(ThemeManager.Current, Surface.IconSize,
+                                                CurrentDpiScale(), SettingsService.Current.IconTreatment,
+                                                magnification);
+        if (changed) ThemeManager.ApplyIconSize(Surface.IconSize, Application.Current);  // 属主可能翻转 → 重落 clip
+        if (!changed) return;
+
+        _iconRebindDebounce ??= new DispatcherTimer(DispatcherPriority.Background)
+        {
+            Interval = TimeSpan.FromMilliseconds(120)
+        };
+        _iconRebindDebounce.Stop();
+        _iconRebindDebounce.Tick -= OnIconRebindTick;
+        _iconRebindDebounce.Tick += OnIconRebindTick;
+        _iconRebindDebounce.Start();
+    }
+
+    private void OnIconRebindTick(object? sender, EventArgs e)
+    {
+        _iconRebindDebounce?.Stop();
+        if (_closing) return;
+        Surface.RebindIconContainers();   // 模板重实例化 → 绑定按新的烘焙参数重新求值
+        Surface.Refresh();
+    }
+
+    // ---------- 条带几何（随图标尺寸/放大强度动态；预留带 ≠ 窗口矩形） ----------
+
+    /// <summary>
+    /// 可见面板高 = 行高（IconSize + 主题行内余量，开启倒影时另加倒影余量，见 DockSurface.RowHeightDip）
+    /// + 主题上下内边距各一（XAML 里 Surface.Margin / DockPanelRoot.Padding 由 <see cref="ApplySurfaceLayoutParams"/>
+    /// 写成同一组主题值，所以这里不是第二条算术路径而是同一来源的两次消费）。
+    /// <b>这是上报 shell 的 AppBar 预留带高度</b>（v3 §1.C：停靠区只预留 Dock 本体）。
+    /// IconSize=56 时：macOS 面高按主题行高计算（v2 统一 76，倒影开启 95.2）。
+    /// </summary>
+    private double VisiblePanelDip()
+        => DockRowMath.PanelHeightDip(Surface.RowHeightDip, ThemeManager.Current.DockPanelPaddingYDip)
+           + SettingsService.Current.DockEdgeMargin;
+
+    /// <summary>
+    /// 窗口在面板之上的透明余量，供放大后的图标向上生长不被窗口上沿裁切。
+    /// 无放大主题恒取 <see cref="MinStripHeadroomDip"/>（=22，与 v1 实测一致）；macOS 下按
+    /// 图标尺寸与当前倍率算越出量。旧写法是 <c>IconSize·(MaxScale−1) − 16</c>，那个 16 是
+    /// "旧统一行内余量 20 的一半 + 旧的 6 DIP 面板边距"；v3 T4 把行内余量交给主题（macOS 10）之后
+    /// 常量就不成立了——面板收紧 10 DIP，放大后的图标顶边会被窗口上沿切掉一截。
+    /// 现在越出量由 <see cref="DockRowMath.MagnificationHeadroomDip"/> 用同一组主题值算：
+    /// IconSize=44/MaxScale=1.7/余量 10/边距 6 → 24.2 → 取 25（≥22 的下限保住"贴底无缝"的实测结论）。
+    /// <para>
+    /// v3 T1 起这截余量<b>只在窗口矩形里</b>（<c>StripMath.WindowRect</c> 把窗口在预留带之上放大），
+    /// 不再进 ABM_SETPOS 的上报值 —— 窗口可以越出自己的 AppBar 预留带，预留带只决定工作区。
+    /// 于是 macOS 语义成立：放大后的图标越界生长到桌面/窗口之上，工作区不多让一个像素。
+    /// </para>
+    /// </summary>
+    private double StripHeadroomDip()
+    {
+        var theme = ThemeManager.Current;
+        if (!theme.ShowMagnification) return MinStripHeadroomDip;
+        return DockRowMath.MagnificationHeadroomDip(Surface.IconSize, Surface.MaxScale,
+                                                    theme.DockRowInsetDip, theme.DockPanelPaddingYDip,
+                                                    MinStripHeadroomDip);
+    }
+
+    /// <summary>
+    /// 设置页改动 DockIconSize/MagnificationStrength 后的即时生效入口（App.ApplyDockLayout 调用）：
+    /// 重落排布参数 + 重排条带（图标尺寸变了面板/条带要跟着长，否则大图标被窗口上沿裁切）。
+    /// </summary>
+    public void RefreshLayoutFromSettings()
+    {
+        ApplySurfaceLayoutParams();
+        Surface.Refresh();
+        // 每屏覆盖配置要跟着全局设置重解析。不能只等 ScheduleReposition → PositionAsAppBar：
+        // 若 Dock 正因覆盖而竖排（AppBar 未注册），那条路径会早退，全局改动（如"恢复默认"）
+        // 就再也传不到运行态。这里主动重解析；底部模式下的重复解析幂等（计划相等即跳过）。
+        if (_monitorHandle != IntPtr.Zero) QueueScreenPlanResolve(_monitorHandle);
+        ScheduleReposition();
+    }
+
+    /// <summary>
+    /// 请求重排条带：立即返回，真正的 <see cref="PositionAsAppBar"/> 延后到防抖到期执行。
+    /// AppBar 尚未注册（构造早期）时到期重排也无害——OnSourceInitialized 的首帧定位已用同一套几何。
+    /// 惰性建计时器（DockWindow 未必走到滑杆路径，避免构造期多分配一个计时器）。
+    /// </summary>
+    private void ScheduleReposition()
+    {
+        _repositionDebounce ??= new DispatcherTimer(DispatcherPriority.Background)
+        {
+            Interval = TimeSpan.FromMilliseconds(120)
+        };
+        _repositionDebounce.Stop();
+        _repositionDebounce.Tick -= OnRepositionDebounceTick;
+        _repositionDebounce.Tick += OnRepositionDebounceTick;
+        _repositionDebounce.Start();
+    }
+
+    private void OnRepositionDebounceTick(object? sender, EventArgs e)
+    {
+        _repositionDebounce?.Stop();
+        if (_closing) return;
+        PositionAsAppBar();
+    }
+
+
+    private void OnWindowLoaded(object sender, RoutedEventArgs e)
+    {
+        _tracker.Start();
+        // 动画驱动态（CompositionTarget.Rendering 钩子）由 DockSurface 自管：光标进入面板即 Wake，
+        // 全部收敛且无悬停目标时自行摘钩——此处不再有 15ms DispatcherTimer。
+        // 渲染层级一次性入日志：tier 0=软件渲染、1=部分加速、2=硬件加速。
+        // 本机实测 tier=2（硬件加速），所以 frametime.ps1 里 ~30ms 的帧节奏**不是**软件渲染造成的：
+        // 它来自 AllowsTransparency 分层窗口的呈现路径（WPF 光栅到内存位图 → DWM 逐帧合成）在这台 VM
+        // 上的下限。排查"掉帧是代码还是环境"时先看这一行，别把 tier=2 误读成降级。
+        var tier = RenderCapability.Tier >> 16;
+        Logger.Info($"Dock 就绪：WPF 渲染 tier={tier}（0=软件渲染，2=硬件加速）" +
+                    $" magnification={ThemeManager.Current.ShowMagnification} maxScale={ThemeManager.Current.MaxScale}");
+    }
+
+    protected override void OnClosing(CancelEventArgs e)
+    {
+        _closing = true;                             // 先于 ABM_REMOVE：作废队列中尚未执行的 BeginInvoke 重注册
+        _repositionDebounce?.Stop();                 // 作废挂起的条带重排（OnClosing 后不再 ABM_SETPOS）
+        _iconRebindDebounce?.Stop();                 // 作废挂起的图标重烘（OnClosing 后不再重建可视树）
+        _previewDwell?.Stop();                       // 作废挂起的预览驻留
+        StopConditionTimer();                        // 作废条件隐藏轮询（条件档判定不再跑）
+        FluentMenu.CloseCurrent();                   // 关掉在显右键菜单（v3.1：菜单里有"结束任务/清空回收站"，
+                                                     // 重载 Dock 后孤儿弹层不该还能点到旧快照上的破坏性动作）
+        _preview?.Dispose();                         // 注销缩略图句柄 + 销毁宿主窗口（Task 13，必走，防句柄泄漏）
+        _preview = null;
+        _mediaPanel?.Close();                        // 面板随 Dock 一起关闭（Closed 处理器会清空引用）
+        Surface.Shutdown();                           // 摘掉 CompositionTarget.Rendering 钩子
+        UnregisterAppBar();                           // ABM_REMOVE 必须在 hwnd 销毁前
+        _source?.RemoveHook(WndProc);
+        base.OnClosing(e);
+    }
+
+    /// <summary>诊断入口：把角标打到第一个非分隔符条目上（截图验收用，不进产品逻辑）。</summary>
+    public void ApplyBadgeForDiagnostics(string text)
+    {
+        // 诊断拍照期间停掉实时角标服务：否则 3 秒后它会用"没有未读"把示例角标清掉，
+        // 截图里就只剩一个干净的 Dock（这个坑实测踩过一次）。
+        _badges?.Dispose();
+        _badges = null;
+        _progress?.Dispose();
+        _progress = null;
+
+        var item = _vm.Items.FirstOrDefault(i => i.Kind != DockItemKind.Separator);
+        if (item is not null)
+        {
+            Surface.SetBadge(item.Id, text);
+        }
+    }
+
+    /// <summary>诊断入口：给第一个条目打一条示例进度（截图验收用，不进产品逻辑）。</summary>
+    public void ApplyProgressForDiagnostics(double fraction)
+    {
+        _progress?.Dispose();
+        _progress = null;
+
+        static void Apply(DockWindow self, double value)
+        {
+            var item = self._vm.Items.FirstOrDefault(i => i.Kind != DockItemKind.Separator);
+            if (item is not null)
+            {
+                self.Surface.SetProgress(item.Id, value, DockProgressState.Normal);
+            }
+        }
+
+        Apply(this, fraction);
+        // 启动期条目会被 WindowTracker 与按应用合并规则替换实例：最早那次 SetProgress 记下的 Id
+        // 可能已经不在树里，进度条于是「设置了却看不见」（真机取证发现的）。布局稳定后按**当前**
+        // 第一个条目再补一次，真实进度服务每次采样都走当前条目、不受这个时序影响。
+        var settle = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(1200) };
+        settle.Tick += (_, _) =>
+        {
+            settle.Stop();
+            Apply(this, fraction);
+        };
+        settle.Start();
+    }
+
+    /// <summary>诊断截图用的窗口句柄（未创建时 Zero）。</summary>
+    public IntPtr GetDiagnosticsHandle() => _hwnd;
+
+    protected override void OnClosed(EventArgs e)
+    {
+        ThemeManager.ThemeChanged -= OnThemeChanged;
+        IconThemeService.Changed -= OnIconThemeChanged;
+        Launcher.LaunchpadWindow.Dismissed -= OnLaunchpadDismissed;   // 与 OnSourceInitialized 的订阅对称
+        _nativeMaterial?.Dispose();
+        _nativeMaterial = null; // 解除主题订阅，防止闭包引用已关闭窗口
+        if (_taskbar is not null) _taskbar.PolicyApplied -= OnTaskbarPolicyApplied;
+        _badges?.Dispose();
+        _badges = null;
+        _progress?.Dispose();
+        _progress = null;
+        _recycleBinMonitor?.Dispose();
+        _recycleBinMonitor = null;
+        _autoHideTimer?.Stop();
+        _autoHideTimer = null;
+        StopConditionTimer();
+        _minTilesTimer?.Stop();
+        _minTilesTimer = null;
+        _minTiles?.Dispose();
+        _minTiles = null;
+        _widgetTimer?.Stop();
+        _widgetTimer = null;
+        _weather?.Dispose();
+        _weather = null;
+        // 托盘收纳列弹层（瞬态激活式窗口）随 Dock 一起收：Closed 处理器做剩余清理（停定时器/还 source）。
+        _trayPanelHost?.Close();
+        _trayPanelHost = null;
+        _vm.Detach();
+        // 共享服务（App 注入的进程级单例）不随实例销毁：N 实例共用一份 SMTC 订阅与 shell-hook
+        // 宿主窗，谁最后一个走谁也不该 Dispose——生命周期归 App（OnExit 统一释放）。
+        // 自建（tracker 为 null 的构造）保留历史行为：本实例拥有，随窗口释放。
+        if (_ownsSharedServices)
+        {
+            _tracker.Dispose();
+            _mediaVm.Dispose();                      // 停定时器 + 解除 SmtcService 事件订阅
+            _smtc.Dispose();
+        }
+        base.OnClosed(e);
+    }
+
+    private void RegisterAndPositionAppBar()
+    {
+        if (_closing) return;                         // 关闭竞态：TaskbarCreated/WM_DISPLAYCHANGE 挂起的重注册不再执行
+        if (_appbarRegistered) UnregisterAppBar();    // 重注册路径：先 ABM_REMOVE
+        _abd = new NativeMethods.APPBARDATA
+        {
+            cbSize = (uint)Marshal.SizeOf<NativeMethods.APPBARDATA>(),
+            hWnd = _hwnd,
+            uCallbackMessage = _appbarMsg
+        };
+        NativeMethods.SHAppBarMessage(NativeMethods.AbmNew, ref _abd);
+        _appbarRegistered = true;
+        Logger.Info($"AppBar ABM_NEW 完成 hwnd=0x{_hwnd.ToInt64():X}");
+        PositionAsAppBar();
+        ScheduleHideSettle();
+    }
+
+    /// <summary>
+    /// Hide 策略下 AppBar 注册/重注册会引发 shell 重布局，Win11 可能把任务栏摆回屏幕内、甚至把
+    /// autohide 状态位改回去（= 重新占用底部条带）：T+0.8s / T+3s 各重申一次（重释放条带 + 移出窗口）
+    /// 并重新协商条带位置。非 Hide 策略 Reassert 为 no-op，不调度。
+    /// </summary>
+    private void ScheduleHideSettle()
+    {
+        if (_taskbar is not { Current: Services.TaskbarPolicy.Hide }) return;
+        foreach (var delayMs in new[] { 800, 3000 })
+        {
+            var timer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(delayMs) };
+            timer.Tick += (_, _) =>
+            {
+                timer.Stop();
+                if (_closing) return;
+                _taskbar.Reassert();
+                PositionAsAppBar();
+            };
+            timer.Start();
+        }
+    }
+
+    /// <summary>任务栏策略变更落地（Apply/Restore）后重申策略并重新协商 AppBar 条带。</summary>
+    private void OnTaskbarPolicyApplied()
+    {
+        if (_closing || !_appbarRegistered) return;
+        Dispatcher.BeginInvoke(() =>
+        {
+            if (_closing || !_appbarRegistered) return;
+            _taskbar?.Reassert();
+            PositionAsAppBar();
+        }, DispatcherPriority.ApplicationIdle);
+    }
+
+    private void UnregisterAppBar()
+    {
+        if (!_appbarRegistered) return;
+        NativeMethods.SHAppBarMessage(NativeMethods.AbmRemove, ref _abd);
+        _appbarRegistered = false;
+    }
+
+    /// <summary>
+    /// ABE_BOTTOM 条带定位（v3 T1，裁定见 v3-plan §1.C）：<b>上报 shell 的预留带 = 可见面板高</b>
+    /// （<see cref="VisiblePanelDip"/>），真实窗口矩形 = 预留带 + 顶部放大余量
+    /// （<see cref="StripHeadroomDip"/>）。放大后的图标照样向上越界生长到桌面之上，但那截透明带
+    /// 不再从工作区里被划走——v2 把"面板+余量"整条报给 ABM_SETPOS，IconSize=44 时工作区白让了
+    /// 22 DIP（用户"我只需要 dock 的大小不需要额外的覆盖"的工作区侧含义）。
+    /// 窗口像素尺寸与 v2 完全一致，所以 DockSurface 的可用高度假设、面板 VerticalAlignment=Bottom
+    /// 贴条带底、两侧点击穿透全部原样保留。
+    /// <para>
+    /// 【几何来源】本窗口所在（或设置指定）显示器的 <c>rcMonitor</c> 与该屏有效 DPI
+    /// （<see cref="MonitorGeometry"/>），不再是 <c>GetSystemMetrics</c> 的主屏尺寸。
+    /// </para>
+    /// <para>
+    /// 【底边仍以 shell 给的可用底边为准】（Task 7 实测口径，勿回退）：Keep/AutoHide 策略下那是任务栏
+    /// 上沿（Dock 悬在其上方，符合预期）；Hide 策略下 <see cref="TaskbarManager"/> 已用
+    /// ABM_SETSTATE(ABS_AUTOHIDE) 释放掉任务栏的条带预留，QUERYPOS 返回的 bottom 就是**真显示器底边**，
+    /// 于是窗口底边 == rcMonitor.Bottom，Dock 无缝贴底（实测 gap 48px → 0px）。
+    /// </para>
+    /// <para>
+    /// 【顺序硬约束】先写 WPF 的 Left/Top/Width/Height（DIP）并 UpdateLayout，再落物理 SetWindowPos：
+    /// 反过来的话 WPF 会在随后的布局帧里按自己的 DIP→物理换算覆盖我们的物理矩形（高 DPI 屏上就是
+    /// 一条缝）。定位完回读 GetWindowRect 落一行校验日志——真机仍有偏差时那行就是判因证据。
+    /// </para>
+    /// </summary>
+    private void PositionAsAppBar()
+    {
+        if (!_appbarRegistered) return;
+        if (_autoHideHidden) return;   // 自动隐藏中：条带结算（ScheduleHideSettle 的 T+0.8s/T+3s）与策略重放
+                                       // 都走这里——真机验收 r4 实测它们在滑下后 1-2s 内把 Dock 拽回全高
+                                       // （日志有"滑下（露 4px）"、屏幕上却始终完整 Dock）。几何重协商留给
+                                       // 滑回路径（ShowFromAutoHide → AssertWindowRect），隐藏期一律不写窗口矩形。
+        var target = MonitorGeometry.ForEdge(_hwnd, StripEdge.Bottom, VisiblePanelDip(), StripHeadroomDip(),
+                                             _monitorSelector ?? SettingsService.Current.DockMonitor);
+        if (target is null) return;   // 显示器取不到（拔屏瞬间）：保持上次几何，不写非法矩形
+        var t = target.Value;
+        _monitorRect = t.MonitorRect;                       // 媒体面板水平钳制要用**本屏**左右缘
+        _monitorHandle = t.Monitor;                         // 每屏覆盖配置解析与"最大化在本屏"判据用
+        // v3 T6：本屏有效缩放同时是图标烘焙的 DPI 输入。换屏 / 改缩放 / 拔屏都会重走这里，
+        // 于是这一处就是"DPI 变了就重烘"的唯一入口（Configure 内部比对，值没变就零动作）。
+        _monitorScale = t.DpiScale;
+        ScheduleIconRebind();
+        // Dock 落定了屏 → 解析该屏的覆盖配置（边/自动隐藏/图标尺寸；无覆盖 == 全局，零回归）。
+        QueueScreenPlanResolve(t.Monitor);
+        var panelH = t.Reserve.Height;                        // 预留带高（上报 shell，决定工作区）
+        var headroomH = t.Window.Height - t.Reserve.Height;   // 向上越界生长的透明余量（不占工作区）
+
+        _abd.uEdge = NativeMethods.AbeBottom;
+        _abd.rc = MonitorGeometry.ToNative(t.Reserve);        // 该屏全宽 + 面板高（SM_CXSCREEN 已退役）
+        NativeMethods.SHAppBarMessage(NativeMethods.AbmQueryPos, ref _abd);
+        var available = MonitorGeometry.ToCore(_abd.rc);      // shell 允许我们占到的底边（= 既有 AppBar 的上沿）
+        // 修正：底边让位既有 AppBar/任务栏，高度以期望面板高为准
+        var reserve = StripMath.Reserve(available, panelH, StripEdge.Bottom);
+        var expect = $"({reserve.Left},{reserve.Top})-({reserve.Right},{reserve.Bottom})";
+        _abd.rc = MonitorGeometry.ToNative(reserve);
+        NativeMethods.SHAppBarMessage(NativeMethods.AbmSetPos, ref _abd);
+        var placed = MonitorGeometry.ToCore(_abd.rc);         // shell 最终落地的预留带
+        var actual = $"({placed.Left},{placed.Top})-({placed.Right},{placed.Bottom})";
+        var window = StripMath.WindowRect(placed, headroomH, StripEdge.Bottom);
+        // 贴底判据（Task 7 实测口径，日志即证据）：available.Bottom == rcMonitor.Bottom ⇔ 任务栏条带
+        // 预留已释放 ⇔ Dock 真贴底；未释放（Keep / 释放失败）时 available.Bottom = 任务栏上沿，
+        // Dock 让位在其上方，此时"间隙"即用户看到的空档。
+        var gap = t.MonitorRect.Bottom - available.Bottom;
+        Logger.Info($"AppBar QUERYPOS 可用底边={available.Bottom}/rcMonitor底={t.MonitorRect.Bottom}" +
+                    $" {(gap == 0 ? "→ 真屏幕底边（间隙 0px，条带预留已释放）" : $"→ 任务栏仍占 {gap}px")}" +
+                    $"（策略={_taskbar?.Current.ToString() ?? "N/A"}）monitor=0x{t.Monitor.ToInt64():X}" +
+                    $" dpi={t.DpiScale:0.##} 面板={panelH}px 余量={headroomH}px");
+        // 单独成行的 "AppBar SETPOS rc=(l,t)-(r,b)"：scripts/frametime.ps1 正是按这条正则取 Dock 条带
+        // 矩形（v2 把 SETPOS 挤在 QUERYPOS 那行里，正则从来没命中过，探针只能猜 "$b.Bottom-100"）。
+        Logger.Info($"AppBar SETPOS rc={actual} 期望={expect} {(actual == expect ? "一致" : "不一致")}");
+        // 面板 DIP 一并落日志：真机反馈"dock 还有一段黑框"时，这一行就能判定是面板没贴图标
+        // （行高 ≈ IconSize + 主题余量）还是别的问题，不必再靠截图目测。
+        Logger.Info($"Dock 工作区 预留高={placed.Height}px（=面板 {VisiblePanelDip():F1}DIP，行高 {Surface.RowHeightDip:F1}DIP，" +
+                    $"图标 {Surface.IconSize:F0}DIP，倒影 {(Surface.ReflectionEnabled ? "开" : "关")}）" +
+                    $"窗口高={window.Height}px 净得={window.Height - placed.Height}px");
+
+        Left = StripMath.ToDip(window.Left, t.DpiScale);
+        Top = StripMath.ToDip(window.Top, t.DpiScale);
+        Width = Math.Max(1, StripMath.ToDip(window.Width, t.DpiScale));
+        Height = Math.Max(1, StripMath.ToDip(window.Height, t.DpiScale));
+        UpdateLayout();   // 让上面四个 DIP 属性的重排先落地，物理矩形才是最后一步
+        _windowTarget = window;
+        // _screenRect 用**目标窗口矩形**（含顶部放大余量），不是预留带：光标命中范围必须覆盖那截
+        // 透明带，否则光标一越出面板上沿就判"离窗"、场回落、图标缩回 —— 放大自激振荡。
+        _screenRect = MonitorGeometry.ToNative(window);
+        ApplyPhysicalRect(window);
+
+        // 回读校验（v3 §1.C）：真机若仍偏移，这一行日志就是判因证据。
+        if (NativeMethods.GetWindowRect(_hwnd, out var read))
+        {
+            var offset = read.Bottom - t.MonitorRect.Bottom;
+            Logger.Info($"Dock 几何 window.bottom={read.Bottom} rcMonitor.bottom={t.MonitorRect.Bottom}" +
+                        $" {(offset == 0 ? "→ 贴底OK" : $"→ 偏移 {offset}px（策略未释放/被抢占）")}" +
+                        $" 预留={actual} 窗口=({read.Left},{read.Top})-({read.Right},{read.Bottom})");
+        }
+        else
+        {
+            Logger.Warn($"Dock 几何 回读 GetWindowRect 失败，无法校验贴底（目标 ({window.Left},{window.Top})-({window.Right},{window.Bottom})）");
+        }
+    }
+
+    /// <summary>把目标矩形落到物理层（写窗口位置的唯一出口，重申路径复用它）。</summary>
+    private void ApplyPhysicalRect(PhysicalRect window)
+        => NativeMethods.SetWindowPos(_hwnd, IntPtr.Zero, window.Left, window.Top, window.Width, window.Height,
+            NativeMethods.SwpNozorder | NativeMethods.SwpNoactivate);
+
+    /// <summary>
+    /// 把窗口矩形重申为 <see cref="_windowTarget"/>：只 <c>SetWindowPos</c>，<b>不</b>重发
+    /// <c>ABM_SETPOS</c>（预留带没变 → 不再触发 shell 重排 → 不构成"重申 → 广播 → 再重申"的环，
+    /// 与"WM_SETTINGCHANGE 不可在此重注册"同一条纪律）。已等于目标时静默返回。
+    /// 与顶栏同一套护栏：shell 重排条带时会把 AppBar 窗口摆到"当前工作区"边线上，
+    /// 对 Dock 就是把底边让给自己已经预留的那 102px（贴底无缝当场变成"底部悬空"）。
+    /// </summary>
+    private void AssertWindowRect()
+    {
+        if (_closing || !_appbarRegistered) return;
+        if (_autoHideHidden) return;   // 自动隐藏中：shell 的重排不该把 Dock 拽回屏幕内
+        if (_windowTarget.Width <= 0 || _windowTarget.Height <= 0) return;   // 尚未定位过（首帧前）
+        if (!NativeMethods.GetWindowRect(_hwnd, out var now)) return;
+        if (now.Left == _windowTarget.Left && now.Top == _windowTarget.Top &&
+            now.Right == _windowTarget.Right && now.Bottom == _windowTarget.Bottom) return;
+        Logger.Info($"Dock 几何 窗口被移到 ({now.Left},{now.Top})-({now.Right},{now.Bottom})" +
+                    $" ≠ 目标 ({_windowTarget.Left},{_windowTarget.Top})-({_windowTarget.Right},{_windowTarget.Bottom})" +
+                    $"（偏移 {now.Bottom - _windowTarget.Bottom}px）→ 重申贴底");
+        ApplyPhysicalRect(_windowTarget);
+    }
+
+    private IntPtr WndProc(IntPtr hwnd, int msg, IntPtr wParam, IntPtr lParam, ref bool handled)
+    {
+        // 跨进程信号：--exit 走完整退出链路，--settings（第二实例转发）打开设置窗口。
+        // BeginInvoke 而不是就地执行——钩子跑在消息派发栈里，直接建窗/关窗会把重入面摊到 WPF 内部。
+        if (_exitRequestMsg != 0 && msg == _exitRequestMsg)
+        {
+            handled = true;
+            Logger.Info("收到退出请求（--exit），走完整退出链路");
+            Dispatcher.BeginInvoke(App.ExitFromExternal);
+            return IntPtr.Zero;
+        }
+        if (_settingsRequestMsg != 0 && msg == _settingsRequestMsg)
+        {
+            handled = true;
+            Logger.Info("收到设置窗口请求（第二实例 --settings）");
+            Dispatcher.BeginInvoke(App.OpenSettingsFromExternal);
+            return IntPtr.Zero;
+        }
+        if (_appbarMsg != 0 && msg == _appbarMsg)
+        {
+            handled = true;
+            // ABN_POSCHANGED：shell 重排了条带 → 重申窗口落位（空间被真正抢占由重注册流程覆盖）。
+            if (wParam.ToInt32() == NativeMethods.AbnPosChanged) Dispatcher.BeginInvoke(AssertWindowRect);
+            return IntPtr.Zero;
+        }
+        // 任何来源的位置变化都比对一次；BeginInvoke 排在本次落位之后，自己写的移动只命中静默分支。
+        if (msg == NativeMethods.WmWindowPosChanged) Dispatcher.BeginInvoke(AssertWindowRect);
+        if (_taskbarCreatedMsg != 0 && msg == _taskbarCreatedMsg)
+        {
+            handled = true; // explorer 重建任务栏 → ABM_REMOVE + 重注册；任务栏策略（隐藏/自动隐藏）一并重放
+            _taskbar?.HandleTaskbarCreated();
+            Dispatcher.BeginInvoke(RegisterAndPositionAppBar);
+            return IntPtr.Zero;
+        }
+        // WM_DISPLAYCHANGE：分辨率/显示器拓扑变化 → 重新协商条带。
+        // 注意 WM_SETTINGCHANGE 不可在此重注册：ABM_SETPOS 改变工作区会再触发 WM_SETTINGCHANGE
+        // 广播，形成"注册 → 广播 → 再注册"的无限循环（QA 实测 6 秒 63 次重注册）。
+        if (msg == NativeMethods.WmDisplayChange)
+        {
+            Dispatcher.BeginInvoke(RegisterAndPositionAppBar);
+        }
+        return IntPtr.Zero;
+    }
+
+    // ---------- 放大场光标取样 ----------
+
+    /// <summary>
+    /// 物理光标是否已不在本窗口矩形内；AppBar 未就绪 / GetCursorPos 失败时视为"在窗内"（交由取样继续判断）。
+    /// <para>
+    /// <b>比较基准是 <see cref="_screenRect"/> = 窗口矩形，不是 AppBar 预留带矩形</b>（v3 T1 起两者不等：
+    /// 预留带只有面板高，窗口还含顶部放大余量）。收紧到预留带 = 光标一越出面板上沿就判"离窗"、放大场
+    /// 回落、图标缩回、光标又落回面板 —— 反复自激振荡，放大功能直接不可用。
+    /// </para>
+    /// <para>
+    /// 保留 v1 守卫：WPF 会在布局变化后按"最后已知位置"合成 MouseMove，若以事件坐标为准，
+    /// 光标跳跃离窗后这些陈旧事件会把放大状态钉住。v2 更进一步——动画每帧直接取真实光标，
+    /// 事件只作"唤醒"信号，因此陈旧事件连唤醒语义都没有（离场即在下一帧回落）。
+    /// 空闲摘钩改由 <see cref="DockSurface"/> 按条目行的水平影响范围判定（评审发现 #1）。
+    /// </para>
+    /// </summary>
+    private bool IsCursorOutsideWindow(NativeMethods.POINT pt)
+    {
+        if (!_appbarRegistered) return false;
+        return pt.X < _screenRect.Left || pt.X >= _screenRect.Right
+            || pt.Y < _screenRect.Top || pt.Y >= _screenRect.Bottom;
+    }
+
+    /// <summary>
+    /// DockSurface 的光标取样：真实物理光标 → 窗口 DIP（PointFromScreen，PerMonitorV2 下随当前 DPI）
+    /// → surface 本地 DIP（TranslatePoint）。不在窗口内 / 源未就绪时返回 null = 无悬停目标（场回落 1）。
+    /// 连续 X 交给 <see cref="MagnificationField"/>，scale 因而随光标平滑变化，
+    /// 不再出现 v1"悬停索引切换 → 整排图标一起跳"的卡顿。
+    /// 每帧只调一次 GetCursorPos（评审发现 #1 的伴随浪费：旧写法守卫与取样各调一次）。
+    /// </summary>
+    private double? SurfaceCursorXDip()
+    {
+        if (!NativeMethods.GetCursorPos(out var pt)) return null;
+        if (IsCursorOutsideWindow(pt)) return null;
+        try
+        {
+            var inWindow = PointFromScreen(new Point(pt.X, pt.Y)); // 物理 px → 窗口 DIP
+            return TranslatePoint(inWindow, Surface).X;             // 窗口 DIP → surface 本地 DIP
+        }
+        catch (InvalidOperationException)
+        {
+            return null; // PresentationSource 尚未就绪（显示前）
+        }
+    }
+
+    private void ActivateItem(DockItem item)
+    {
+        // 先取"点击发生时用户面对的是谁"——必须排在动作之前，后面的分支会改前台。
+        var front = ForegroundBeforeDockClick();
+        Logger.Info($"Dock 条目点击：{item.Kind} '{item.Label}' 前台=0x{front.ToInt64():X}");
+        // 点击 = 取消挂起的预览弹出（brief：clicking cancels the pending show），并收起已在显示的预览。
+        CancelPreview();
+        switch (item.Kind)
+        {
+            case DockItemKind.Widget:
+                // 时钟块不启动任何程序：点它只开通知中心（含月历），与顶栏时钟同一语义。
+                OpenWidgetPanel(item);
+                break;
+
+            case DockItemKind.Tray:
+                // 托盘收纳格不启动任何程序：点它展开/收起托盘图标弹层（收纳列唯一交互语义，
+                // 真实图标的点击转发在弹层里完成——Dock 常驻表面不读托盘，见 DockItemKind.Tray）。
+                ToggleTrayPanel(item);
+                break;
+
+            case DockItemKind.Finder:
+                // macOS：访达格永远可点，打开用户主目录（Windows 语境里最接近"我的文件"的落点）
+                OpenInFinder(item.LaunchPath);
+                break;
+
+            case DockItemKind.Launchpad:
+                // 启动台服务在 App 组装（晚于 Dock）：走静态委托，点击时才求值
+                LaunchpadRequested?.Invoke();
+                break;
+
+            case DockItemKind.Window:
+            case DockItemKind.MinimizedWindow:   // alpha.24：最小化区驻留格点击 = 还原（与运行窗口同路）
+                var wi = item.WindowHandle is { } h
+                    ? _tracker.Windows.FirstOrDefault(w => w.Handle == h)
+                    : null;
+                if (wi is not null) ToggleWindowItem(wi, front);
+                break;
+
+            case DockItemKind.RecycleBin:
+                // 与右键菜单同一条落地路径（Dock 里"打开回收站"有两个入口，不该有两份实现）
+                RecycleBin.Open();
+                break;
+
+            case DockItemKind.Pinned:
+                if (item.LaunchPath.Length == 0) break;
+                // 文件夹 = macOS 堆栈：不启动资源管理器，弹自家堆栈菜单。
+                if (Directory.Exists(item.LaunchPath))
+                {
+                    OpenStackMenu(item);
+                    break;
+                }
+                // macOS 语义：点一个**正在跑**的应用图标 = 把它带到前台；它已经在前台 = 隐藏它。
+                // 过去固定项无条件再 Start 一次，于是"点 Dock 图标关不掉窗口"——固定项与运行项
+                // 是两条独立条目，用户点的常常是固定那条，而能隐藏的语义只长在运行项上。
+                if (ToggleOrActivateRunningWindow(item, front)) break;
+                try
+                {
+                    Process.Start(new ProcessStartInfo(item.LaunchPath) { UseShellExecute = true });
+                    // 启动弹跳（Task 15）：BounceEnabled 时该项在 DockSurface 现有 vsync 循环里跑
+                    // ~600ms 的 ElasticOut 纵向弹跳；重复点击不叠加（StartBounce 重置进度）。
+                    if (SettingsService.Current.BounceEnabled) Surface.StartBounce(item);
+                }
+                catch (Exception ex) { Logger.Warn($"启动 {item.LaunchPath} 失败: {ex.Message}"); }
+                break;
+
+            case DockItemKind.Media:
+                ToggleMediaPanel();
+                break;
+        }
+    }
+
+    /// <summary>
+    /// 文件夹堆栈（P3-T3 起步）：弹 FluentMenu 列出目录内容；图标用 Shell 大图标，点击交回 shell。
+    /// 现状是**列表形态**（fan/grid 布局与 OLE 拖出在后续批次），不假装已是完整堆栈。
+    /// 二级目录暂以资源管理器打开并留日志，等 StacksPopup 落地后替换。
+    /// </summary>
+    private void OpenStackMenu(DockItem item)
+    {
+        var views = new List<MenuItemView>
+        {
+            // Phase 6-c 互通：目录交给自家访达（与 macOS"在访达中显示"一致），文件仍走系统关联打开
+            new() { Id = "stack:open", Label = "在访达中打开",
+                    GlyphGeometry = Application.Current.TryFindResource("SymbolFolder") as Geometry,
+                    Invoke = () => OpenInFinder(item.LaunchPath) },
+            new() { Id = "stack:sep", IsSeparator = true },
+        };
+        var count = 0;
+        try
+        {
+            var entries = Directory.EnumerateFileSystemEntries(item.LaunchPath)
+                .OrderByDescending(p => Directory.Exists(p))
+                .ThenBy(p => Path.GetFileName(p), StringComparer.CurrentCultureIgnoreCase)
+                .Take(10)
+                .ToList();
+            count = entries.Count;
+            foreach (var entry in entries)
+            {
+                var path = entry;
+                views.Add(new MenuItemView
+                {
+                    Id = path,
+                    Label = Path.GetFileName(path),
+                    ToolTip = path,
+                    Icon = IconExtractor.GetIcon(path),
+                    Invoke = () => OpenPath(path),
+                });
+            }
+            if (entries.Count == 0)
+                views.Add(new MenuItemView { Id = "stack:empty", Label = "（空文件夹）", IsEnabled = false });
+        }
+        catch (Exception ex)
+        {
+            Logger.Warn($"堆栈读取失败：{item.LaunchPath} {ex.GetType().Name} {ex.Message}");
+            views.Add(new MenuItemView { Id = "stack:error", Label = "无法读取文件夹", ToolTip = ex.Message, IsEnabled = false });
+        }
+
+        Logger.Info($"堆栈打开：'{item.Label}' 条目={count}（列表形态）");
+        var p = Surface.PointToScreen(Mouse.GetPosition(Surface));
+        FluentMenu.Show(new FluentPopupHost(), new Point(p.X, p.Y), views);
+    }
+
+    /// <summary>
+    /// 启动台请求（alpha.22 启动台常驻格）：App 装配后逐实例订阅（LaunchpadWindow.ShowOrToggle）。
+    /// 多屏 Dock 实例化后改为<b>实例事件</b>——static Action 是"N 实例共用一条委托"的旧单实例假设，
+    /// 任一实例点击都会触发同一委托且随重载残留旧闭包；实例事件由 App 在创建/关闭时对称订阅/解绑。
+    /// </summary>
+    internal event Action? LaunchpadRequested;
+
+    /// <summary>
+    /// 启动台关闭回调（多屏 Dock 实例化改造）：事件源已反转到 <see cref="Launcher.LaunchpadWindow.Dismissed"/>
+    /// ——本实例在 OnSourceInitialized 订阅、OnClosed 解绑（与 ThemeChanged 同一条时序纪律），触发时
+    /// 只复位自己的放大场。启动台全屏盖住 Dock 期间 Dock 收不到鼠标事件，关闭瞬间光标静止时放大场会卡在
+    /// 旧状态（真机实测"Esc 关闭后 Dock 停在放大态"），关闭时必须主动复位一次。
+    /// </summary>
+    private void OnLaunchpadDismissed()
+    {
+        if (_closing) return;
+        Surface.ResetMagnification();
+    }
+
+    /// <summary>
+    /// 在自家访达里打开（Phase 6-c 互通）：目录直接导航；文件则打开其所在文件夹。
+    /// 拿不到路径时退回系统关联打开，绝不让菜单项变成"点了没反应"。
+    /// </summary>
+    private static void OpenInFinder(string? path)
+    {
+        if (string.IsNullOrWhiteSpace(path))
+        {
+            return;
+        }
+
+        try
+        {
+            if (Directory.Exists(path))
+            {
+                Finder.FinderWindow.ShowSingleton(path);
+                return;
+            }
+
+            var directory = Path.GetDirectoryName(path);
+            if (!string.IsNullOrEmpty(directory) && Directory.Exists(directory))
+            {
+                Finder.FinderWindow.ShowSingleton(directory);
+                return;
+            }
+        }
+        catch (Exception ex) when (ex is ArgumentException or NotSupportedException or IOException)
+        {
+            Logger.Warn($"在访达中打开失败：{path} {ex.GetType().Name} {ex.Message}");
+        }
+
+        OpenPath(path);
+    }
+
+    private static void OpenPath(string path)
+    {
+        try
+        {
+            Process.Start(new ProcessStartInfo(path) { UseShellExecute = true });
+            Logger.Info($"堆栈条目打开：{path}");
+        }
+        catch (Exception ex)
+        {
+            Logger.Warn($"打开失败：{path} {ex.GetType().Name} {ex.Message}");
+        }
+    }
+
+    /// <summary>
+    /// 光标扫过条带期间持续记录"用户面对的窗口"。只认外部窗口：我们自己的任何表面
+    /// （Dock/顶栏/预览弹层/面板）都不改变"用户此刻在用哪个应用"这个事实。
+    /// </summary>
+    private void SnapshotForegroundAtHover(object sender, System.Windows.Input.MouseEventArgs e)
+    {
+        var live = NativeMethods.GetForegroundWindow();
+        if (live == IntPtr.Zero || live == _hwnd) return;
+        if (NativeMethods.GetWindowThreadProcessId(live, out var pid) == 0 || pid == (uint)Environment.ProcessId) return;
+        _foregroundAtHover = live;
+        _tracker.NoteExternalForeground(live);   // 同一样本喂给跟踪器，给"没经过悬停的点击"兜底
+    }
+
+    /// <summary>
+    /// 这次点击发生时"用户面对的是哪个窗口"。
+    /// <para>
+    /// 现前台还是别人的，就照实返回；一旦现前台已经变成我们自己进程的窗口（点条带会把前台换给
+    /// Dock，预览弹层/面板也可能占住它），改用<b>悬停快照</b>——那是光标扫到图标前最后一次
+    /// "前台还是别人的"读数。不这么做的后果就是用户报的那条："点 Dock 图标关不掉窗口"。
+    /// 悬停快照没有时（触屏/程序化点击），退回 WinEvent 记录，最后才认命用现值。
+    /// </para>
+    /// </summary>
+    private IntPtr ForegroundBeforeDockClick()
+    {
+        var live = NativeMethods.GetForegroundWindow();
+        if (!IsOwnWindow(live)) return live;
+        if (_foregroundAtHover != IntPtr.Zero) return _foregroundAtHover;
+        var last = _tracker.LastExternalForeground;
+        return last != IntPtr.Zero ? last : live;
+    }
+
+    private bool IsOwnWindow(IntPtr hwnd)
+        => hwnd != IntPtr.Zero
+           && NativeMethods.GetWindowThreadProcessId(hwnd, out var pid) != 0
+           && pid == (uint)Environment.ProcessId;
+
+    /// <summary>
+    /// 运行窗口条目的点击：先抓帧再切换（顺序是硬要求）。
+    /// <para>
+    /// genie 的 <c>EVENT_SYSTEM_MINIMIZESTART</c> 走系统队列送达时，我们那次同步的
+    /// <c>ShowWindow(SW_MINIMIZE)</c> 早已完成、窗口已经 iconic，事件路径永远抓不到画面
+    /// （真机上动画一次没播过就是这么来的）。所以<b>趁窗口还画着先抓一帧</b>，
+    /// 切换完成后如果它真的缩下去了，就拿预抓的那份放动画。
+    /// </para>
+    /// </summary>
+    private void ToggleWindowItem(WindowItem wi, IntPtr front)
+    {
+        var (image, sourceRect) = _animator?.PreCapture(wi.Handle) ?? (null, null);
+        _tracker.ActivateOrMinimize(wi, front);
+        if (image is not null && sourceRect is { } rect && NativeMethods.IsIconic(wi.Handle))
+            _animator?.PlayMinimizeFromCapture(wi.Handle, image, rect);
+    }
+
+    /// <summary>
+    /// 固定项点击时先看"这个应用有没有在跑的窗口"：有就按 macOS 语义切换
+    /// （前台→最小化 / 最小化→还原置前 / 其它→置前）并返回 true，调用方就不再启动新实例。
+    /// <para>
+    /// 比对用**进程映像基础名**（<see cref="MostRecentWindowForExe"/> 同一口径），不是整路径相等：
+    /// Win11 的 <c>System32\notepad.exe</c> 只是个桩，真正在跑的镜像在
+    /// <c>Program Files\WindowsApps\Microsoft.WindowsNotepad_...\notepad.exe</c>，按整路径比永远对不上，
+    /// 于是"点固定项隐藏窗口"在最常见的那个应用上失效。两边都先解 <c>.lnk</c> 再取基础名，
+    /// 快捷方式与 Store 应用一并覆盖。解析不出目标（协议类/UWP 启动别名）时返回 false，
+    /// 行为退回"照旧启动"，不会误伤。
+    /// </para>
+    /// </summary>
+    private bool ToggleOrActivateRunningWindow(DockItem item, IntPtr front)
+    {
+        var target = ExeBaseName(ResolveExePath(item.IconSource ?? item.LaunchPath));
+        if (target.Length == 0) return false;
+
+        var mine = _tracker.Windows
+            .Where(w => string.Equals(ExeBaseName(w.ExePath), target, StringComparison.OrdinalIgnoreCase))
+            .ToList();
+        if (mine.Count == 0) return false;
+
+        var pick = mine.FirstOrDefault(w => w.Handle == front)
+                   ?? mine.FirstOrDefault(w => !w.IsMinimized)
+                   ?? mine[0];
+        Logger.Info($"固定项点击 → 切换在跑窗口 {target}（{mine.Count} 个候选）hwnd=0x{pick.Handle.ToInt64():X} 当前最小化={pick.IsMinimized}");
+        ToggleWindowItem(pick, front);
+        return true;
+    }
+
+    // ---------- 右键菜单：macOS Dock / Windows 跳转列表的真实条目（v3.1） ----------
+
+    /// <summary>
+    /// 菜单动作执行器（惰性一个，随窗口存活）：所有 Win32 / 进程 / shell 动作都只住在它里，
+    /// 本窗口只做"取快照 → 弹层 → 把动作交给它"。前台切换委托给 <see cref="App.CommitWindowForeground"/>
+    /// （切换器的既有链路，不另写第二条），启动弹跳则把 <see cref="DockSurface.StartBounce"/> 注回去，
+    /// 于是执行器完全不需要认识渲染器。
+    /// </summary>
+    private DockContextMenuExecutor? _menuExecutor;
+
+    private DockContextMenuExecutor Executor => _menuExecutor ??= new DockContextMenuExecutor(
+        _tracker, _vm, App.CommitWindowForeground,
+        item => { if (SettingsService.Current.BounceEnabled) Surface.StartBounce(item); });
+
+    /// <summary>
+    /// 右键条目在光标处弹 <see cref="FluentMenu"/>（自绘高级弹层，观感与托盘/顶栏菜单一致）。
+    /// <para>
+    /// 【v3.1 为什么重写这里】用户真机原话："dock 栏中右键只有固定到 dock 栏的选项，没有其他 windows 自带
+    /// 或者 mac os 自带右键菜单选项，这不还原。"旧实现把菜单内容写死在这段 code-behind 的两个 if 里，
+    /// 于是能给的只剩固定/取消固定。现在条目树由 Core 的 <see cref="DockContextMenuPlan"/> 决定
+    /// （纯数据、单测覆盖），本方法只剩三件事：弹层前取真实前台句柄、采集快照建菜单、把点击交给执行器。
+    /// </para>
+    /// <para>
+    /// 前台句柄必须在 <see cref="FluentMenu.Show"/> <b>之前</b>取：弹层是激活式窗口，一显示前台就是菜单自己，
+    /// 现场再读会把"当前前台窗"永远判成没有。分隔符与媒体胶囊不弹（Core 返回空表 = 保持现状）。
+    /// 仍走"代码后置手动开关"而非 ContextMenuService：实测后者在本 AppBar 窗口把事件路由到 ItemsControl 层
+    /// （Source=Surface），容器菜单永远不打开。锚点 Surface.PointToScreen 返回物理像素（FluentMenu.Show 口径一致）。
+    /// </para>
+    /// </summary>
+    private void OpenItemContextMenu(DockItem item, Point anchorInSurface)
+    {
+        var menu = DockContextMenuBuilder.Build(item, _vm, _tracker, NativeMethods.GetForegroundWindow());
+        if (menu is null || menu.Entries.Count == 0) return;
+
+        var views = DockContextMenuBuilder.ToViews(menu, Executor);
+        var p = Surface.PointToScreen(anchorInSurface);
+        // 不传 onSelect：叶子项自带 Invoke（已闭包捕获快照与条目），父项（窗口列表/确认链）不带，点击即展开
+        FluentMenu.Show(new FluentPopupHost(), new Point(p.X, p.Y), views);
+    }
+
+    // ---------- 悬停实时预览（Task 13）----------
+
+    private const int PreviewDwellMs = 350;
+    private const double PreviewMaxWDip = 340, PreviewMaxHDip = 240;
+
+    /// <summary>鼠标在 DockSurface 上移动：命中条目变化时重置 350ms 驻留计时；无预览目标即收起当前预览。
+    /// 开关关（PreviewEnabled=false）直接收起并不起计时——这是让设置里的预览开关真正生效的读取点。</summary>
+    private void OnSurfaceMouseMove(object sender, MouseEventArgs e)
+    {
+        if (Surface.IsDragging) return;   // 内部拖拽进行中：预览让位给指示条，绝不叠加缩略图
+        if (!SettingsService.Current.PreviewEnabled)
+        {
+            if (_preview is { IsShowing: true } || _previewPending is not null) CancelPreview();
+            return;
+        }
+
+        var hit = Surface.HitTestItem(e.GetPosition(Surface));
+        // 同一目标：不重复计时（_previewPending 已置，无论"等待中"还是"已显示"都保持不动）。
+        // 例外：预览已收起且驻留计时已停（如源窗口死亡被看门狗隐藏）——此时 pending 是陈旧值，
+        // 若仍早退则光标不离开该图标就永远无法再次唤出预览（Task 13 评审 Minor），清空后落入
+        // 下方流程对同一条目重新起驻留。
+        if (hit is not null && _previewPending is not null && hit.Id == _previewPending.Id
+            && (_preview is { IsShowing: true } || _previewDwell?.IsEnabled == true))
+            return;
+
+        // 目标改变（含移到空白 / 回收站 / 媒体）：先收起旧的，再决定是否对新目标起驻留。
+        _previewDwell?.Stop();
+        if (_preview is { IsShowing: true }) _preview.Hide();
+        _previewPending = null;
+
+        if (hit is null || !PreviewSourceFor(hit, out _)) return;   // 无可预览窗口 → 不弹
+
+        _previewPending = hit;
+        _previewDwell ??= new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(PreviewDwellMs) };
+        _previewDwell.Stop();
+        _previewDwell.Tick -= OnPreviewDwellTick;
+        _previewDwell.Tick += OnPreviewDwellTick;
+        _previewDwell.Start();
+    }
+
+    private void OnPreviewDwellTick(object? sender, EventArgs e)
+    {
+        _previewDwell?.Stop();
+        var pending = _previewPending;
+        if (pending is null) return;
+        if (!SettingsService.Current.PreviewEnabled) { _previewPending = null; return; }
+
+        // tick 时按真实光标复核（MouseMove 事件坐标可能陈旧）：光标仍悬在同一条目才弹。
+        if (!TryItemUnderCursor(out var current) || current?.Id != pending.Id)
+        {
+            _previewPending = null;
+            return;
+        }
+        if (!PreviewSourceFor(pending, out var src)) { _previewPending = null; return; }
+        ShowPreviewFor(pending, src);   // 显示后保留 _previewPending，同条目后续 MouseMove 走上面的早退分支
+    }
+
+    /// <summary>取消驻留并收起预览（鼠标离开 / 点击 / 开关关闭 时调用）。</summary>
+    private void CancelPreview()
+    {
+        _previewDwell?.Stop();
+        _previewPending = null;
+        _preview?.Hide();
+    }
+
+    /// <summary>预览开关变更的即时生效入口（App.ApplyPreviewEnabled 调用）：
+    /// 关→立即收起正在显示的预览；开→无需动作（下次悬停按新值放行）。这让 PreviewEnabled 不再是死开关。</summary>
+    public void ApplyPreviewSetting()
+    {
+        if (!SettingsService.Current.PreviewEnabled) CancelPreview();
+    }
+
+    /// <summary>用真实物理光标复核命中的条目（与放大场同一取样口径：GetCursorPos → Surface.PointFromScreen →
+    /// HitTestItem），避免陈旧 MouseMove 把预览钉在已离开的条目上。</summary>
+    private bool TryItemUnderCursor(out DockItem? item)
+    {
+        item = null;
+        if (!NativeMethods.GetCursorPos(out var pt)) return false;
+        try { item = Surface.HitTestItem(Surface.PointFromScreen(new Point(pt.X, pt.Y))); }
+        catch (InvalidOperationException) { return false; }   // PresentationSource 尚未就绪
+        return true;
+    }
+
+    /// <summary>把预览弹在条目放大后矩形上方并水平居中、钳到工作区。坐标换算复用 <see cref="PositionMediaPanel"/>
+    /// 的同一路径：Surface 本地 DIP → PointToScreen 得物理 px → 除以本显示器 PixelsPerDip 得屏幕 DIP。</summary>
+    private void ShowPreviewFor(DockItem item, IntPtr sourceHwnd)
+    {
+        if (Surface.GetItemBounds(item) is not { } b || b.Width <= 0) { _preview?.Hide(); return; }
+        _preview ??= new ThumbnailPreview();
+
+        var dpi = VisualTreeHelper.GetDpi(Surface).PixelsPerDip;
+        if (dpi <= 0) dpi = 1;
+        _preview.DpiScale = dpi;
+        _preview.Title = item.Label;
+
+        var tl = Surface.PointToScreen(new Point(b.X, b.Y));
+        var br = Surface.PointToScreen(new Point(b.X + b.Width, b.Y + b.Height));
+        var anchorDip = new Rect(tl.X / dpi, tl.Y / dpi, (br.X - tl.X) / dpi, (br.Y - tl.Y) / dpi);
+        _preview.Show(sourceHwnd, anchorDip, PreviewMaxWDip, PreviewMaxHDip);
+    }
+
+    /// <summary>解析条目对应的可预览源窗口句柄：Window→其句柄；Pinned→该 exe 最近的一个可见非最小化窗口；
+    /// RecycleBin/Media/Tray→无（不预览）。</summary>
+    private bool PreviewSourceFor(DockItem item, out IntPtr hwnd)
+    {
+        hwnd = IntPtr.Zero;
+        switch (item.Kind)
+        {
+            case DockItemKind.Widget:   // 小组件没有可预览的窗口
+            case DockItemKind.Tray:     // 托盘收纳格同理：它的交互在点击后的弹层里，不是一颗窗口
+                return false;
+
+            case DockItemKind.Window:
+                var h = item.WindowHandle ?? IntPtr.Zero;
+                if (h != IntPtr.Zero && NativeMethods.IsWindow(h) && !NativeMethods.IsIconic(h))
+                {
+                    hwnd = h;
+                    return true;
+                }
+                return false;
+
+            case DockItemKind.Pinned:
+                hwnd = MostRecentWindowForExe(item.LaunchPath);
+                return hwnd != IntPtr.Zero;
+
+            default:   // RecycleBin / Media / Tray：不预览（Tray 走 default 分支，显式写进注释保持口径可读）
+                return false;
+        }
+    }
+
+    /// <summary>查找该启动项 exe 当前最近的一个可预览窗口（逆序=最近插入优先，取首个非最小化可见者）。
+    /// .lnk 快捷方式先解析目标 exe，再按进程映像基础名比对（LaunchPath 常为 .lnk，窗口 ExePath 是真实 exe）。</summary>
+    private IntPtr MostRecentWindowForExe(string launchPath)
+    {
+        if (string.IsNullOrWhiteSpace(launchPath)) return IntPtr.Zero;
+        var target = ExeBaseName(ResolveExePath(launchPath));
+        if (target.Length == 0) return IntPtr.Zero;
+
+        var list = _tracker.Windows;
+        IntPtr fallback = IntPtr.Zero;
+        for (var i = list.Count - 1; i >= 0; i--)
+        {
+            var w = list[i];
+            if (!NativeMethods.IsWindow(w.Handle)) continue;
+            if (!string.Equals(ExeBaseName(w.ExePath), target, StringComparison.OrdinalIgnoreCase)) continue;
+            if (!NativeMethods.IsIconic(w.Handle) && NativeMethods.IsWindowVisible(w.Handle))
+                return w.Handle;
+            if (fallback == IntPtr.Zero) fallback = w.Handle;   // 只剩最小化窗口：交 Show 的 IsIconic 兜底（不弹）
+        }
+        return fallback;
+    }
+
+    private static string ResolveExePath(string launchPath)
+        => launchPath.EndsWith(".lnk", StringComparison.OrdinalIgnoreCase)
+            ? ShellLink.Resolve(launchPath).TargetPath
+            : launchPath;
+
+    private static string ExeBaseName(string path)
+    {
+        try { return Path.GetFileNameWithoutExtension(path); }
+        catch { return string.Empty; }
+    }
+
+    // ---------- 媒体面板（实况窗展开） ----------
+
+    private void ToggleMediaPanel()
+    {
+        if (!_mediaVm.HasSession) return; // 无会话：胶囊已折叠（占位命中不展开）
+        if (_mediaPanel is { IsVisible: true })
+        {
+            _mediaPanel.Hide();
+            _panelAutoHiddenAtUtc = null;
+            return;
+        }
+        // 点击胶囊时面板会先因失焦自动 Hide（Deactivated 先于本 MouseUp），
+        // 刚刚自动收起（<600ms）→ 本次点击视为"收起"而非"再次展开"
+        if (_panelAutoHiddenAtUtc is { } at && (DateTime.UtcNow - at).TotalMilliseconds < 600)
+        {
+            _panelAutoHiddenAtUtc = null;
+            return;
+        }
+        ShowMediaPanel();
+    }
+
+    private void ShowMediaPanel()
+    {
+        try
+        {
+            if (_mediaPanel is null)
+            {
+                _mediaPanel = new MediaPanel(_mediaVm) { Owner = this };
+                // 仅在"失焦自动收起"开启时记录时间戳：关闭开关后面板不因失焦隐藏，
+                // 若仍记录会把 <600ms 的 toggle 抑制窗口错误应用到点击展开
+                _mediaPanel.Deactivated += (_, _) =>
+                {
+                    if (_mediaVm.PanelAutoHideOnDeactivate) _panelAutoHiddenAtUtc = DateTime.UtcNow;
+                };
+                _mediaPanel.Closed += (_, _) => { _mediaPanel = null; _panelAutoHiddenAtUtc = null; };
+            }
+            PositionMediaPanel();
+            // 背板抓屏必须在 Show 之前（此刻面板不可见 → 抓到的是胶囊上方那块桌面的干净内容）：
+            // 显示之后再抓就会把面板自己已有的像素抓进背板（鬼影）。矩形用 Left/Top/Width/Height，
+            // PositionMediaPanel 刚写完这四个属性，所以抓屏区与最终落位一致。
+            _mediaPanel.RefreshBackdrop();
+            _mediaPanel.Show();      // Show 默认激活 → Deactivated 自动收起链路生效
+            _mediaPanel.Activate();
+        }
+        catch (Exception ex)
+        {
+            // 防御：媒体面板是附属功能，任何异常不得拖垮 Dock 本体
+            _mediaPanel?.Close();
+            _mediaPanel = null;
+            Logger.Warn($"打开媒体面板失败: {ex}");
+        }
+    }
+
+    /// <summary>媒体条目（恒为 suffix 末位，仍按 Kind 扫描以稳健）；无则 null。</summary>
+    private DockItem? MediaItemOrNull()
+    {
+        for (var i = _vm.Items.Count - 1; i >= 0; i--)
+            if (_vm.Items[i].Kind == DockItemKind.Media) return _vm.Items[i];
+        return null;
+    }
+
+    /// <summary>面板置于胶囊上方并水平居中（钳制在<b>本 Dock 所在显示器</b>内）；胶囊中心经 PointToScreen
+    /// （物理 px）→ DIP 换算。停靠副屏时钳制边界跟着走（副屏原点可为负数或 1920+，主屏假设会把面板
+    /// 整个夹到错误的屏上去）。</summary>
+    private void PositionMediaPanel()
+    {
+        const double panelW = 420, panelH = 520, edgeMargin = 8, gap = 6;
+        var panel = _mediaPanel;
+        if (panel is null) return;
+        var dpi = VisualTreeHelper.GetDpi(this).PixelsPerDip;
+        if (dpi <= 0) dpi = 1;
+
+        double centerDipX = Left + Width / 2; // 兜底：Dock 中心
+        var mediaItem = MediaItemOrNull();
+        if (mediaItem is not null && Surface.GetItemBounds(mediaItem) is { } bounds && bounds.Width > 0)
+        {
+            // 放大后的胶囊矩形中心 → 屏幕物理 px → DIP（与 v1 同一路径，容器改由 DockSurface 提供）
+            var screenPt = Surface.PointToScreen(new Point(bounds.X + bounds.Width / 2, bounds.Y));
+            centerDipX = screenPt.X / dpi;
+        }
+
+        // 左右边界取 rcMonitor（几何唯一来源，v3 T1）；AppBar 尚未定位过时 _monitorRect 为默认零矩形，
+        // 与 v2 的"主屏 0..SM_CXSCREEN"行为一致，不会更差。
+        var monLeft = _monitorRect.Left / dpi;
+        var monRight = _monitorRect.Right / dpi;
+        var leftMin = monLeft + edgeMargin;
+        var left = Math.Clamp(centerDipX - panelW / 2, leftMin, Math.Max(leftMin, monRight - panelW - edgeMargin));
+        // 窗口顶部有动态的放大余量（供放大图标生长），面板真正的上沿在 Top + StripHeadroomDip()
+        // （= 预留带上沿）：用它算间距，余量尺寸变化时面板与 Dock 的视觉间隙保持一致（v2 观感零变化）。
+        var top = Math.Max(edgeMargin, Top + StripHeadroomDip() - panelH - gap);
+        panel.Left = left;
+        panel.Top = top;
+    }
+}

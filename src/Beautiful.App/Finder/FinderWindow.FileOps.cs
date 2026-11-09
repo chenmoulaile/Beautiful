@@ -9,6 +9,8 @@ using Beautiful.App.Services;
 using Beautiful.Core.Finder;
 using ListBoxItem = System.Windows.Controls.ListBoxItem;
 using TextBox = System.Windows.Controls.TextBox;
+using ContextMenu = System.Windows.Controls.ContextMenu;
+using MenuItem = System.Windows.Controls.MenuItem;
 using Brush = System.Windows.Media.Brush;
 using Color = System.Windows.Media.Color;
 using Clipboard = System.Windows.Clipboard;

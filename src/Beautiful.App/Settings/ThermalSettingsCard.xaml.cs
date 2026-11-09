@@ -44,13 +44,18 @@ public partial class ThermalSettingsCard : UserControl
     /// <summary>卸载计数：异步刷新回场时比对，被卸载后的迟到结果一律丢弃。</summary>
     private int _refreshEpoch;
 
-    /// <summary>设置卡存活期间的轻量定时器：3s 一拍新鲜探测（后台线程），捕捉数据源的就绪转变。</summary>
+    /// <summary>
+    /// 设置卡存活期间的轻量定时器：10s 一拍新鲜探测（后台线程），捕捉数据源的就绪转变。
+    /// 【wp-borrow 收口 2026-11-10：3s→10s】就绪转变以分钟计（用户去装/启动 LHM），3s 的 WMI 查询
+    /// 比芯片自身轮询默认 5s 还密，AppSettings.ThermalRefreshSeconds 的口径（5s 一拍足够）同理适用；
+    /// 有 _syncing 防重入与 Unloaded 即停边界，频率不影响正确性、只影响实时性。
+    /// </summary>
     private readonly DispatcherTimer _statusTimer;
 
     public ThermalSettingsCard()
     {
         InitializeComponent();
-        _statusTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(3) };
+        _statusTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(10) };
         _statusTimer.Tick += (_, _) => _ = RefreshAsync(probeFresh: true);
         Loaded += OnLoaded;
         Unloaded += OnUnloaded;
